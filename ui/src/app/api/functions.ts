@@ -15,6 +15,10 @@ export type { RestartCluster$Params as RestartCluster$Params } from './fn/cluste
 export { restartCluster as restartCluster } from './fn/clusters/restart-cluster';
 export type { Switchover$Params as Switchover$Params } from './fn/clusters/switchover';
 export { switchover as switchover } from './fn/clusters/switchover';
+export type { ListBackups$Params as ListBackups$Params } from './fn/backups/list-backups';
+export { listBackups as listBackups } from './fn/backups/list-backups';
+export type { CreateBackup$Params as CreateBackup$Params } from './fn/backups/create-backup';
+export { createBackup as createBackup } from './fn/backups/create-backup';
 export type { ListGucs$Params as ListGucs$Params } from './fn/system/list-gucs';
 export { listGucs as listGucs } from './fn/system/list-gucs';
 export type { Ping$Params as Ping$Params } from './fn/system/ping';

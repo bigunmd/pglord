@@ -151,6 +151,59 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
+  /api/v1/clusters/{name}/backups:
+    get:
+      tags:
+      - backups
+      summary: List the backups in a cluster's repository.
+      operationId: list_backups
+      parameters:
+      - name: name
+        in: path
+        description: Cluster name
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Backups in the repository
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BackupList'
+        '404':
+          description: Not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+    post:
+      tags:
+      - backups
+      summary: Take a full backup now, on the primary.
+      operationId: create_backup
+      parameters:
+      - name: name
+        in: path
+        description: Cluster name
+        required: true
+        schema:
+          type: string
+      responses:
+        '202':
+          description: Backup started
+        '404':
+          description: Not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '409':
+          description: Backups are not configured
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
   /api/v1/clusters/{name}/restart:
     post:
       tags:
@@ -286,6 +339,89 @@ components:
       - preferred
       - required
       - disabled
+    BackupEntry:
+      type: object
+      required:
+      - label
+      - kind
+      - started
+      - finished
+      - size_bytes
+      properties:
+        finished:
+          type: integer
+          format: int64
+        kind:
+          type: string
+          description: '"full", "diff" or "incr".'
+        label:
+          type: string
+          description: pgBackRest label, e.g. "20260731-120000F".
+        size_bytes:
+          type: integer
+          format: int64
+          description: Bytes this backup occupies in the repository.
+        started:
+          type: integer
+          format: int64
+          description: Unix seconds.
+        wal_end:
+          type:
+          - string
+          - 'null'
+        wal_start:
+          type:
+          - string
+          - 'null'
+    BackupList:
+      type: object
+      required:
+      - enabled
+      - backups
+      properties:
+        backups:
+          type: array
+          items:
+            $ref: '#/components/schemas/BackupEntry'
+        enabled:
+          type: boolean
+        repository:
+          type:
+          - string
+          - 'null'
+          description: Where backups are stored, or null when backups are off.
+    BackupSpec:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+          description: Backups (and therefore WAL archiving) are off unless this is set.
+        path_prefix:
+          type:
+          - string
+          - 'null'
+          description: Optional prefix inside the bucket, so several clusters can share one.
+        retention_full:
+          type: integer
+          format: int32
+          description: Full backups to keep. pgBackRest expires older ones automatically.
+          minimum: 0
+        s3_bucket:
+          type:
+          - string
+          - 'null'
+        s3_credentials_secret:
+          type:
+          - string
+          - 'null'
+          description: Secret holding `access-key` and `secret-key`. Values never live here.
+        s3_endpoint:
+          type:
+          - string
+          - 'null'
+          description: S3-compatible endpoint, e.g. "https://s3.amazonaws.com" or a MinIO URL.
+        s3_region:
+          type: string
     ClusterDetail:
       type: object
       required:
@@ -297,9 +433,13 @@ components:
       - primary
       - parameters
       - workload
+      - backup
       - pending_restart
       - instances
       properties:
+        backup:
+          $ref: '#/components/schemas/BackupSpec'
+          description: Backup repository (secret name only — never its contents).
         image:
           type: string
         instances:
@@ -338,6 +478,11 @@ components:
       required:
       - name
       properties:
+        backup:
+          $ref: '#/components/schemas/BackupSpec'
+          description: |-
+            Backup repository. Disabled by default; enabling it also turns on WAL
+            archiving, which needs a restart.
         image:
           type: string
           description: Image containing postgres + pglord-agent (agent is the entrypoint).
@@ -531,6 +676,11 @@ components:
         absent: renaming would orphan every derived object, and image changes are a
         rolling-upgrade concern with its own (future) workflow.
       properties:
+        backup:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/BackupSpec'
+            description: Full replacement of the backup block.
         parameters:
           type:
           - object

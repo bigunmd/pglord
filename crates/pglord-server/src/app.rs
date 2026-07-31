@@ -74,6 +74,10 @@ pub fn build(
         .routes(routes!(crate::api::clusters::switchover))
         .routes(routes!(crate::api::clusters::restart_cluster))
         .routes(routes!(crate::api::gucs::list_gucs))
+        .routes(routes!(
+            crate::api::backups::list_backups,
+            crate::api::backups::create_backup
+        ))
         .routes(routes!(crate::api::preflight::get_preflight));
 
     let (api_router, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())

@@ -46,6 +46,8 @@ pub struct ClusterDetail {
     pub parameters: std::collections::BTreeMap<String, String>,
     /// Scheduling, resources and Kubernetes metadata for the instances.
     pub workload: pglord_core::workload::WorkloadSpec,
+    /// Backup repository (secret name only — never its contents).
+    pub backup: pglord_core::backup::BackupSpec,
     /// Any instance is waiting on a restart to apply staged settings.
     pub pending_restart: bool,
     pub instances: Vec<InstanceDto>,
@@ -198,6 +200,7 @@ pub async fn get_cluster(
         primary,
         parameters: spec.parameters,
         workload: spec.workload,
+        backup: spec.backup,
         pending_restart,
         instances,
     }))
@@ -216,6 +219,7 @@ fn spec_error(e: SpecError) -> ApiError {
         | SpecError::ReservedParameter(_)
         | SpecError::InvalidParameterValue { .. } => "invalid_parameter",
         SpecError::InvalidWorkload(_) => "invalid_workload",
+        SpecError::InvalidBackup(_) => "invalid_backup",
         _ => "invalid_spec",
     };
     ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, code).with_detail(e.to_string())
