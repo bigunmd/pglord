@@ -29,4 +29,10 @@ export interface BackupSpec {
    */
   s3_endpoint?: (string | null);
   s3_region?: string;
+
+  /**
+   * Verify the endpoint's TLS certificate. Turn off only for storage with a
+   * self-signed certificate (a dev MinIO, typically).
+   */
+  verify_tls?: boolean;
 }

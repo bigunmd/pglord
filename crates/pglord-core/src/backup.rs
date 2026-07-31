@@ -32,6 +32,14 @@ pub struct BackupSpec {
     /// Optional prefix inside the bucket, so several clusters can share one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path_prefix: Option<String>,
+    /// Verify the endpoint's TLS certificate. Turn off only for storage with a
+    /// self-signed certificate (a dev MinIO, typically).
+    #[serde(default = "default_verify_tls")]
+    pub verify_tls: bool,
+}
+
+fn default_verify_tls() -> bool {
+    true
 }
 
 fn default_region() -> String {
@@ -47,6 +55,11 @@ pub enum BackupError {
     Missing(&'static str),
     #[error("invalid endpoint '{0}': expected a URL like https://s3.example.com")]
     InvalidEndpoint(String),
+    #[error(
+        "endpoint '{0}' is plain HTTP: pgBackRest requires TLS for object storage. \
+         Use an https endpoint, and turn off TLS verification if its certificate is self-signed."
+    )]
+    InsecureEndpoint(String),
     #[error("invalid retention {0}: keep between 1 and 52 full backups")]
     InvalidRetention(u8),
 }
@@ -66,6 +79,12 @@ pub fn validate(b: &BackupSpec) -> Result<(), BackupError> {
         .ok_or(BackupError::Missing("an S3 endpoint"))?;
     if !endpoint.starts_with("http://") && !endpoint.starts_with("https://") {
         return Err(BackupError::InvalidEndpoint(endpoint.to_string()));
+    }
+    // Caught here rather than at backup time: pgBackRest speaks TLS to S3
+    // unconditionally, so a plain-HTTP endpoint fails with an opaque
+    // "wrong version number" error minutes into the first backup.
+    if endpoint.starts_with("http://") {
+        return Err(BackupError::InsecureEndpoint(endpoint.to_string()));
     }
     if b.s3_bucket.as_deref().is_none_or(|s| s.trim().is_empty()) {
         return Err(BackupError::Missing("a bucket"));
@@ -99,11 +118,10 @@ pub fn pgbackrest_conf(cluster: &str, pgdata: &str, b: &BackupSpec) -> String {
     let host = endpoint
         .trim_start_matches("https://")
         .trim_start_matches("http://");
-    let verify = if endpoint.starts_with("http://") {
-        // Plain-HTTP endpoints (a dev MinIO) have no certificate to verify.
-        "repo1-storage-verify-tls=n\n"
-    } else {
+    let verify = if b.verify_tls {
         ""
+    } else {
+        "repo1-storage-verify-tls=n\n"
     };
     let path = match b.path_prefix.as_deref().filter(|p| !p.is_empty()) {
         Some(prefix) => format!("/{}/{stanza}", prefix.trim_matches('/')),
@@ -152,6 +170,7 @@ mod tests {
             s3_credentials_secret: Some("backup-creds".into()),
             retention_full: 3,
             path_prefix: None,
+            verify_tls: true,
         }
     }
 
@@ -204,13 +223,25 @@ mod tests {
     }
 
     #[test]
-    fn plain_http_endpoints_skip_tls_verification() {
+    fn plain_http_endpoints_are_rejected_up_front() {
+        // pgBackRest always speaks TLS to S3; a plain-HTTP endpoint otherwise
+        // fails minutes into the first backup with an opaque TLS error.
         let mut b = enabled();
         b.s3_endpoint = Some("http://minio:9000".into());
-        let conf = pgbackrest_conf("demo", "/pgdata", &b);
-        assert!(conf.contains("repo1-storage-verify-tls=n"));
-        // An https endpoint must keep verification on.
+        assert!(matches!(
+            validate(&b),
+            Err(BackupError::InsecureEndpoint(_))
+        ));
+    }
+
+    #[test]
+    fn tls_verification_can_be_turned_off_for_self_signed_storage() {
+        let mut b = enabled();
+        b.verify_tls = false;
+        assert!(pgbackrest_conf("demo", "/pgdata", &b).contains("repo1-storage-verify-tls=n"));
+        // Verification stays on by default.
         assert!(!pgbackrest_conf("demo", "/pgdata", &enabled()).contains("verify-tls=n"));
+        assert!(BackupSpec::default().verify_tls || !BackupSpec::default().enabled);
     }
 
     #[test]

@@ -126,6 +126,22 @@ import { BackupSpec } from '../../api/models/backup-spec';
             </div>
           </div>
 
+          <label class="flex cursor-pointer items-start gap-3">
+            <input
+              type="checkbox"
+              class="mt-1 h-4 w-4 cursor-pointer"
+              data-testid="backup-verify-tls"
+              [ngModel]="verifyTls()"
+              (ngModelChange)="verifyTls.set($event)"
+            />
+            <span class="grid gap-1">
+              <span class="text-sm font-medium">{{ 'backups.verifyTls' | transloco }}</span>
+              <span class="text-muted-foreground text-xs leading-relaxed">
+                {{ 'backups.verifyTlsHelp' | transloco }}
+              </span>
+            </span>
+          </label>
+
           <p class="text-muted-foreground text-xs leading-relaxed">
             {{ 'backups.restartNote' | transloco }}
           </p>
@@ -154,8 +170,10 @@ export class ClusterBackupDialogComponent {
   protected readonly secret = signal(this.ctx.backup.s3_credentials_secret ?? '');
   protected readonly prefix = signal(this.ctx.backup.path_prefix ?? '');
   protected readonly retention = signal(this.ctx.backup.retention_full ?? 2);
+  protected readonly verifyTls = signal(this.ctx.backup.verify_tls ?? true);
 
-  protected readonly endpointValid = computed(() => /^https?:\/\/.+/.test(this.endpoint().trim()));
+  /** pgBackRest requires TLS, so only https endpoints are accepted. */
+  protected readonly endpointValid = computed(() => /^https:\/\/.+/.test(this.endpoint().trim()));
   protected readonly valid = computed(() => {
     if (!this.enabled()) {
       return true;
@@ -179,6 +197,7 @@ export class ClusterBackupDialogComponent {
       s3_credentials_secret: trimmed(this.secret()),
       path_prefix: trimmed(this.prefix()),
       retention_full: this.retention(),
+      verify_tls: this.verifyTls(),
     });
   }
 }

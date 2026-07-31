@@ -146,7 +146,10 @@ async fn bootstrap_primary(cfg: &Config) -> anyhow::Result<()> {
             .context("create initdb pwfile")?;
         writeln!(f, "{}", cfg.superuser_password).context("write initdb pwfile")?;
         drop(f);
-        cmd.args(["--auth", "scram-sha-256"])
+        // Network connections need a password; local socket connections use
+        // peer auth so tools running as the postgres OS user (pgBackRest,
+        // pg_ctl, our own status queries) can connect without one.
+        cmd.args(["--auth-local", "peer", "--auth-host", "scram-sha-256"])
             .arg("--pwfile")
             .arg(&pwfile);
     } else {

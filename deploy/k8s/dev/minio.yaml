@@ -15,10 +15,33 @@ spec:
     metadata:
       labels: { app: minio }
     spec:
+      # pgBackRest speaks TLS to S3 unconditionally, so even a dev MinIO needs
+      # a certificate. Self-signed is fine; clusters set verify_tls: false.
+      initContainers:
+        - name: certs
+          image: alpine/openssl:latest
+          args:
+            - req
+            - -x509
+            - -nodes
+            - -newkey
+            - rsa:2048
+            - -keyout
+            - /certs/private.key
+            - -out
+            - /certs/public.crt
+            - -days
+            - "365"
+            - -subj
+            - /CN=minio.pglord.svc.cluster.local
+            - -addext
+            - subjectAltName=DNS:minio.pglord.svc.cluster.local,DNS:minio
+          volumeMounts:
+            - { name: certs, mountPath: /certs }
       containers:
         - name: minio
           image: minio/minio:latest
-          args: ["server", "/data", "--console-address", ":9001"]
+          args: ["server", "/data", "--console-address", ":9001", "--certs-dir", "/certs"]
           env:
             - { name: MINIO_ROOT_USER, value: pglordtest }
             - { name: MINIO_ROOT_PASSWORD, value: pglordtest123 }
@@ -26,12 +49,15 @@ spec:
             - { containerPort: 9000, name: api }
             - { containerPort: 9001, name: console }
           readinessProbe:
-            httpGet: { path: /minio/health/ready, port: api }
+            httpGet: { path: /minio/health/ready, port: api, scheme: HTTPS }
             initialDelaySeconds: 5
           volumeMounts:
             - { name: data, mountPath: /data }
+            - { name: certs, mountPath: /certs }
       volumes:
         - name: data
+          emptyDir: {}
+        - name: certs
           emptyDir: {}
 ---
 apiVersion: v1

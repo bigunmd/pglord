@@ -15,7 +15,7 @@
     "enable": "Back this cluster up to object storage",
     "enableHelp": "Turns on WAL archiving and lets you take backups with pgBackRest.",
     "endpoint": "S3 endpoint",
-    "endpointHelp": "Full URL, for example https://s3.eu-west-1.amazonaws.com or your MinIO address.",
+    "endpointHelp": "Full https URL, for example https://s3.eu-west-1.amazonaws.com. pgBackRest requires TLS.",
     "bucket": "Bucket",
     "region": "Region",
     "secret": "Credentials secret",
@@ -32,7 +32,9 @@
     "kind": "Type",
     "size": "Size",
     "finished": "Finished",
-    "noRestoreYet": "Restoring from a backup is not available yet — take a pg_dump before anything irreversible."
+    "noRestoreYet": "Restoring from a backup is not available yet — take a pg_dump before anything irreversible.",
+    "verifyTls": "Verify the storage certificate",
+    "verifyTlsHelp": "Leave on for real object storage. Turn off only if your endpoint uses a self-signed certificate."
   },
   "workload": {
     "title": "Placement and resources",

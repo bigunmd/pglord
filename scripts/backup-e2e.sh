@@ -40,8 +40,8 @@ $KUBECTL -n pglord rollout status deploy/pglord-server --timeout=120s >/dev/null
 echo "==> starting MinIO (dev object storage)"
 $KUBECTL apply -f deploy/k8s/dev/minio.yaml >/dev/null
 $KUBECTL -n pglord rollout status deploy/minio --timeout=180s >/dev/null
-mc alias set local http://localhost:9000 pglordtest pglordtest123 >/dev/null
-mc mb --ignore-existing "local/$BUCKET" >/dev/null
+mc alias set --insecure local https://localhost:9000 pglordtest pglordtest123 >/dev/null
+mc mb --insecure --ignore-existing "local/$BUCKET" >/dev/null
 echo "OK MinIO ready with bucket $BUCKET"
 
 kill_pf
@@ -55,7 +55,8 @@ code=$(curl -s -o /tmp/bk.json -w '%{http_code}' -X POST "$API/api/v1/clusters" 
     \"image\":\"$AGENT_IMAGE\",
     \"backup\":{
       \"enabled\":true,
-      \"s3_endpoint\":\"http://minio.pglord.svc.cluster.local:9000\",
+      \"s3_endpoint\":\"https://minio.pglord.svc.cluster.local:9000\",
+      \"verify_tls\":false,
       \"s3_bucket\":\"$BUCKET\",
       \"s3_credentials_secret\":\"backup-credentials\",
       \"retention_full\":2
@@ -102,16 +103,16 @@ size=$(field '/backups' "['backups'][0]['size_bytes']")
 echo "OK backup listed: full, $size bytes"
 
 echo "==> confirming objects really exist in the bucket"
-objects=$(mc ls --recursive "local/$BUCKET" | wc -l)
+objects=$(mc ls --insecure --recursive "local/$BUCKET" | wc -l)
 [ "$objects" -gt 0 ] || { echo "FAIL: bucket is empty"; exit 1; }
-mc ls --recursive "local/$BUCKET" | grep -q 'backup' || { echo "FAIL: no backup objects in bucket"; exit 1; }
+mc ls --insecure --recursive "local/$BUCKET" | grep -q 'backup' || { echo "FAIL: no backup objects in bucket"; exit 1; }
 echo "OK $objects objects in $BUCKET"
 
 echo "==> confirming WAL is archived"
 for _ in $(seq 1 30); do
   psql_on "SELECT pg_switch_wal()" >/dev/null
   sleep 2
-  mc ls --recursive "local/$BUCKET" | grep -q 'archive' && { archived=yes; break; }
+  mc ls --insecure --recursive "local/$BUCKET" | grep -q 'archive' && { archived=yes; break; }
 done
 [ "${archived:-}" = "yes" ] || { echo "FAIL: no archived WAL in the repository"; exit 1; }
 echo "OK WAL archived to the repository"

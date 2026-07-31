@@ -422,6 +422,11 @@ components:
           description: S3-compatible endpoint, e.g. "https://s3.amazonaws.com" or a MinIO URL.
         s3_region:
           type: string
+        verify_tls:
+          type: boolean
+          description: |-
+            Verify the endpoint's TLS certificate. Turn off only for storage with a
+            self-signed certificate (a dev MinIO, typically).
     ClusterDetail:
       type: object
       required:
