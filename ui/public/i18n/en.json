@@ -1,0 +1,23 @@
+{
+  "app": {
+    "title": "pglord",
+    "tagline": "PostgreSQL clusters on Kubernetes"
+  },
+  "nav": {
+    "home": "Home",
+    "clusters": "Clusters"
+  },
+  "theme": {
+    "label": "Theme",
+    "system": "System",
+    "light": "Light",
+    "dark": "Dark"
+  },
+  "home": {
+    "serverStatus": "Server status",
+    "reachable": "Reachable",
+    "unreachable": "Unreachable",
+    "version": "Server version",
+    "checking": "Checking…"
+  }
+}
