@@ -8,6 +8,7 @@ import {
   lucidePencil,
   lucidePower,
   lucideRefreshCw,
+  lucideDatabaseBackup,
   lucideServer,
   lucideSettings,
   lucideTriangleAlert,
@@ -33,6 +34,11 @@ import { patchCluster } from '../../api/fn/clusters/patch-cluster';
 import { restartCluster } from '../../api/fn/clusters/restart-cluster';
 import { switchover } from '../../api/fn/clusters/switchover';
 import { WorkloadSpec } from '../../api/models/workload-spec';
+import { BackupSpec } from '../../api/models/backup-spec';
+import { BackupList } from '../../api/models/backup-list';
+import { listBackups } from '../../api/fn/backups/list-backups';
+import { createBackup } from '../../api/fn/backups/create-backup';
+import { ClusterBackupDialogComponent } from './cluster-backup-dialog.component';
 import { ClusterConfigDialogComponent } from './cluster-config-dialog.component';
 import { ClusterEditDialogComponent } from './cluster-edit-dialog.component';
 import { ClusterWorkloadDialogComponent } from './cluster-workload-dialog.component';
@@ -105,6 +111,7 @@ export class RestartDialogComponent {
       lucidePencil,
       lucidePower,
       lucideRefreshCw,
+      lucideDatabaseBackup,
       lucideServer,
       lucideSettings,
       lucideTriangleAlert,
@@ -251,6 +258,77 @@ export class RestartDialogComponent {
           }
         </dl>
 
+        <!-- Backups -->
+        <div class="mt-6 flex items-center justify-between">
+          <h2 class="font-medium">{{ 'backups.title' | transloco }}</h2>
+          <span class="flex items-center gap-2">
+            @if (backups()?.enabled) {
+              <button
+                hlmBtn
+                size="sm"
+                data-testid="backup-now"
+                [disabled]="busy()"
+                (click)="backupNow()"
+              >
+                <ng-icon name="lucideDatabaseBackup" size="14" />
+                {{ 'backups.backupNow' | transloco }}
+              </button>
+            }
+            <button
+              hlmBtn
+              variant="outline"
+              size="sm"
+              data-testid="open-backup-config"
+              [disabled]="busy()"
+              (click)="openBackupConfig(d)"
+            >
+              {{ 'backups.configure' | transloco }}
+            </button>
+          </span>
+        </div>
+
+        @if (backups(); as b) {
+          @if (!b.enabled) {
+            <p class="text-muted-foreground mt-2 text-sm">{{ 'backups.disabled' | transloco }}</p>
+          } @else {
+            <p class="text-muted-foreground mt-2 text-sm">
+              <span class="font-mono text-xs">{{ b.repository }}</span>
+              · {{ 'backups.keeping' | transloco: { count: d.backup.retention_full } }}
+            </p>
+            @if (b.backups.length) {
+              <div class="border-border mt-2 overflow-x-auto rounded-lg border">
+                <table hlmTable class="w-full">
+                  <thead hlmTHead>
+                    <tr hlmTr>
+                      <th hlmTh>{{ 'backups.label' | transloco }}</th>
+                      <th hlmTh>{{ 'backups.kind' | transloco }}</th>
+                      <th hlmTh>{{ 'backups.size' | transloco }}</th>
+                      <th hlmTh>{{ 'backups.finished' | transloco }}</th>
+                    </tr>
+                  </thead>
+                  <tbody hlmTBody>
+                    @for (bk of b.backups; track bk.label) {
+                      <tr hlmTr [attr.data-testid]="'backup-' + bk.label">
+                        <td hlmTd class="font-mono text-xs">{{ bk.label }}</td>
+                        <td hlmTd class="text-sm">{{ bk.kind }}</td>
+                        <td hlmTd class="font-mono text-xs tabular-nums">
+                          {{ formatSize(bk.size_bytes) }}
+                        </td>
+                        <td hlmTd class="text-muted-foreground text-xs">
+                          {{ formatTime(bk.finished) }}
+                        </td>
+                      </tr>
+                    }
+                  </tbody>
+                </table>
+              </div>
+            } @else {
+              <p class="text-muted-foreground mt-2 text-sm">{{ 'backups.none' | transloco }}</p>
+            }
+            <p class="text-muted-foreground mt-2 text-xs">{{ 'backups.noRestoreYet' | transloco }}</p>
+          }
+        }
+
         <!-- Configuration -->
         <div class="mt-6 flex items-center justify-between">
           <h2 class="font-medium">{{ 'config.title' | transloco }}</h2>
@@ -323,7 +401,46 @@ export class ClusterDetailComponent implements OnDestroy {
   readonly name = input.required<string>();
 
   protected readonly detail = signal<ClusterDetail | null>(null);
+  protected readonly backups = signal<BackupList | null>(null);
   protected readonly error = signal<string | null>(null);
+
+  protected formatSize(bytes: number): string {
+    if (!bytes) {
+      return '—';
+    }
+    const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+    let value = bytes;
+    let unit = 0;
+    while (value >= 1024 && unit < units.length - 1) {
+      value /= 1024;
+      unit++;
+    }
+    return `${value < 10 && unit > 0 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
+  }
+
+  protected formatTime(unixSeconds: number): string {
+    if (!unixSeconds) {
+      return '—';
+    }
+    return new Date(unixSeconds * 1000).toLocaleString();
+  }
+
+  async openBackupConfig(d: ClusterDetail): Promise<void> {
+    const backup = await firstValueFrom(
+      this.dialog.open<BackupSpec | undefined>(ClusterBackupDialogComponent, {
+        context: { backup: d.backup },
+        contentClass: FORM_DIALOG_CLASS,
+      }).closed$,
+    );
+    if (!backup) {
+      return;
+    }
+    await this.run(() => this.api.invoke(patchCluster, { name: this.name(), body: { backup } }));
+  }
+
+  async backupNow(): Promise<void> {
+    await this.run(() => this.api.invoke(createBackup, { name: this.name() }));
+  }
   /** Blocks concurrent operations so a double-click cannot fire twice. */
   protected readonly busy = signal(false);
 
@@ -454,6 +571,14 @@ export class ClusterDetailComponent implements OnDestroy {
     } catch (err) {
       const e = err as { error?: { detail?: string; code?: string }; message?: string };
       this.error.set(e?.error?.detail ?? e?.error?.code ?? e?.message ?? 'Request failed');
+      return;
+    }
+    // Reading the repository can be slow or unavailable; it must never take
+    // the rest of the page down with it.
+    try {
+      this.backups.set(await this.api.invoke(listBackups, { name: this.name() }));
+    } catch {
+      this.backups.set(null);
     }
   }
 }
