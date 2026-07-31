@@ -7,6 +7,7 @@ import { HlmButtonImports } from '@spartan-ng/helm/button';
 import { HlmDropdownMenuImports } from '@spartan-ng/helm/dropdown-menu';
 
 import { ThemeMode, ThemeService } from '../core/theme/theme.service';
+import { PglordLogoComponent } from './pglord-logo.component';
 
 @Component({
   selector: 'pg-shell',
@@ -18,14 +19,18 @@ import { ThemeMode, ThemeService } from '../core/theme/theme.service';
     NgIcon,
     HlmButtonImports,
     HlmDropdownMenuImports,
+    PglordLogoComponent,
   ],
   providers: [provideIcons({ lucideCheck, lucideMonitor, lucideMoon, lucideSun })],
   template: `
     <div class="flex min-h-svh flex-col">
       <header class="border-border bg-card flex h-14 items-center gap-3 border-b px-4 lg:px-6">
-        <span class="text-primary font-semibold tracking-tight">
-          {{ 'app.title' | transloco }}
-        </span>
+        <a routerLink="/" class="flex items-center gap-2">
+          <pg-logo [size]="26" />
+          <span class="text-primary font-semibold tracking-tight">
+            {{ 'app.title' | transloco }}
+          </span>
+        </a>
         <span class="text-muted-foreground hidden text-sm sm:inline">
           {{ 'app.tagline' | transloco }}
         </span>

@@ -38,6 +38,11 @@
   --radius: 0.5rem;
   --font-sans: 'Inter Variable', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono Variable', ui-monospace, monospace;
+  /* Logo: the cloak sits behind the body, the ears a shade darker so the
+     silhouette does not read as one blob at small sizes. */
+  --pg-logo-cloak: #1f4667;
+  --pg-logo-ear: #2a5679;
+  --pg-logo-eye: #0f2436;
 }
 
 :root.dark {
@@ -63,6 +68,9 @@
   --ring: #6ba5cd;
   --success: #4caf7d;
   --warning: #d29a3d;
+  --pg-logo-cloak: #2f5d86;
+  --pg-logo-ear: #5e97bf;
+  --pg-logo-eye: #0d1620;
 }
 
 @theme inline {

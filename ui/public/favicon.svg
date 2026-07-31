@@ -1,0 +1,19 @@
+<svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <title>pglord</title>
+  <!-- Original artwork: a crowned, cloaked elephant. Not the PostgreSQL
+       project's "Slonik" mark, which is a trademark of the PostgreSQL
+       Community Association. -->
+  <path d="M16 12c-6.4 0-10.8 4.6-11.7 11-.3 2.4-.5 4.6-.9 6.4 1.9-1 3.8-1 5.7 0 .5-2 .9-4.3 1-6.7h11.8c.1 2.4.5 4.7 1 6.7 1.9-1 3.8-1 5.7 0-.4-1.8-.6-4-.9-6.4C26.8 16.6 22.4 12 16 12z" fill="#1F4667"/>
+  <path d="M9.6 9.6V5.4l3.2 2.3L16 3l3.2 4.7 3.2-2.3v4.2z" fill="#D9A441"/>
+  <circle cx="9.6" cy="4.2" r="1.15" fill="#D9A441"/>
+  <circle cx="16" cy="1.9" r="1.3" fill="#D9A441"/>
+  <circle cx="22.4" cy="4.2" r="1.15" fill="#D9A441"/>
+  <ellipse cx="8.4" cy="15.2" rx="3.4" ry="4.4" fill="#2A5679"/>
+  <ellipse cx="23.6" cy="15.2" rx="3.4" ry="4.4" fill="#2A5679"/>
+  <path d="M13.5 16.5c-.5 4.3.1 7.7 2 10 1.3 1.5 3.6 1.1 3.5-.7-.1-1.4-1.8-1.5-2.2-3.2-.5-2 0-4.3.2-6.1z" fill="#336791"/>
+  <path d="M12.1 17.8c-.9 2.3-1.3 4-1 5.6.9-1.7 1.5-3.4 2-4.8z" fill="#F1EEE4"/>
+  <path d="M19.9 17.8c.9 2.3 1.3 4 1 5.6-.9-1.7-1.5-3.4-2-4.8z" fill="#F1EEE4"/>
+  <ellipse cx="16" cy="13.9" rx="6.6" ry="6.1" fill="#336791"/>
+  <circle cx="13.5" cy="13.4" r="1" fill="#0f2436"/>
+  <circle cx="18.5" cy="13.4" r="1" fill="#0f2436"/>
+</svg>
