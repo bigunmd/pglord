@@ -112,7 +112,7 @@ pub fn parse_info(json: &str) -> anyhow::Result<Vec<BackupInfo>> {
     }
     // Newest first: that is the order the UI shows and the order that matters
     // when picking a restore target later.
-    out.sort_by(|a, b| b.started.cmp(&a.started));
+    out.sort_by_key(|b| std::cmp::Reverse(b.started));
     Ok(out)
 }
 
