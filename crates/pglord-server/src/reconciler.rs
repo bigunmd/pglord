@@ -10,16 +10,20 @@ use std::collections::BTreeMap;
 
 use futures::TryStreamExt;
 use k8s_openapi::api::apps::v1::StatefulSet;
+use k8s_openapi::api::core::v1::ServiceAccount;
 use k8s_openapi::api::core::v1::{ConfigMap, Secret, Service};
+use k8s_openapi::api::rbac::v1::{Role, RoleBinding};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, OwnerReference};
 use kube::api::{Api, Patch, PatchParams, PostParams};
 use kube::runtime::watcher;
 use pglord_core::render::{
     OwnerRef, REPLICATION_PASSWORD_KEY, SUPERUSER_PASSWORD_KEY, credentials_secret_name, labels,
-    render_headless_service, render_rw_service, render_statefulset,
+    render_headless_service, render_instance_rbac, render_rw_service, render_statefulset,
 };
 use pglord_core::spec::ClusterSpec;
 use rand::RngExt;
+
+use crate::primary_record::recorded_primary;
 
 use crate::spec_store::{FIELD_MANAGER, configmap_to_spec, spec_label_selector};
 
@@ -31,11 +35,12 @@ pub fn desired_objects(
     spec: &ClusterSpec,
     ns: &str,
     owner: &OwnerRef,
+    primary_pod: &str,
 ) -> (StatefulSet, Service, Service) {
     (
         render_statefulset(spec, ns, owner),
         render_headless_service(spec, ns, owner),
-        render_rw_service(spec, ns, owner),
+        render_rw_service(spec, ns, owner, primary_pod),
     )
 }
 
@@ -93,7 +98,8 @@ async fn sync_all(client: &kube::Client, cms: &Api<ConfigMap>, ns: &str) -> anyh
             tracing::warn!(cluster = %spec.name, %err, "skipping invalid spec");
             continue;
         }
-        if let Err(err) = apply_cluster(client, ns, &spec, &owner).await {
+        let primary_pod = recorded_primary(cm, &spec.name);
+        if let Err(err) = apply_cluster(client, ns, &spec, &owner, &primary_pod).await {
             tracing::warn!(cluster = %spec.name, %err, "apply failed");
         } else {
             tracing::debug!(cluster = %spec.name, "reconciled");
@@ -155,15 +161,25 @@ async fn ensure_credentials(
     }
 }
 
-async fn apply_cluster(
+pub async fn apply_cluster(
     client: &kube::Client,
     ns: &str,
     spec: &ClusterSpec,
     owner: &OwnerRef,
+    primary_pod: &str,
 ) -> anyhow::Result<()> {
     ensure_credentials(client, ns, spec, owner).await?;
-    let (sts, headless, rw) = desired_objects(spec, ns, owner);
+    let (sa, role, binding) = render_instance_rbac(spec, ns, owner);
     let pp = PatchParams::apply(FIELD_MANAGER).force();
+    let sa_api: Api<ServiceAccount> = Api::namespaced(client.clone(), ns);
+    let sa_name = sa.metadata.name.clone().unwrap_or_default();
+    sa_api.patch(&sa_name, &pp, &Patch::Apply(&sa)).await?;
+    let role_api: Api<Role> = Api::namespaced(client.clone(), ns);
+    role_api.patch(&sa_name, &pp, &Patch::Apply(&role)).await?;
+    let rb_api: Api<RoleBinding> = Api::namespaced(client.clone(), ns);
+    rb_api.patch(&sa_name, &pp, &Patch::Apply(&binding)).await?;
+
+    let (sts, headless, rw) = desired_objects(spec, ns, owner, primary_pod);
 
     let sts_api: Api<StatefulSet> = Api::namespaced(client.clone(), ns);
     sts_api.patch(&spec.name, &pp, &Patch::Apply(&sts)).await?;
@@ -200,7 +216,7 @@ mod tests {
             name: "demo-spec".into(),
             uid: "u".into(),
         };
-        let (sts, headless, rw) = desired_objects(&spec, "ns", &owner);
+        let (sts, headless, rw) = desired_objects(&spec, "ns", &owner, "demo-0");
         assert_eq!(sts.metadata.name.as_deref(), Some("demo"));
         assert_eq!(headless.metadata.name.as_deref(), Some("demo-pods"));
         assert_eq!(rw.metadata.name.as_deref(), Some("demo-rw"));

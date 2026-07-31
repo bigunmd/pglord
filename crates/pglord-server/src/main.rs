@@ -37,6 +37,7 @@ async fn main() -> anyhow::Result<()> {
             tracing::info!(%ns, "kubernetes environment detected");
             tokio::spawn(kube_client::health_loop(client.clone(), readiness.clone()));
             tokio::spawn(reconciler::run(client.clone(), ns.clone()));
+            tokio::spawn(pglord_server::orchestrator::run(client.clone(), ns.clone()));
             Some(ClusterOps {
                 store: std::sync::Arc::new(ConfigMapSpecStore::new(client.clone(), &ns)),
                 kube: client,

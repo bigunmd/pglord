@@ -49,6 +49,16 @@ pub struct Config {
     /// Replication password. Empty = trust auth (dev/e2e only).
     #[serde(default = "default_empty")]
     pub repl_password: String,
+    /// Cluster name (set by the reconciler); enables primary-record following.
+    #[serde(default = "default_empty")]
+    pub cluster: String,
+    /// Namespace (set by the reconciler via fieldRef).
+    #[serde(default = "default_namespace")]
+    pub namespace: String,
+}
+
+fn default_namespace() -> String {
+    "default".into()
 }
 
 fn default_repl_user() -> String {

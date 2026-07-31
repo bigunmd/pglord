@@ -5,10 +5,12 @@ use std::collections::BTreeMap;
 
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
-    Container, ContainerPort, EnvVar, EnvVarSource, HTTPGetAction, PersistentVolumeClaim,
-    PersistentVolumeClaimSpec, PodSpec, PodTemplateSpec, Probe, SecretKeySelector, Service,
-    ServicePort, ServiceSpec, VolumeMount, VolumeResourceRequirements,
+    Container, ContainerPort, EnvVar, EnvVarSource, HTTPGetAction, ObjectFieldSelector,
+    PersistentVolumeClaim, PersistentVolumeClaimSpec, PodSpec, PodTemplateSpec, Probe,
+    SecretKeySelector, Service, ServiceAccount, ServicePort, ServiceSpec, VolumeMount,
+    VolumeResourceRequirements,
 };
+use k8s_openapi::api::rbac::v1::{PolicyRule, Role, RoleBinding, RoleRef, Subject};
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta, OwnerReference};
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
@@ -92,11 +94,53 @@ fn secret_env(name: &str, cluster: &str, key: &str) -> EnvVar {
     }
 }
 
-pub fn primary_pod_fqdn(cluster: &str, ns: &str) -> String {
+pub fn pod_fqdn(pod: &str, cluster: &str, ns: &str) -> String {
     format!(
-        "{cluster}-0.{}.{ns}.svc.cluster.local",
+        "{pod}.{}.{ns}.svc.cluster.local",
         headless_service_name(cluster)
     )
+}
+
+pub fn instance_sa_name(cluster: &str) -> String {
+    format!("{cluster}-instance")
+}
+
+/// ServiceAccount + Role + RoleBinding letting instance agents read the spec
+/// ConfigMap (primary record) — nothing else.
+pub fn render_instance_rbac(
+    spec: &ClusterSpec,
+    ns: &str,
+    owner: &OwnerRef,
+) -> (ServiceAccount, Role, RoleBinding) {
+    let name = instance_sa_name(&spec.name);
+    let sa = ServiceAccount {
+        metadata: meta(&name, ns, &spec.name, owner),
+        ..Default::default()
+    };
+    let role = Role {
+        metadata: meta(&name, ns, &spec.name, owner),
+        rules: Some(vec![PolicyRule {
+            api_groups: Some(vec![String::new()]),
+            resources: Some(vec!["configmaps".to_string()]),
+            verbs: vec!["get".to_string(), "list".to_string(), "watch".to_string()],
+            ..Default::default()
+        }]),
+    };
+    let binding = RoleBinding {
+        metadata: meta(&name, ns, &spec.name, owner),
+        role_ref: RoleRef {
+            api_group: Some("rbac.authorization.k8s.io".to_string()),
+            kind: "Role".to_string(),
+            name: name.clone(),
+        },
+        subjects: Some(vec![Subject {
+            kind: "ServiceAccount".to_string(),
+            name: name.clone(),
+            namespace: Some(ns.to_string()),
+            ..Default::default()
+        }]),
+    };
+    (sa, role, binding)
 }
 
 pub fn render_statefulset(spec: &ClusterSpec, ns: &str, owner: &OwnerRef) -> StatefulSet {
@@ -112,7 +156,23 @@ pub fn render_statefulset(spec: &ClusterSpec, ns: &str, owner: &OwnerRef) -> Sta
             },
             EnvVar {
                 name: "PGLORD_AGENT_PRIMARY_HOST".to_string(),
-                value: Some(primary_pod_fqdn(&spec.name, ns)),
+                value: Some(pod_fqdn(&format!("{}-0", spec.name), &spec.name, ns)),
+                ..Default::default()
+            },
+            EnvVar {
+                name: "PGLORD_AGENT_CLUSTER".to_string(),
+                value: Some(spec.name.clone()),
+                ..Default::default()
+            },
+            EnvVar {
+                name: "PGLORD_AGENT_NAMESPACE".to_string(),
+                value_from: Some(EnvVarSource {
+                    field_ref: Some(ObjectFieldSelector {
+                        field_path: "metadata.namespace".to_string(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
                 ..Default::default()
             },
             EnvVar {
@@ -168,6 +228,7 @@ pub fn render_statefulset(spec: &ClusterSpec, ns: &str, owner: &OwnerRef) -> Sta
                     ..Default::default()
                 }),
                 spec: Some(PodSpec {
+                    service_account_name: Some(instance_sa_name(&spec.name)),
                     containers: vec![container],
                     ..Default::default()
                 }),
@@ -213,13 +274,19 @@ pub fn render_headless_service(spec: &ClusterSpec, ns: &str, owner: &OwnerRef) -
     }
 }
 
-/// Read-write service. MVP: pinned to pod-0 via the StatefulSet pod-name
-/// label; failover orchestration will repoint this by managing the selector.
-pub fn render_rw_service(spec: &ClusterSpec, ns: &str, owner: &OwnerRef) -> Service {
+/// Read-write service, pinned to the *recorded* primary pod via the
+/// StatefulSet pod-name label. Failover repoints it by re-rendering with the
+/// new record.
+pub fn render_rw_service(
+    spec: &ClusterSpec,
+    ns: &str,
+    owner: &OwnerRef,
+    primary_pod: &str,
+) -> Service {
     let mut selector = labels(&spec.name);
     selector.insert(
         "statefulset.kubernetes.io/pod-name".to_string(),
-        format!("{}-0", spec.name),
+        primary_pod.to_string(),
     );
     Service {
         metadata: meta(&format!("{}-rw", spec.name), ns, &spec.name, owner),
@@ -324,10 +391,10 @@ mod tests {
             "demo"
         );
 
-        let rw = render_rw_service(&spec, "pglord", &owner);
+        let rw = render_rw_service(&spec, "pglord", &owner, "demo-1");
         assert_eq!(rw.metadata.name.as_deref(), Some("demo-rw"));
         let sel = rw.spec.expect("spec").selector.expect("selector");
-        assert_eq!(sel["statefulset.kubernetes.io/pod-name"], "demo-0");
+        assert_eq!(sel["statefulset.kubernetes.io/pod-name"], "demo-1");
     }
 
     #[test]
@@ -336,7 +403,8 @@ mod tests {
         for meta in [
             render_statefulset(&spec, "ns", &owner).metadata,
             render_headless_service(&spec, "ns", &owner).metadata,
-            render_rw_service(&spec, "ns", &owner).metadata,
+            render_rw_service(&spec, "ns", &owner, "demo-0").metadata,
+            render_instance_rbac(&spec, "ns", &owner).0.metadata,
         ] {
             let refs = meta.owner_references.expect("owner refs");
             assert_eq!(refs[0].uid, "uid-123");

@@ -1,10 +1,10 @@
 //! pglord-agent entrypoint: bootstrap PGDATA, run postgres as a supervised
-//! child, and serve the internal control endpoint until either exits.
+//! child, serve the internal control endpoint, and follow the primary record.
 
 use std::sync::Arc;
 
-use pglord_agent::config::Config;
-use pglord_agent::{bootstrap, http, rolestrategy, supervisor};
+use pglord_agent::config::{Config, Role};
+use pglord_agent::{bootstrap, http, record, rolestrategy, supervisor};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -21,16 +21,29 @@ async fn main() -> anyhow::Result<()> {
         .or_else(|| std::fs::read_to_string("/etc/hostname").ok())
         .map(|h| h.trim().to_string())
         .unwrap_or_default();
-    cfg.role = rolestrategy::resolve_role(cfg.role, &hostname)?;
+
+    // Role resolution: the primary record wins when reachable; ordinal
+    // fallback keeps K8s-less environments (docker e2e) working.
+    let reader = record::RecordReader::try_new(&cfg).await;
+    cfg.role = match &reader {
+        Some(r) => match record::apply_record_to_config(&mut cfg, r, &hostname).await {
+            Some(role) => role,
+            None => rolestrategy::resolve_role(cfg.role, &hostname)?,
+        },
+        None => rolestrategy::resolve_role(cfg.role, &hostname)?,
+    };
     let cfg = Arc::new(cfg);
     tracing::info!(role = ?cfg.role, %hostname, version = env!("CARGO_PKG_VERSION"), "pglord-agent starting");
 
     bootstrap::ensure_bootstrapped(&cfg).await?;
     let child = supervisor::spawn_postgres(&cfg)?;
 
-    if cfg.role == pglord_agent::config::Role::Primary {
+    if cfg.role == Role::Primary {
         let cfg_pb = cfg.clone();
         tokio::spawn(async move { pglord_agent::postboot::ensure_replication_role(&cfg_pb).await });
+    }
+    if let Some(reader) = reader {
+        tokio::spawn(record::follow(reader, cfg.clone(), hostname.clone()));
     }
 
     let listener = tokio::net::TcpListener::bind(cfg.http_addr).await?;
