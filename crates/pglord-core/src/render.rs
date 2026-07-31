@@ -119,10 +119,13 @@ pub fn render_instance_rbac(
     };
     let role = Role {
         metadata: meta(&name, ns, &spec.name, owner),
+        // Least privilege: agents may read exactly their own spec ConfigMap
+        // (primary record), nothing else in the namespace.
         rules: Some(vec![PolicyRule {
             api_groups: Some(vec![String::new()]),
             resources: Some(vec!["configmaps".to_string()]),
-            verbs: vec!["get".to_string(), "list".to_string(), "watch".to_string()],
+            resource_names: Some(vec![format!("{}-spec", spec.name)]),
+            verbs: vec!["get".to_string()],
             ..Default::default()
         }]),
     };
@@ -378,6 +381,18 @@ mod tests {
             assert_eq!(sel.name, "demo-credentials");
             assert_eq!(sel.key, key);
         }
+    }
+
+    #[test]
+    fn instance_role_is_least_privilege() {
+        let (spec, owner) = demo();
+        let (_sa, role, _binding) = render_instance_rbac(&spec, "ns", &owner);
+        let rule = &role.rules.expect("rules")[0];
+        assert_eq!(rule.verbs, vec!["get"]);
+        assert_eq!(
+            rule.resource_names.as_ref().expect("resource names"),
+            &vec!["demo-spec".to_string()]
+        );
     }
 
     #[test]
