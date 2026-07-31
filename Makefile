@@ -76,6 +76,9 @@ failover-e2e: ## Minikube e2e: kill primary -> promote, repoint, rejoin
 day2-e2e: ## Minikube e2e: planned switchover and scale-up
 	./scripts/day2-e2e.sh
 
+config-e2e: ## Minikube e2e: live settings, pending restart, rolling restart
+	./scripts/config-e2e.sh
+
 ui-install: ## Install UI dependencies
 	cd ui && npm ci
 

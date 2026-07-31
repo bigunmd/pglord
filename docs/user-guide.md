@@ -161,6 +161,33 @@ primary automatically; it starts streaming when the clone finishes.
 Removing instances **deletes their data volumes**. Only the highest-numbered
 instances are removed, and the primary is never one of them.
 
+### Tune PostgreSQL settings
+
+**Configuration → Edit configuration.** Pick a setting, give it a value, and
+apply. pglord tells you before you save whether the setting takes effect
+immediately or needs a restart:
+
+- **applies live** — written to every instance and reloaded within seconds. No
+  disruption. Most settings are in this group: `work_mem`,
+  `log_min_duration_statement`, autovacuum tuning, planner costs.
+- **needs restart** — staged, but PostgreSQL keeps running with the old value.
+  Examples: `shared_buffers`, `max_connections`, `max_worker_processes`.
+
+When something is staged, the cluster shows a banner with a **Restart cluster**
+button. The restart is rolling: standbys first, the primary last, one instance
+at a time, so the cluster stays available apart from brief reconnects.
+
+Removing a setting from the list returns it to the PostgreSQL default.
+
+Two guardrails: only settings pglord knows are accepted (a typo is rejected
+rather than left to break startup), and settings pglord manages itself —
+`wal_level`, `max_wal_senders`, `hot_standby`, `wal_log_hints`,
+`listen_addresses`, `port` — cannot be overridden, because replication and
+failover depend on them.
+
+Editing `pg_hba.conf` is not available yet; connection rules stay as pglord
+configures them.
+
 ### Grow storage
 
 **Edit → Storage per instance.** Storage can only grow — Kubernetes cannot
@@ -207,5 +234,6 @@ Scheduled backups to object storage are on the roadmap, not shipped yet.
 - No scheduled backups or point-in-time restore yet.
 - Custom images must be built on the pglord agent image; stock `postgres:NN`
   images are not usable yet.
-- Cluster name and image cannot be changed after creation (instances and
-  storage can — see Day-2 operations).
+- Cluster name and image cannot be changed after creation (instances, storage
+  and PostgreSQL settings can — see Day-2 operations).
+- `pg_hba.conf` rules are not editable yet.
