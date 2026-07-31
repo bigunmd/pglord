@@ -44,8 +44,9 @@ interface Row {
       <h2 hlmDialogTitle>{{ 'config.editTitle' | transloco }}</h2>
     </div>
 
-    <!-- Viewport-relative so the list uses tall screens instead of a fixed box. -->
-    <div class="-mx-1 grid max-h-[min(60vh,32rem)] gap-5 overflow-y-auto px-1 py-1">
+    <!-- Viewport-relative so the list uses tall screens instead of a fixed box.
+         pg-scroll reserves the scrollbar gutter so nothing is clipped by it. -->
+    <div class="pg-scroll grid max-h-[min(65vh,32rem)] gap-5 overflow-y-auto py-1 pr-2">
       @for (row of rows(); track row.name) {
         <div class="grid gap-2" [attr.data-testid]="'param-' + row.name">
           <div class="flex items-center justify-between gap-3">

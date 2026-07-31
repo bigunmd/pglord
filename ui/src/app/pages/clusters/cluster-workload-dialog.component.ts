@@ -42,8 +42,9 @@ interface KeyValue {
       <h2 hlmDialogTitle>{{ 'workload.editTitle' | transloco }}</h2>
     </div>
 
-    <!-- Viewport-relative so the form uses tall screens instead of a fixed box. -->
-    <div class="-mx-1 grid max-h-[min(60vh,34rem)] gap-7 overflow-y-auto px-1 py-1">
+    <!-- Viewport-relative so the form uses tall screens instead of a fixed box.
+         pg-scroll reserves the scrollbar gutter so nothing is clipped by it. -->
+    <div class="pg-scroll grid max-h-[min(65vh,34rem)] gap-6 overflow-y-auto py-1 pr-2">
       <div class="grid gap-2">
         <span hlmLabel>{{ 'workload.antiAffinity' | transloco }}</span>
         <div class="bg-muted grid grid-cols-3 gap-1 rounded-lg p-1" role="tablist">
@@ -63,12 +64,12 @@ interface KeyValue {
             </button>
           }
         </div>
-        <p class="text-muted-foreground min-h-8 text-xs leading-relaxed">
+        <p class="text-muted-foreground min-h-9 text-xs leading-relaxed">
           {{ 'workload.antiAffinityHelp.' + antiAffinity() | transloco }}
         </p>
       </div>
 
-      <div class="border-border grid gap-3 border-t pt-6">
+      <div class="border-border grid gap-3 border-t pt-5">
         <span hlmLabel>{{ 'workload.resources' | transloco }}</span>
         <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
           @for (f of resourceFields; track f.key) {
@@ -95,7 +96,7 @@ interface KeyValue {
       </div>
 
       @for (group of groups; track group.kind) {
-        <div class="border-border grid gap-3 border-t pt-6">
+        <div class="border-border grid gap-3 border-t pt-5">
           <span hlmLabel>{{ 'workload.' + group.kind | transloco }}</span>
           @for (row of rowsOf(group.kind); track $index) {
             <div class="flex items-center gap-3">
