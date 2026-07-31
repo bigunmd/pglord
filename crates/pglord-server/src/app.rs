@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use axum::Router;
 use axum::extract::FromRef;
+use axum::response::IntoResponse;
 use axum::routing::get;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use utoipa::OpenApi;
@@ -44,8 +45,15 @@ pub fn build(readiness: Readiness, cfg: &Config) -> (Router, utoipa::openapi::Op
         .merge(api)
         .split_for_parts();
 
-    // Unmatched /api paths must return the same problem+json shape as handler errors.
-    let api_router = api_router.fallback(|| async { crate::error::ApiError::not_found() });
+    // Router-wide fallback: unmatched /api paths keep the problem+json shape;
+    // anything else is the SPA (embedded assets with index.html fallback).
+    let api_router = api_router.fallback(async |uri: axum::http::Uri| {
+        if uri.path().starts_with("/api") {
+            crate::error::ApiError::not_found().into_response()
+        } else {
+            crate::ui_assets::serve(uri.path())
+        }
+    });
 
     let api_router = if cfg.cors_origins().is_empty() {
         api_router

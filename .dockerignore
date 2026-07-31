@@ -4,3 +4,6 @@ docs
 spec
 deploy/k8s
 **/*.md
+ui/node_modules
+ui/dist
+ui/.angular

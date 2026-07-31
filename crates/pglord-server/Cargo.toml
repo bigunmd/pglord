@@ -13,7 +13,9 @@ workspace = true
 anyhow = "1.0.104"
 axum = "0.8"
 figment = { version = "0.10.19", features = ["toml", "env"] }
+mime_guess = { version = "2", optional = true }
 pglord-core = { path = "../pglord-core" }
+rust-embed = { version = "8", optional = true }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 tokio = { version = "1.53.1", features = ["full"] }
@@ -28,3 +30,6 @@ utoipa-swagger-ui = { version = "9", features = ["axum"] }
 figment = { version = "0.10.19", features = ["test"] }
 http-body-util = "0.1.4"
 tower = { version = "0.5", features = ["util"] }
+
+[features]
+embed-ui = ["dep:rust-embed", "dep:mime_guess"]
