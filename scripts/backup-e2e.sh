@@ -102,6 +102,45 @@ size=$(field '/backups' "['backups'][0]['size_bytes']")
 [ "$size" -gt 0 ] || { echo "FAIL: backup size is $size"; exit 1; }
 echo "OK backup listed: full, $size bytes"
 
+echo "==> checking the run was recorded"
+state=$(field '/backups' "['runs'][0]['state']")
+trigger=$(field '/backups' "['runs'][0]['trigger']")
+[ "$state" = "succeeded" ] || { echo "FAIL: run state is '$state'"; exit 1; }
+[ "$trigger" = "manual" ] || { echo "FAIL: run trigger is '$trigger'"; exit 1; }
+echo "OK run recorded as succeeded/manual"
+
+echo "==> taking an incremental backup"
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API/api/v1/clusters/bk/backups" \
+  -H 'content-type: application/json' -d '{"kind":"incr"}')
+[ "$code" = "202" ] || { echo "FAIL: incremental backup returned $code"; exit 1; }
+# A second request while one is running must be refused, not queued.
+sleep 1
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API/api/v1/clusters/bk/backups" \
+  -H 'content-type: application/json' -d '{"kind":"incr"}')
+[ "$code" = "409" ] || echo "NOTE: concurrent backup returned $code (run may have finished already)"
+for _ in $(seq 1 90); do
+  count=$(field '/backups' "['backups'].__len__()")
+  [ "$count" = "2" ] && break
+  sleep 4
+done
+[ "$count" = "2" ] || { echo "FAIL: incremental backup not listed (count='$count')"; exit 1; }
+kinds=$(field '/backups' "['backups'][0]['kind']")
+[ "$kinds" = "incr" ] || { echo "FAIL: newest backup is '$kinds', expected incr"; exit 1; }
+echo "OK incremental backup taken and listed"
+
+echo "==> setting a schedule"
+code=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "$API/api/v1/clusters/bk" \
+  -H 'content-type: application/json' -d "{\"backup\":{\"enabled\":true,\"s3_endpoint\":\"https://minio.pglord.svc.cluster.local:9000\",\"verify_tls\":false,\"s3_bucket\":\"$BUCKET\",\"s3_credentials_secret\":\"backup-credentials\",\"retention_full\":2,\"schedule\":\"0 3 * * *\",\"schedule_kind\":\"incr\"}}")
+[ "$code" = "200" ] || { echo "FAIL: setting a schedule returned $code"; exit 1; }
+[ "$(field '/backups' "['schedule']")" = "0 3 * * *" ] || { echo "FAIL: schedule not reported"; exit 1; }
+# Nonsense and too-frequent schedules must be refused.
+for bad in 'not a cron' '* * * * *'; do
+  code=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "$API/api/v1/clusters/bk" \
+    -H 'content-type: application/json' -d "{\"backup\":{\"enabled\":true,\"s3_endpoint\":\"https://minio.pglord.svc.cluster.local:9000\",\"verify_tls\":false,\"s3_bucket\":\"$BUCKET\",\"s3_credentials_secret\":\"backup-credentials\",\"schedule\":\"$bad\"}}")
+  [ "$code" = "422" ] || { echo "FAIL: schedule '$bad' returned $code, expected 422"; exit 1; }
+done
+echo "OK schedule stored, invalid schedules refused"
+
 echo "==> confirming objects really exist in the bucket"
 objects=$(mc ls --insecure --recursive "local/$BUCKET" | wc -l)
 [ "$objects" -gt 0 ] || { echo "FAIL: bucket is empty"; exit 1; }
