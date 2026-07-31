@@ -6,4 +6,6 @@ pub mod app;
 pub mod config;
 pub mod error;
 pub mod health;
+pub mod kube_client;
+pub mod spec_store;
 pub mod ui_assets;
