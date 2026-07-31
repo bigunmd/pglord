@@ -70,6 +70,9 @@ pub trait SpecStore: Send + Sync {
     /// The recorded primary pod for the cluster, if the spec exists
     /// (annotation on the spec object; caller applies the `<name>-0` default).
     async fn primary(&self, name: &str) -> anyhow::Result<Option<String>>;
+    /// Record a new primary via compare-and-swap. False = another writer won
+    /// the race; the caller should re-read and decide again.
+    async fn set_primary(&self, name: &str, target: &str) -> anyhow::Result<bool>;
 }
 
 pub struct ConfigMapSpecStore {
@@ -130,6 +133,15 @@ impl SpecStore for ConfigMapSpecStore {
             Err(kube::Error::Api(e)) if e.code == 404 => Ok(false),
             Err(e) => Err(e.into()),
         }
+    }
+
+    async fn set_primary(&self, name: &str, target: &str) -> anyhow::Result<bool> {
+        let cm_name = spec_cm_name(name);
+        let Some(cm) = self.api.get_opt(&cm_name).await? else {
+            return Ok(false);
+        };
+        let rv = cm.metadata.resource_version.unwrap_or_default();
+        crate::primary_record::cas_set_primary(&self.api, &cm_name, &rv, target).await
     }
 
     async fn primary(&self, name: &str) -> anyhow::Result<Option<String>> {

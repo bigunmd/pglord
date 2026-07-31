@@ -9,6 +9,10 @@ export type { GetCluster$Params as GetCluster$Params } from './fn/clusters/get-c
 export { getCluster as getCluster } from './fn/clusters/get-cluster';
 export type { DeleteCluster$Params as DeleteCluster$Params } from './fn/clusters/delete-cluster';
 export { deleteCluster as deleteCluster } from './fn/clusters/delete-cluster';
+export type { PatchCluster$Params as PatchCluster$Params } from './fn/clusters/patch-cluster';
+export { patchCluster as patchCluster } from './fn/clusters/patch-cluster';
+export type { Switchover$Params as Switchover$Params } from './fn/clusters/switchover';
+export { switchover as switchover } from './fn/clusters/switchover';
 export type { Ping$Params as Ping$Params } from './fn/system/ping';
 export { ping as ping } from './fn/system/ping';
 export type { GetPreflight$Params as GetPreflight$Params } from './fn/system/get-preflight';

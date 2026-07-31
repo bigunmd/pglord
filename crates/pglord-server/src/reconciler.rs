@@ -108,6 +108,59 @@ async fn sync_all(client: &kube::Client, cms: &Api<ConfigMap>, ns: &str) -> anyh
     Ok(())
 }
 
+/// PVC name a StatefulSet gives instance `ordinal` for the `data` template.
+pub fn pvc_name(cluster: &str, ordinal: u8) -> String {
+    format!("data-{cluster}-{ordinal}")
+}
+
+/// Grow every instance's PVC. StatefulSet volumeClaimTemplates are immutable,
+/// so expansion happens on the claims themselves; the StorageClass must allow
+/// expansion or the apiserver rejects the patch (surfaced to the caller).
+pub async fn expand_pvcs(
+    client: &kube::Client,
+    ns: &str,
+    cluster: &str,
+    replicas: u8,
+    storage_size: &str,
+) -> anyhow::Result<()> {
+    use k8s_openapi::api::core::v1::PersistentVolumeClaim;
+    let api: Api<PersistentVolumeClaim> = Api::namespaced(client.clone(), ns);
+    let patch = serde_json::json!({
+        "spec": { "resources": { "requests": { "storage": storage_size } } }
+    });
+    for ordinal in 0..replicas {
+        let name = pvc_name(cluster, ordinal);
+        if api.get_opt(&name).await?.is_none() {
+            continue; // not created yet; the template covers it
+        }
+        api.patch(&name, &PatchParams::default(), &Patch::Merge(&patch))
+            .await?;
+    }
+    Ok(())
+}
+
+/// Delete PVCs left behind by a scale-down (StatefulSets keep them).
+/// Best-effort: the spec change has already been applied, so failures here are
+/// logged rather than surfaced.
+pub async fn delete_orphan_pvcs(
+    client: &kube::Client,
+    ns: &str,
+    cluster: &str,
+    from_ordinal: u8,
+    to_ordinal: u8,
+) {
+    use k8s_openapi::api::core::v1::PersistentVolumeClaim;
+    let api: Api<PersistentVolumeClaim> = Api::namespaced(client.clone(), ns);
+    for ordinal in from_ordinal..to_ordinal {
+        let name = pvc_name(cluster, ordinal);
+        match api.delete(&name, &Default::default()).await {
+            Ok(_) => tracing::info!(pvc = %name, "deleted PVC of removed instance"),
+            Err(kube::Error::Api(e)) if e.code == 404 => {}
+            Err(err) => tracing::warn!(pvc = %name, %err, "failed to delete orphan PVC"),
+        }
+    }
+}
+
 pub fn generate_password() -> String {
     rand::rng()
         .sample_iter(rand::distr::Alphanumeric)
@@ -195,6 +248,13 @@ pub async fn apply_cluster(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pvc_names_match_statefulset_convention() {
+        // <volumeClaimTemplate>-<statefulset>-<ordinal>
+        assert_eq!(pvc_name("demo", 0), "data-demo-0");
+        assert_eq!(pvc_name("orders-db", 2), "data-orders-db-2");
+    }
 
     #[test]
     fn generated_passwords_are_long_alphanumeric_and_unique() {

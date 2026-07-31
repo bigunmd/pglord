@@ -114,6 +114,83 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
+    patch:
+      tags:
+      - clusters
+      summary: 'Change a running cluster: scale instances or grow storage.'
+      operationId: patch_cluster
+      parameters:
+      - name: name
+        in: path
+        description: Cluster name
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SpecChange'
+        required: true
+      responses:
+        '200':
+          description: Updated cluster
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClusterDetail'
+        '404':
+          description: Not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '422':
+          description: Rejected change
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+  /api/v1/clusters/{name}/switchover:
+    post:
+      tags:
+      - clusters
+      summary: Promote a specific standby (planned switchover).
+      operationId: switchover
+      parameters:
+      - name: name
+        in: path
+        description: Cluster name
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SwitchoverRequest'
+        required: true
+      responses:
+        '202':
+          description: Switchover started
+        '404':
+          description: Not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '409':
+          description: Target cannot be promoted
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '422':
+          description: Target is not part of this cluster
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
   /api/v1/ping:
     get:
       tags:
@@ -327,6 +404,31 @@ components:
         type:
           type: string
           description: 'URI reference identifying the problem type: `{PROBLEM_BASE_URL}/{code}`.'
+    SpecChange:
+      type: object
+      description: |-
+        The fields a running cluster may change. Name and image are deliberately
+        absent: renaming would orphan every derived object, and image changes are a
+        rolling-upgrade concern with its own (future) workflow.
+      properties:
+        replicas:
+          type:
+          - integer
+          - 'null'
+          format: int32
+          minimum: 0
+        storage_size:
+          type:
+          - string
+          - 'null'
+    SwitchoverRequest:
+      type: object
+      required:
+      - target
+      properties:
+        target:
+          type: string
+          description: Pod to promote, e.g. "demo-1".
     VersionResponse:
       type: object
       required:

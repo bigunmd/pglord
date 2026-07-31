@@ -39,9 +39,62 @@ pub enum SpecError {
     InvalidReplicas(u8),
     #[error("invalid storage size '{0}': expected e.g. '1Gi', '500Mi'")]
     InvalidStorage(String),
+    #[error("storage cannot shrink: {from} -> {to}")]
+    StorageShrink { from: String, to: String },
+}
+
+/// The fields a running cluster may change. Name and image are deliberately
+/// absent: renaming would orphan every derived object, and image changes are a
+/// rolling-upgrade concern with its own (future) workflow.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SpecChange {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replicas: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage_size: Option<String>,
+}
+
+/// Size in bytes for comparison; None when the quantity is malformed.
+pub fn quantity_bytes(s: &str) -> Option<u64> {
+    let idx = s.find(|c: char| !c.is_ascii_digit())?;
+    let (num, unit) = s.split_at(idx);
+    let value: u64 = num.parse().ok()?;
+    let multiplier: u64 = match unit {
+        "Ki" => 1 << 10,
+        "Mi" => 1 << 20,
+        "Gi" => 1 << 30,
+        "Ti" => 1 << 40,
+        _ => return None,
+    };
+    value.checked_mul(multiplier)
 }
 
 impl ClusterSpec {
+    /// Apply a change to a running cluster's spec, returning the new spec.
+    /// Kubernetes cannot shrink a PVC, so a smaller storage request is
+    /// rejected here rather than failing later against the apiserver.
+    pub fn apply_change(&self, change: &SpecChange) -> Result<ClusterSpec, SpecError> {
+        let mut next = self.clone();
+        if let Some(replicas) = change.replicas {
+            next.replicas = replicas;
+        }
+        if let Some(storage) = &change.storage_size {
+            let to = quantity_bytes(storage)
+                .ok_or_else(|| SpecError::InvalidStorage(storage.clone()))?;
+            let from = quantity_bytes(&self.storage_size)
+                .ok_or_else(|| SpecError::InvalidStorage(self.storage_size.clone()))?;
+            if to < from {
+                return Err(SpecError::StorageShrink {
+                    from: self.storage_size.clone(),
+                    to: storage.clone(),
+                });
+            }
+            next.storage_size = storage.clone();
+        }
+        next.validate()?;
+        Ok(next)
+    }
+
     pub fn validate(&self) -> Result<(), SpecError> {
         if !is_rfc1123_label(&self.name) || self.name.len() > MAX_NAME_LEN {
             return Err(SpecError::InvalidName(self.name.clone()));
@@ -135,6 +188,73 @@ mod tests {
         assert!(matches!(s.validate(), Err(SpecError::InvalidStorage(_))));
         s.storage_size = "1Gi".into();
         assert_eq!(s.validate(), Ok(()));
+    }
+
+    #[test]
+    fn quantity_comparison_is_unit_aware() {
+        assert_eq!(quantity_bytes("1Gi"), quantity_bytes("1024Mi"));
+        assert!(quantity_bytes("2Gi") > quantity_bytes("1500Mi"));
+        assert_eq!(quantity_bytes("1Ki"), Some(1024));
+        for bad in ["1G", "abc", "Gi", "1", ""] {
+            assert_eq!(quantity_bytes(bad), None, "expected None for {bad:?}");
+        }
+    }
+
+    #[test]
+    fn change_scales_replicas_within_bounds() {
+        let s = spec("demo");
+        let up = s
+            .apply_change(&SpecChange {
+                replicas: Some(3),
+                ..Default::default()
+            })
+            .expect("scale up");
+        assert_eq!(up.replicas, 3);
+        assert_eq!(up.storage_size, s.storage_size);
+
+        assert!(matches!(
+            s.apply_change(&SpecChange {
+                replicas: Some(9),
+                ..Default::default()
+            }),
+            Err(SpecError::InvalidReplicas(9))
+        ));
+    }
+
+    #[test]
+    fn storage_may_grow_but_never_shrink() {
+        let s = spec("demo"); // 1Gi
+        let grown = s
+            .apply_change(&SpecChange {
+                storage_size: Some("5Gi".into()),
+                ..Default::default()
+            })
+            .expect("grow");
+        assert_eq!(grown.storage_size, "5Gi");
+
+        // Same size expressed in different units is not a shrink.
+        assert!(
+            s.apply_change(&SpecChange {
+                storage_size: Some("1024Mi".into()),
+                ..Default::default()
+            })
+            .is_ok()
+        );
+
+        assert!(matches!(
+            grown.apply_change(&SpecChange {
+                storage_size: Some("1Gi".into()),
+                ..Default::default()
+            }),
+            Err(SpecError::StorageShrink { .. })
+        ));
+    }
+
+    #[test]
+    fn empty_change_is_a_noop() {
+        let s = spec("demo");
+        let same = s.apply_change(&SpecChange::default()).expect("noop");
+        assert_eq!(same, s);
     }
 
     #[test]

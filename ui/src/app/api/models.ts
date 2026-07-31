@@ -9,4 +9,6 @@ export type { PingResponse } from './models/ping-response';
 export type { PreflightCheck } from './models/preflight-check';
 export type { PreflightReport } from './models/preflight-report';
 export type { ProblemDetails } from './models/problem-details';
+export type { SpecChange } from './models/spec-change';
+export type { SwitchoverRequest } from './models/switchover-request';
 export type { VersionResponse } from './models/version-response';

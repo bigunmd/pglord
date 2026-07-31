@@ -3,8 +3,9 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use k8s_openapi::api::apps::v1::StatefulSet;
 use kube::api::Api;
-use pglord_core::spec::ClusterSpec;
-use serde::Serialize;
+use pglord_core::render::{AGENT_HTTP_PORT, pod_fqdn};
+use pglord_core::spec::{ClusterSpec, SpecChange, SpecError};
+use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::app::ClusterOps;
@@ -187,6 +188,163 @@ pub async fn get_cluster(
         primary,
         instances,
     }))
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct SwitchoverRequest {
+    /// Pod to promote, e.g. "demo-1".
+    pub target: String,
+}
+
+fn spec_error(e: SpecError) -> ApiError {
+    let code = match e {
+        SpecError::StorageShrink { .. } => "storage_shrink",
+        _ => "invalid_spec",
+    };
+    ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, code).with_detail(e.to_string())
+}
+
+/// Change a running cluster: scale instances or grow storage.
+#[utoipa::path(
+    patch,
+    path = "/api/v1/clusters/{name}",
+    tag = "clusters",
+    params(("name" = String, Path, description = "Cluster name")),
+    request_body = SpecChange,
+    responses(
+        (status = 200, description = "Updated cluster", body = ClusterDetail),
+        (status = 404, description = "Not found", body = crate::error::ProblemDetails, content_type = "application/problem+json"),
+        (status = 422, description = "Rejected change", body = crate::error::ProblemDetails, content_type = "application/problem+json"),
+    )
+)]
+pub async fn patch_cluster(
+    State(state): State<Option<ClusterOps>>,
+    Path(name): Path<String>,
+    Json(change): Json<SpecChange>,
+) -> Result<Json<ClusterDetail>, ApiError> {
+    let ops = ops(&state)?;
+    let Some((current, _owner)) = ops.store.get(&name).await.map_err(ApiError::internal)? else {
+        return Err(ApiError::not_found());
+    };
+    let next = current.apply_change(&change).map_err(spec_error)?;
+
+    // Grow volumes before the spec lands so a rejected expansion (StorageClass
+    // without allowVolumeExpansion) leaves the cluster exactly as it was.
+    if next.storage_size != current.storage_size {
+        crate::reconciler::expand_pvcs(
+            &ops.kube,
+            &ops.ns,
+            &next.name,
+            current.replicas,
+            &next.storage_size,
+        )
+        .await
+        .map_err(|e| {
+            ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, "storage_expansion_failed")
+                .with_detail(format!(
+                    "Kubernetes rejected the volume expansion: {e}. The StorageClass must allow volume expansion."
+                ))
+        })?;
+    }
+
+    ops.store.put(&next).await.map_err(ApiError::internal)?;
+
+    if next.replicas < current.replicas {
+        crate::reconciler::delete_orphan_pvcs(
+            &ops.kube,
+            &ops.ns,
+            &next.name,
+            next.replicas,
+            current.replicas,
+        )
+        .await;
+    }
+    tracing::info!(cluster = %next.name, replicas = next.replicas, storage = %next.storage_size, "cluster updated");
+    get_cluster(State(state.clone()), Path(name)).await
+}
+
+/// Promote a specific standby (planned switchover).
+#[utoipa::path(
+    post,
+    path = "/api/v1/clusters/{name}/switchover",
+    tag = "clusters",
+    params(("name" = String, Path, description = "Cluster name")),
+    request_body = SwitchoverRequest,
+    responses(
+        (status = 202, description = "Switchover started"),
+        (status = 404, description = "Not found", body = crate::error::ProblemDetails, content_type = "application/problem+json"),
+        (status = 409, description = "Target cannot be promoted", body = crate::error::ProblemDetails, content_type = "application/problem+json"),
+        (status = 422, description = "Target is not part of this cluster", body = crate::error::ProblemDetails, content_type = "application/problem+json"),
+    )
+)]
+pub async fn switchover(
+    State(state): State<Option<ClusterOps>>,
+    Path(name): Path<String>,
+    Json(req): Json<SwitchoverRequest>,
+) -> Result<StatusCode, ApiError> {
+    let ops = ops(&state)?;
+    let Some((spec, _owner)) = ops.store.get(&name).await.map_err(ApiError::internal)? else {
+        return Err(ApiError::not_found());
+    };
+
+    let valid_pods: Vec<String> = (0..spec.replicas).map(|i| format!("{name}-{i}")).collect();
+    if !valid_pods.contains(&req.target) {
+        return Err(
+            ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, "invalid_target").with_detail(format!(
+                "'{}' is not an instance of this cluster.",
+                req.target
+            )),
+        );
+    }
+
+    let current = ops
+        .store
+        .primary(&name)
+        .await
+        .map_err(ApiError::internal)?
+        .unwrap_or_else(|| format!("{name}-0"));
+    if current == req.target {
+        return Err(ApiError::conflict("already_primary")
+            .with_detail("That instance is already the primary."));
+    }
+
+    // Only a ready standby may be promoted: promoting an instance that is not
+    // streaming would silently lose whatever WAL it never received.
+    let observations =
+        crate::instance_probe::observe_cluster(&ops.http, &spec.name, &ops.ns, spec.replicas).await;
+    let target_ok = observations
+        .iter()
+        .find(|o| o.pod == req.target)
+        .map(|o| o.ready && o.in_recovery == Some(true))
+        .unwrap_or(false);
+    if !target_ok {
+        return Err(ApiError::conflict("target_not_ready").with_detail(
+            "The target instance is not a ready standby; wait for it to catch up and retry.",
+        ));
+    }
+
+    if !ops
+        .store
+        .set_primary(&name, &req.target)
+        .await
+        .map_err(ApiError::internal)?
+    {
+        return Err(ApiError::conflict("record_changed")
+            .with_detail("The primary record changed concurrently; retry."));
+    }
+    tracing::warn!(cluster = %name, from = %current, to = %req.target, "SWITCHOVER: primary record updated");
+
+    // The target also self-promotes by following the record; this just makes it
+    // immediate.
+    let url = format!(
+        "http://{}:{}/promote",
+        pod_fqdn(&req.target, &spec.name, &ops.ns),
+        AGENT_HTTP_PORT
+    );
+    if let Err(err) = ops.http.post(&url).send().await {
+        tracing::debug!(%err, "promote POST failed (agent will self-promote)");
+    }
+    Ok(StatusCode::ACCEPTED)
 }
 
 /// Delete a cluster (children are garbage-collected via ownerReferences).

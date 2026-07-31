@@ -63,6 +63,38 @@ async fn version_reports_workspace_version() {
 }
 
 #[tokio::test]
+async fn day2_operations_without_kube_answer_503_problem() {
+    for (method, path, body) in [
+        ("PATCH", "/api/v1/clusters/demo", r#"{"replicas":3}"#),
+        (
+            "POST",
+            "/api/v1/clusters/demo/switchover",
+            r#"{"target":"demo-1"}"#,
+        ),
+    ] {
+        let resp = test_app()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(
+            resp.status(),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "{method} {path}"
+        );
+        let body = resp.into_body().collect().await.expect("body").to_bytes();
+        let v: serde_json::Value = serde_json::from_slice(&body).expect("json");
+        assert_eq!(v["code"], "kube_unavailable");
+    }
+}
+
+#[tokio::test]
 async fn unknown_api_path_is_problem_json_404() {
     let resp = test_app()
         .oneshot(
