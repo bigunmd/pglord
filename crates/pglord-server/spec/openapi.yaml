@@ -1,0 +1,55 @@
+openapi: 3.1.0
+info:
+  title: pglord API
+  description: Control plane for HA PostgreSQL clusters on Kubernetes.
+  contact:
+    name: Mikhail Bigun
+    email: mikebigun@gmail.com
+  license:
+    name: AGPL-3.0-or-later
+    identifier: AGPL-3.0-or-later
+  version: 0.1.0
+paths:
+  /api/v1/ping:
+    get:
+      tags:
+      - system
+      summary: |-
+        Unauthenticated liveness of the API surface (distinct from /healthz: this
+        one is part of the versioned contract and appears in the OpenAPI spec).
+      operationId: ping
+      responses:
+        '200':
+          description: Service reachable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PingResponse'
+  /api/v1/version:
+    get:
+      tags:
+      - system
+      operationId: version
+      responses:
+        '200':
+          description: Server version
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VersionResponse'
+components:
+  schemas:
+    PingResponse:
+      type: object
+      required:
+      - message
+      properties:
+        message:
+          type: string
+    VersionResponse:
+      type: object
+      required:
+      - version
+      properties:
+        version:
+          type: string
