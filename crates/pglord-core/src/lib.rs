@@ -3,6 +3,7 @@
 pub mod guc;
 pub mod render;
 pub mod spec;
+pub mod workload;
 
 /// Version of the pglord workspace, surfaced by the `/api/v1/version` endpoint.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

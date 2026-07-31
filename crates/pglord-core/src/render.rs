@@ -7,10 +7,11 @@ use k8s_openapi::api::apps::v1::{
     StatefulSet, StatefulSetPersistentVolumeClaimRetentionPolicy, StatefulSetSpec,
 };
 use k8s_openapi::api::core::v1::{
-    Container, ContainerPort, EnvVar, EnvVarSource, HTTPGetAction, ObjectFieldSelector,
-    PersistentVolumeClaim, PersistentVolumeClaimSpec, PodSpec, PodTemplateSpec, Probe,
-    SecretKeySelector, Service, ServiceAccount, ServicePort, ServiceSpec, VolumeMount,
-    VolumeResourceRequirements,
+    Affinity, Container, ContainerPort, EnvVar, EnvVarSource, HTTPGetAction, LocalObjectReference,
+    ObjectFieldSelector, PersistentVolumeClaim, PersistentVolumeClaimSpec, PodAffinityTerm,
+    PodAntiAffinity, PodSpec, PodTemplateSpec, Probe, ResourceRequirements, SecretKeySelector,
+    Service, ServiceAccount, ServicePort, ServiceSpec, Toleration as K8sToleration, VolumeMount,
+    VolumeResourceRequirements, WeightedPodAffinityTerm,
 };
 use k8s_openapi::api::rbac::v1::{PolicyRule, Role, RoleBinding, RoleRef, Subject};
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
@@ -18,6 +19,94 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta, 
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
 
 use crate::spec::ClusterSpec;
+use crate::workload::{AntiAffinity, Resources, WorkloadSpec};
+
+/// Spread instances across nodes. Preferred by default so a single-node
+/// cluster still schedules; required when the user asks for a hard guarantee.
+fn anti_affinity(spec: &ClusterSpec) -> Option<Affinity> {
+    let term = PodAffinityTerm {
+        label_selector: Some(LabelSelector {
+            match_labels: Some(BTreeMap::from([(
+                "app.kubernetes.io/instance".to_string(),
+                spec.name.clone(),
+            )])),
+            ..Default::default()
+        }),
+        topology_key: "kubernetes.io/hostname".to_string(),
+        ..Default::default()
+    };
+    let pod_anti_affinity = match spec.workload.anti_affinity {
+        AntiAffinity::Disabled => return None,
+        AntiAffinity::Required => PodAntiAffinity {
+            required_during_scheduling_ignored_during_execution: Some(vec![term]),
+            ..Default::default()
+        },
+        AntiAffinity::Preferred => PodAntiAffinity {
+            preferred_during_scheduling_ignored_during_execution: Some(vec![
+                WeightedPodAffinityTerm {
+                    weight: 100,
+                    pod_affinity_term: term,
+                },
+            ]),
+            ..Default::default()
+        },
+    };
+    Some(Affinity {
+        pod_anti_affinity: Some(pod_anti_affinity),
+        ..Default::default()
+    })
+}
+
+fn resource_requirements(r: &Resources) -> Option<ResourceRequirements> {
+    if r.is_empty() {
+        return None;
+    }
+    let mut requests = BTreeMap::new();
+    let mut limits = BTreeMap::new();
+    if let Some(v) = &r.cpu_request {
+        requests.insert("cpu".to_string(), Quantity(v.clone()));
+    }
+    if let Some(v) = &r.memory_request {
+        requests.insert("memory".to_string(), Quantity(v.clone()));
+    }
+    if let Some(v) = &r.cpu_limit {
+        limits.insert("cpu".to_string(), Quantity(v.clone()));
+    }
+    if let Some(v) = &r.memory_limit {
+        limits.insert("memory".to_string(), Quantity(v.clone()));
+    }
+    Some(ResourceRequirements {
+        requests: (!requests.is_empty()).then_some(requests),
+        limits: (!limits.is_empty()).then_some(limits),
+        ..Default::default()
+    })
+}
+
+/// User labels first, managed labels last: a user label can decorate a pod but
+/// never shadow the labels the selector and services match on.
+fn pod_labels(spec: &ClusterSpec) -> BTreeMap<String, String> {
+    let mut merged = spec.workload.labels.clone();
+    merged.extend(labels(&spec.name));
+    merged
+}
+
+fn tolerations(w: &WorkloadSpec) -> Option<Vec<K8sToleration>> {
+    if w.tolerations.is_empty() {
+        return None;
+    }
+    Some(
+        w.tolerations
+            .iter()
+            .map(|t| K8sToleration {
+                key: Some(t.key.clone()),
+                operator: t.operator.clone(),
+                value: t.value.clone(),
+                effect: t.effect.clone(),
+                ..Default::default()
+            })
+            .collect(),
+    )
+}
 
 /// Identity of the spec ConfigMap that owns every rendered object; Kubernetes
 /// garbage-collects the children when it is deleted.
@@ -210,6 +299,7 @@ pub fn render_statefulset(spec: &ClusterSpec, ns: &str, owner: &OwnerRef) -> Sta
         ]),
         readiness_probe: Some(http_probe("/readyz")),
         liveness_probe: Some(http_probe("/healthz")),
+        resources: resource_requirements(&spec.workload.resources),
         volume_mounts: Some(vec![VolumeMount {
             name: "data".to_string(),
             mount_path: "/var/lib/postgresql/data".to_string(),
@@ -237,12 +327,26 @@ pub fn render_statefulset(spec: &ClusterSpec, ns: &str, owner: &OwnerRef) -> Sta
             },
             template: PodTemplateSpec {
                 metadata: Some(ObjectMeta {
-                    labels: Some(labels(&spec.name)),
+                    labels: Some(pod_labels(spec)),
+                    annotations: (!spec.workload.annotations.is_empty())
+                        .then(|| spec.workload.annotations.clone()),
                     ..Default::default()
                 }),
                 spec: Some(PodSpec {
                     service_account_name: Some(instance_sa_name(&spec.name)),
                     containers: vec![container],
+                    affinity: anti_affinity(spec),
+                    node_selector: (!spec.workload.node_selector.is_empty())
+                        .then(|| spec.workload.node_selector.clone()),
+                    tolerations: tolerations(&spec.workload),
+                    priority_class_name: spec.workload.priority_class_name.clone(),
+                    image_pull_secrets: (!spec.workload.image_pull_secrets.is_empty()).then(|| {
+                        spec.workload
+                            .image_pull_secrets
+                            .iter()
+                            .map(|name| LocalObjectReference { name: name.clone() })
+                            .collect()
+                    }),
                     ..Default::default()
                 }),
             },
@@ -253,6 +357,7 @@ pub fn render_statefulset(spec: &ClusterSpec, ns: &str, owner: &OwnerRef) -> Sta
                 },
                 spec: Some(PersistentVolumeClaimSpec {
                     access_modes: Some(vec!["ReadWriteOnce".to_string()]),
+                    storage_class_name: spec.workload.storage_class.clone(),
                     resources: Some(VolumeResourceRequirements {
                         requests: Some(BTreeMap::from([(
                             "storage".to_string(),
@@ -368,6 +473,161 @@ mod tests {
             .expect("requests")
             .clone();
         assert_eq!(req["storage"].0, "1Gi");
+    }
+
+    #[test]
+    fn instances_spread_across_nodes_by_default() {
+        let (spec, owner) = demo();
+        let pod = render_statefulset(&spec, "ns", &owner)
+            .spec
+            .expect("spec")
+            .template
+            .spec
+            .expect("pod");
+        let anti = pod
+            .affinity
+            .expect("affinity")
+            .pod_anti_affinity
+            .expect("anti-affinity");
+        let preferred = anti
+            .preferred_during_scheduling_ignored_during_execution
+            .expect("preferred rule");
+        assert_eq!(
+            preferred[0].pod_affinity_term.topology_key,
+            "kubernetes.io/hostname"
+        );
+        // Soft by default: a one-node cluster must still schedule.
+        assert!(
+            anti.required_during_scheduling_ignored_during_execution
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn anti_affinity_can_be_required_or_disabled() {
+        let (mut spec, owner) = demo();
+        spec.workload.anti_affinity = crate::workload::AntiAffinity::Required;
+        let anti = render_statefulset(&spec, "ns", &owner)
+            .spec
+            .expect("spec")
+            .template
+            .spec
+            .expect("pod")
+            .affinity
+            .expect("affinity")
+            .pod_anti_affinity
+            .expect("anti-affinity");
+        assert!(
+            anti.required_during_scheduling_ignored_during_execution
+                .is_some()
+        );
+        assert!(
+            anti.preferred_during_scheduling_ignored_during_execution
+                .is_none()
+        );
+
+        spec.workload.anti_affinity = crate::workload::AntiAffinity::Disabled;
+        assert!(
+            render_statefulset(&spec, "ns", &owner)
+                .spec
+                .expect("spec")
+                .template
+                .spec
+                .expect("pod")
+                .affinity
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn user_labels_decorate_but_never_shadow_managed_ones() {
+        let (mut spec, owner) = demo();
+        spec.workload.labels = BTreeMap::from([
+            ("team".to_string(), "payments".to_string()),
+            // A deliberate collision attempt: managed labels must win.
+            (
+                "app.kubernetes.io/instance".to_string(),
+                "hijacked".to_string(),
+            ),
+        ]);
+        spec.workload.annotations =
+            BTreeMap::from([("prometheus.io/scrape".to_string(), "true".to_string())]);
+        let sts = render_statefulset(&spec, "ns", &owner).spec.expect("spec");
+        let meta = sts.template.metadata.expect("pod metadata");
+        let pod_labels = meta.labels.expect("labels");
+        assert_eq!(pod_labels["team"], "payments");
+        assert_eq!(pod_labels["app.kubernetes.io/instance"], "demo");
+        assert_eq!(
+            meta.annotations.expect("annotations")["prometheus.io/scrape"],
+            "true"
+        );
+        // The selector is immutable in Kubernetes and must stay exactly ours.
+        let selector = sts.selector.match_labels.expect("selector");
+        assert_eq!(selector, labels("demo"));
+    }
+
+    #[test]
+    fn resources_scheduling_and_storage_class_are_applied() {
+        let (mut spec, owner) = demo();
+        spec.workload.resources = crate::workload::Resources {
+            cpu_request: Some("100m".into()),
+            memory_request: Some("256Mi".into()),
+            memory_limit: Some("1Gi".into()),
+            cpu_limit: None,
+        };
+        spec.workload.storage_class = Some("fast-ssd".into());
+        spec.workload.node_selector = BTreeMap::from([("disk".into(), "nvme".into())]);
+        spec.workload.priority_class_name = Some("database".into());
+        spec.workload.image_pull_secrets = vec!["regcred".into()];
+        spec.workload.tolerations = vec![crate::workload::Toleration {
+            key: "dedicated".into(),
+            operator: Some("Equal".into()),
+            value: Some("database".into()),
+            effect: Some("NoSchedule".into()),
+        }];
+
+        let sts = render_statefulset(&spec, "ns", &owner).spec.expect("spec");
+        let pod = sts.template.spec.expect("pod");
+        let res = pod.containers[0].resources.as_ref().expect("resources");
+        assert_eq!(res.requests.as_ref().expect("requests")["cpu"].0, "100m");
+        assert_eq!(
+            res.requests.as_ref().expect("requests")["memory"].0,
+            "256Mi"
+        );
+        assert_eq!(res.limits.as_ref().expect("limits")["memory"].0, "1Gi");
+        assert!(!res.limits.as_ref().expect("limits").contains_key("cpu"));
+
+        assert_eq!(pod.node_selector.expect("node selector")["disk"], "nvme");
+        assert_eq!(pod.priority_class_name.as_deref(), Some("database"));
+        assert_eq!(
+            pod.image_pull_secrets.expect("pull secrets")[0].name,
+            "regcred"
+        );
+        let tol = pod.tolerations.expect("tolerations");
+        assert_eq!(tol[0].key.as_deref(), Some("dedicated"));
+        assert_eq!(tol[0].effect.as_deref(), Some("NoSchedule"));
+
+        let pvc = &sts.volume_claim_templates.expect("pvc")[0];
+        assert_eq!(
+            pvc.spec
+                .as_ref()
+                .expect("pvc spec")
+                .storage_class_name
+                .as_deref(),
+            Some("fast-ssd")
+        );
+    }
+
+    #[test]
+    fn no_resources_declared_means_no_resources_block() {
+        let (spec, owner) = demo();
+        let pod = render_statefulset(&spec, "ns", &owner)
+            .spec
+            .expect("spec")
+            .template
+            .spec
+            .expect("pod");
+        assert!(pod.containers[0].resources.is_none());
     }
 
     #[test]

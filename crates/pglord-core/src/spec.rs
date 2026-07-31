@@ -27,6 +27,9 @@ pub struct ClusterSpec {
     /// GUC catalog are accepted; pglord-managed settings are rejected.
     #[serde(default)]
     pub parameters: BTreeMap<String, String>,
+    /// Scheduling, resources and Kubernetes metadata for the instances.
+    #[serde(default)]
+    pub workload: crate::workload::WorkloadSpec,
 }
 
 fn default_image() -> String {
@@ -55,6 +58,8 @@ pub enum SpecError {
     ReservedParameter(String),
     #[error("invalid value for '{name}': {reason}")]
     InvalidParameterValue { name: String, reason: String },
+    #[error("{0}")]
+    InvalidWorkload(#[from] crate::workload::WorkloadError),
 }
 
 /// The fields a running cluster may change. Name and image are deliberately
@@ -70,6 +75,10 @@ pub struct SpecChange {
     /// removed, which is how the UI clears a setting back to its default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parameters: Option<BTreeMap<String, String>>,
+    /// Full replacement of the workload block. StorageClass must match the
+    /// current one (volume claim templates are immutable).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workload: Option<crate::workload::WorkloadSpec>,
 }
 
 /// Size in bytes for comparison; None when the quantity is malformed.
@@ -112,6 +121,10 @@ impl ClusterSpec {
         if let Some(parameters) = &change.parameters {
             next.parameters = parameters.clone();
         }
+        if let Some(workload) = &change.workload {
+            crate::workload::check_storage_class_change(&self.workload, workload)?;
+            next.workload = workload.clone();
+        }
         next.validate()?;
         Ok(next)
     }
@@ -138,6 +151,7 @@ impl ClusterSpec {
                 reason,
             })?;
         }
+        crate::workload::validate(&self.workload)?;
         Ok(())
     }
 }
