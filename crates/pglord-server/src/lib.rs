@@ -2,3 +2,4 @@
 //! share the exact same composition seam.
 
 pub mod config;
+pub mod error;

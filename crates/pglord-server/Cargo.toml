@@ -15,6 +15,12 @@ axum = "0.8"
 figment = { version = "0.10.19", features = ["toml", "env"] }
 pglord-core = { path = "../pglord-core" }
 serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+tokio = { version = "1.53.1", features = ["full"] }
+tracing = "0.1.44"
+utoipa = { version = "5", features = ["axum_extras", "yaml"] }
 
 [dev-dependencies]
 figment = { version = "0.10.19", features = ["test"] }
+http-body-util = "0.1.4"
+tower = { version = "0.5", features = ["util"] }
