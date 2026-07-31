@@ -2,4 +2,5 @@
 
 pub mod clusters;
 pub mod ping;
+pub mod preflight;
 pub mod version;

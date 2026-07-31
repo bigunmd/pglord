@@ -111,6 +111,46 @@ mod tests {
     }
 
     #[test]
+    fn name_length_boundaries() {
+        // 40 chars is the documented maximum (leaves room for -pods/-rw and
+        // pod ordinals within the 63-char label limit).
+        let mut s = spec(&"a".repeat(40));
+        assert_eq!(s.validate(), Ok(()));
+        s.name = "a".repeat(41);
+        assert!(matches!(s.validate(), Err(SpecError::InvalidName(_))));
+        s.name = "a".into();
+        assert_eq!(s.validate(), Ok(()));
+        s.name = "1".into();
+        assert_eq!(s.validate(), Ok(()));
+        s.name = "orders-db-2".into();
+        assert_eq!(s.validate(), Ok(()));
+    }
+
+    #[test]
+    fn storage_units_are_case_sensitive() {
+        let mut s = spec("demo");
+        s.storage_size = "1gi".into();
+        assert!(matches!(s.validate(), Err(SpecError::InvalidStorage(_))));
+        s.storage_size = "1GI".into();
+        assert!(matches!(s.validate(), Err(SpecError::InvalidStorage(_))));
+        s.storage_size = "1Gi".into();
+        assert_eq!(s.validate(), Ok(()));
+    }
+
+    #[test]
+    fn unknown_fields_are_tolerated_for_forward_compatibility() {
+        // A spec written by a newer pglord must still parse here, otherwise a
+        // rollback would strand every existing cluster.
+        let s: ClusterSpec = serde_json::from_value(serde_json::json!({
+            "name": "demo",
+            "someFutureField": {"a": 1}
+        }))
+        .expect("deserialize with unknown field");
+        assert_eq!(s.name, "demo");
+        assert_eq!(s.validate(), Ok(()));
+    }
+
+    #[test]
     fn storage_quantities_validated() {
         for good in ["1Gi", "500Mi", "10Ti", "512Ki"] {
             let mut s = spec("demo");

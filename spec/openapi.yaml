@@ -129,6 +129,27 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PingResponse'
+  /api/v1/preflight:
+    get:
+      tags:
+      - system
+      summary: |-
+        Report which cluster permissions pglord actually has, straight from the
+        apiserver's own authorization decisions.
+      operationId: get_preflight
+      responses:
+        '200':
+          description: Permission report
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PreflightReport'
+        '503':
+          description: No Kubernetes environment
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
   /api/v1/version:
     get:
       tags:
@@ -240,6 +261,47 @@ components:
       properties:
         message:
           type: string
+    PreflightCheck:
+      type: object
+      required:
+      - resource
+      - verb
+      properties:
+        allowed:
+          type:
+          - boolean
+          - 'null'
+          description: null when the check itself could not be performed.
+        reason:
+          type:
+          - string
+          - 'null'
+        resource:
+          type: string
+          description: Resource name, group-qualified when not core (e.g. "statefulsets.apps").
+        verb:
+          type: string
+    PreflightReport:
+      type: object
+      required:
+      - namespace
+      - ok
+      - missing
+      - checks
+      properties:
+        checks:
+          type: array
+          items:
+            $ref: '#/components/schemas/PreflightCheck'
+        missing:
+          type: integer
+          format: int32
+          description: Permissions denied or unverifiable.
+        namespace:
+          type: string
+        ok:
+          type: boolean
+          description: True only when every required permission is granted.
     ProblemDetails:
       type: object
       required:

@@ -78,4 +78,39 @@ mod tests {
         assert_eq!(parse_lsn("garbage"), None);
         assert_eq!(parse_lsn("1-2"), None);
     }
+
+    #[test]
+    fn lsn_parsing_handles_edge_inputs() {
+        assert_eq!(parse_lsn("0/0"), Some(0));
+        // Postgres prints uppercase hex; accept either so a future format
+        // change cannot silently make every candidate ineligible.
+        assert_eq!(parse_lsn("a/ff"), parse_lsn("A/FF"));
+        // A high segment must dominate the offset when ordering candidates.
+        assert!(parse_lsn("2/0").expect("lsn") > parse_lsn("1/FFFFFFFF").expect("lsn"));
+        for bad in [
+            "", "/", "0/", "/0", "0//0", "0/1/2", "0x1/0", " 0/1", "zz/1",
+        ] {
+            assert_eq!(parse_lsn(bad), None, "expected None for {bad:?}");
+        }
+    }
+
+    #[test]
+    fn recorded_primary_ignores_unrelated_annotations() {
+        let mut cm = ConfigMap::default();
+        cm.metadata.annotations = Some(
+            [
+                ("other.io/thing".to_string(), "demo-9".to_string()),
+                (
+                    "kubectl.kubernetes.io/last-applied-configuration".to_string(),
+                    "{}".to_string(),
+                ),
+            ]
+            .into(),
+        );
+        assert_eq!(recorded_primary(&cm, "demo"), "demo-0");
+
+        // Empty annotation map behaves like no annotations at all.
+        cm.metadata.annotations = Some(Default::default());
+        assert_eq!(recorded_primary(&cm, "demo"), "demo-0");
+    }
 }

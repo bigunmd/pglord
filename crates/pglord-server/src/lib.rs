@@ -9,6 +9,7 @@ pub mod health;
 pub mod instance_probe;
 pub mod kube_client;
 pub mod orchestrator;
+pub mod preflight;
 pub mod primary_record;
 pub mod reconciler;
 pub mod spec_store;

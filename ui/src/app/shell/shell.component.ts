@@ -45,6 +45,13 @@ import { ThemeMode, ThemeService } from '../core/theme/theme.service';
           >
             {{ 'nav.clusters' | transloco }}
           </a>
+          <a
+            routerLink="/preflight"
+            routerLinkActive="text-foreground font-medium"
+            class="text-muted-foreground hover:text-foreground rounded-md px-3 py-1.5 transition-colors"
+          >
+            {{ 'nav.permissions' | transloco }}
+          </a>
         </nav>
         <div class="ml-auto">
           <button hlmBtn variant="ghost" size="icon" [hlmDropdownMenuTrigger]="themeMenu">

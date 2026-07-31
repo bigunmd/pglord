@@ -38,6 +38,31 @@ async fn main() -> anyhow::Result<()> {
             tokio::spawn(kube_client::health_loop(client.clone(), readiness.clone()));
             tokio::spawn(reconciler::run(client.clone(), ns.clone()));
             tokio::spawn(pglord_server::orchestrator::run(client.clone(), ns.clone()));
+
+            // One-shot permission report at startup; the full detail is served
+            // at /api/v1/preflight and shown in the UI.
+            let preflight_client = client.clone();
+            let preflight_ns = ns.clone();
+            tokio::spawn(async move {
+                let results = pglord_server::preflight::run(&preflight_client, &preflight_ns).await;
+                let (ok, missing) = pglord_server::preflight::summarize(&results);
+                let total = results.len();
+                if ok {
+                    tracing::info!(total, "preflight: all cluster permissions granted");
+                } else {
+                    let denied: Vec<String> = results
+                        .iter()
+                        .filter(|r| r.allowed != Some(true))
+                        .map(|r| format!("{} {}", r.verb, r.resource))
+                        .collect();
+                    tracing::warn!(
+                        missing,
+                        total,
+                        denied = %denied.join(", "),
+                        "preflight: missing cluster permissions; see /api/v1/preflight"
+                    );
+                }
+            });
             Some(ClusterOps {
                 store: std::sync::Arc::new(ConfigMapSpecStore::new(client.clone(), &ns)),
                 kube: client,

@@ -69,7 +69,8 @@ pub fn build(
         .routes(routes!(
             crate::api::clusters::get_cluster,
             crate::api::clusters::delete_cluster
-        ));
+        ))
+        .routes(routes!(crate::api::preflight::get_preflight));
 
     let (api_router, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
         .merge(api)

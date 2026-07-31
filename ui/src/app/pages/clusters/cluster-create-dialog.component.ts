@@ -43,11 +43,14 @@ const REPLICA_CHOICES = [1, 2, 3, 4, 5] as const;
           placeholder="orders-db"
           autocomplete="off"
         />
-        <!-- Fixed-height slot so the error appearing never resizes the dialog. -->
-        <p class="min-h-4 text-xs" [class.text-destructive]="name() && !nameValid()">
-          @if (name() && !nameValid()) {
-            {{ 'clusters.nameInvalid' | transloco }}
-          }
+        <!-- Persistent helper text: the same string is always rendered and only
+             recolored on error, so nothing reflows regardless of wrapping. -->
+        <p
+          class="text-xs"
+          [class.text-muted-foreground]="!name() || nameValid()"
+          [class.text-destructive]="name() && !nameValid()"
+        >
+          {{ 'clusters.nameHelp' | transloco }}
         </p>
       </div>
       <div class="grid gap-1.5">
@@ -79,10 +82,12 @@ const REPLICA_CHOICES = [1, 2, 3, 4, 5] as const;
           (ngModelChange)="storage.set($event)"
           placeholder="1Gi"
         />
-        <p class="min-h-4 text-xs" [class.text-destructive]="storage() && !storageValid()">
-          @if (storage() && !storageValid()) {
-            {{ 'clusters.storageInvalid' | transloco }}
-          }
+        <p
+          class="text-xs"
+          [class.text-muted-foreground]="!storage() || storageValid()"
+          [class.text-destructive]="storage() && !storageValid()"
+        >
+          {{ 'clusters.storageHelp' | transloco }}
         </p>
       </div>
       <div class="grid gap-1.5">

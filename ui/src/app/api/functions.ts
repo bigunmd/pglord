@@ -11,5 +11,7 @@ export type { DeleteCluster$Params as DeleteCluster$Params } from './fn/clusters
 export { deleteCluster as deleteCluster } from './fn/clusters/delete-cluster';
 export type { Ping$Params as Ping$Params } from './fn/system/ping';
 export { ping as ping } from './fn/system/ping';
+export type { GetPreflight$Params as GetPreflight$Params } from './fn/system/get-preflight';
+export { getPreflight as getPreflight } from './fn/system/get-preflight';
 export type { Version$Params as Version$Params } from './fn/system/version';
 export { version as version } from './fn/system/version';

@@ -57,6 +57,23 @@ mod tests {
     }
 
     #[test]
+    fn multi_hyphen_names_and_large_ordinals() {
+        assert_eq!(
+            resolve_role(Role::Auto, "orders-db-prod-0").expect("resolve"),
+            Role::Primary
+        );
+        assert_eq!(
+            resolve_role(Role::Auto, "orders-db-prod-12").expect("resolve"),
+            Role::Standby
+        );
+        // Leading zeros still parse as their numeric value.
+        assert_eq!(
+            resolve_role(Role::Auto, "demo-00").expect("resolve"),
+            Role::Primary
+        );
+    }
+
+    #[test]
     fn non_ordinal_hostnames_rejected() {
         assert!(resolve_role(Role::Auto, "foo").is_err());
         assert!(resolve_role(Role::Auto, "foo-").is_err());

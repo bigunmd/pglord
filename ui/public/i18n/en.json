@@ -5,7 +5,20 @@
   },
   "nav": {
     "home": "Home",
-    "clusters": "Clusters"
+    "clusters": "Clusters",
+    "permissions": "Permissions"
+  },
+  "preflight": {
+    "title": "Cluster permissions",
+    "intro": "What pglord is allowed to do in its namespace, as reported by the Kubernetes API server.",
+    "allGranted": "All required permissions are granted in namespace {{namespace}}.",
+    "missing": "{{count}} required permissions are missing in namespace {{namespace}}. Cluster management will fail until they are granted.",
+    "resource": "Resource",
+    "verb": "Action",
+    "state": "State",
+    "granted": "Granted",
+    "denied": "Denied",
+    "unknown": "Unknown"
   },
   "theme": {
     "label": "Theme",
@@ -29,11 +42,11 @@
     "create": "Create cluster",
     "createTitle": "Create cluster",
     "name": "Name",
-    "nameInvalid": "Use lowercase letters, digits and hyphens (max 40 chars).",
+    "nameHelp": "Lowercase letters, digits and hyphens. Max 40 characters.",
     "replicas": "Instances",
     "replicasHint": "1 primary plus streaming standbys.",
     "storage": "Storage per instance",
-    "storageInvalid": "Use a size like 1Gi or 500Mi.",
+    "storageHelp": "Size with unit, for example 1Gi or 500Mi.",
     "image": "Image",
     "instances": "Instances",
     "readyOf": "{{ready}} of {{total}} instances ready",

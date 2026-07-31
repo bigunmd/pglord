@@ -246,6 +246,45 @@ mod tests {
         assert!(hba.contains("INSECURE"));
     }
 
+    fn cfg_with(repl_password: &str) -> Config {
+        let mut cfg: Config =
+            serde_json::from_value(serde_json::json!({ "role": "primary" })).expect("config");
+        cfg.primary_host = "demo-1.demo-pods.ns.svc.cluster.local".into();
+        cfg.superuser_password = "supersecret".into();
+        cfg.repl_password = repl_password.into();
+        cfg
+    }
+
+    #[test]
+    fn conninfo_streams_as_replication_role_when_configured() {
+        // The rejoin path depends on this: a rewound ex-primary must stream
+        // with the replication role, matching the scram pg_hba rule.
+        let conninfo = primary_conninfo(&cfg_with("replsecret"), "demo-0");
+        assert!(conninfo.contains("user=replicator"));
+        assert!(conninfo.contains("password=replsecret"));
+        assert!(conninfo.contains("host=demo-1.demo-pods.ns.svc.cluster.local"));
+        assert!(conninfo.contains("application_name=demo-0"));
+        assert!(conninfo.starts_with("primary_conninfo = '"));
+    }
+
+    #[test]
+    fn conninfo_falls_back_to_superuser_without_replication_password() {
+        let conninfo = primary_conninfo(&cfg_with(""), "demo-0");
+        assert!(conninfo.contains("user=postgres"));
+        assert!(conninfo.contains("password=supersecret"));
+    }
+
+    #[test]
+    fn standby_signal_detection() {
+        let dir = std::env::temp_dir().join("pglord-agent-test-signal");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        assert!(!has_standby_signal(&dir));
+        std::fs::write(dir.join("standby.signal"), "").expect("write");
+        assert!(has_standby_signal(&dir));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn bootstrapped_detection_uses_pg_version() {
         let dir = std::env::temp_dir().join("pglord-agent-test-pgdata");

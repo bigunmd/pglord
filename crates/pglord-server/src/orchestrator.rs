@@ -137,6 +137,52 @@ mod tests {
     }
 
     #[test]
+    fn single_candidate_wins() {
+        let obs = vec![
+            ("demo-0".into(), false, None, None),
+            ("demo-1".into(), true, Some(true), Some("0/1".into())),
+        ];
+        assert_eq!(elect_candidate(&obs).as_deref(), Some("demo-1"));
+    }
+
+    #[test]
+    fn candidate_without_lsn_is_not_eligible() {
+        // A standby that cannot report its position must never be promoted:
+        // we would have no idea how much WAL it is missing.
+        let obs = vec![
+            ("demo-1".into(), true, Some(true), None),
+            ("demo-2".into(), true, Some(true), Some("0/2".into())),
+        ];
+        assert_eq!(elect_candidate(&obs).as_deref(), Some("demo-2"));
+
+        let none_reporting = vec![("demo-1".into(), true, Some(true), None)];
+        assert_eq!(elect_candidate(&none_reporting), None);
+    }
+
+    #[test]
+    fn equal_lsns_pick_deterministically() {
+        let obs = vec![
+            ("demo-1".into(), true, Some(true), Some("0/5000000".into())),
+            ("demo-2".into(), true, Some(true), Some("0/5000000".into())),
+        ];
+        // max_by_key keeps the last maximum; the rule just has to be stable so
+        // two orchestrator passes over the same data agree.
+        let first = elect_candidate(&obs);
+        assert_eq!(first, elect_candidate(&obs));
+        assert!(first.is_some());
+    }
+
+    #[test]
+    fn empty_or_all_unready_yields_no_candidate() {
+        assert_eq!(elect_candidate(&[]), None);
+        let all_down = vec![
+            ("demo-0".into(), false, None, None),
+            ("demo-1".into(), false, None, None),
+        ];
+        assert_eq!(elect_candidate(&all_down), None);
+    }
+
+    #[test]
     fn ignores_unready_and_non_recovering_pods() {
         let obs = vec![
             ("demo-1".into(), false, Some(true), Some("0/9000000".into())), // unready

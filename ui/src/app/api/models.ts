@@ -6,5 +6,7 @@ export type { ClusterSpec } from './models/cluster-spec';
 export type { ClusterSummary } from './models/cluster-summary';
 export type { InstanceDto } from './models/instance-dto';
 export type { PingResponse } from './models/ping-response';
+export type { PreflightCheck } from './models/preflight-check';
+export type { PreflightReport } from './models/preflight-report';
 export type { ProblemDetails } from './models/problem-details';
 export type { VersionResponse } from './models/version-response';

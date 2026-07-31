@@ -17,6 +17,11 @@ export const routes: Routes = [
           import('./pages/clusters/clusters.component').then((m) => m.ClustersComponent),
       },
       {
+        path: 'preflight',
+        loadComponent: () =>
+          import('./pages/preflight/preflight.component').then((m) => m.PreflightComponent),
+      },
+      {
         path: 'clusters/:name',
         loadComponent: () =>
           import('./pages/clusters/cluster-detail.component').then(
