@@ -54,6 +54,19 @@ impl RecordReader {
                 .unwrap_or_else(|| format!("{}-0", self.cluster)),
         )
     }
+
+    /// The user parameters from the spec, already rendered as a
+    /// postgresql.conf fragment.
+    pub async fn rendered_parameters(&self) -> Option<String> {
+        let cm = self
+            .api
+            .get_opt(&format!("{}-spec", self.cluster))
+            .await
+            .ok()??;
+        let raw = cm.data.as_ref()?.get("spec")?;
+        let spec: pglord_core::spec::ClusterSpec = serde_json::from_str(raw).ok()?;
+        Some(pglord_core::guc::render_parameters(&spec.parameters))
+    }
 }
 
 /// Decide the bootstrap role from the record (pure; unit-tested).
@@ -92,6 +105,7 @@ pub async fn follow(reader: RecordReader, cfg: std::sync::Arc<Config>, me: Strin
         if !st.ready {
             continue;
         }
+        apply_parameters(&reader, &cfg).await;
         let i_am_recorded = recorded == me;
         match st.in_recovery {
             Some(true) if i_am_recorded => {
@@ -109,6 +123,28 @@ pub async fn follow(reader: RecordReader, cfg: std::sync::Arc<Config>, me: Strin
             }
             _ => {}
         }
+    }
+}
+
+/// Render the spec's parameters and reload postgres when they changed.
+/// Reload-safe settings take effect at once; the rest surface as
+/// pending_restart until the user restarts the cluster.
+async fn apply_parameters(reader: &RecordReader, cfg: &Config) {
+    let Some(rendered) = reader.rendered_parameters().await else {
+        return;
+    };
+    match crate::params::write_if_changed(&cfg.pgdata, &rendered) {
+        Ok(false) => {}
+        Ok(true) => {
+            tracing::info!(
+                bytes = rendered.len(),
+                "parameters changed, reloading postgres"
+            );
+            if let Err(err) = crate::params::reload(&cfg.pgdata).await {
+                tracing::warn!(%err, "reload failed");
+            }
+        }
+        Err(err) => tracing::warn!(%err, "failed to write parameter file"),
     }
 }
 

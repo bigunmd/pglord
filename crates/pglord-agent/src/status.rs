@@ -15,15 +15,19 @@ pub struct InstanceStatus {
     /// Current WAL LSN: write position on a primary, receive position on a
     /// standby.
     pub lsn: Option<String>,
+    /// Postgres has settings staged that only a restart will apply. Read from
+    /// pg_settings, so it reflects reality rather than our own bookkeeping.
+    pub pending_restart: bool,
 }
 
 pub async fn query_status(cfg: &Config) -> InstanceStatus {
     match try_query(cfg).await {
-        Ok((in_recovery, lsn)) => InstanceStatus {
+        Ok((in_recovery, lsn, pending_restart)) => InstanceStatus {
             role: if in_recovery { "standby" } else { "primary" },
             ready: true,
             in_recovery: Some(in_recovery),
             lsn,
+            pending_restart,
         },
         Err(err) => {
             tracing::debug!(%err, "status query failed");
@@ -32,12 +36,13 @@ pub async fn query_status(cfg: &Config) -> InstanceStatus {
                 ready: false,
                 in_recovery: None,
                 lsn: None,
+                pending_restart: false,
             }
         }
     }
 }
 
-async fn try_query(cfg: &Config) -> anyhow::Result<(bool, Option<String>)> {
+async fn try_query(cfg: &Config) -> anyhow::Result<(bool, Option<String>, bool)> {
     let mut conn_str = format!(
         "host={} port={} user={} dbname=postgres connect_timeout=2",
         cfg.socket_dir.display(),
@@ -55,13 +60,15 @@ async fn try_query(cfg: &Config) -> anyhow::Result<(bool, Option<String>)> {
             "SELECT pg_is_in_recovery(), \
              CASE WHEN pg_is_in_recovery() \
                   THEN pg_last_wal_receive_lsn()::text \
-                  ELSE pg_current_wal_lsn()::text END",
+                  ELSE pg_current_wal_lsn()::text END, \
+             EXISTS(SELECT 1 FROM pg_settings WHERE pending_restart)",
             &[],
         )
         .await?;
     let in_recovery: bool = row.get(0);
     let lsn: Option<String> = row.get(1);
+    let pending_restart: bool = row.get(2);
     drop(client);
     conn_task.abort();
-    Ok((in_recovery, lsn))
+    Ok((in_recovery, lsn, pending_restart))
 }

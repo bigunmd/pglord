@@ -10,15 +10,21 @@ use crate::config::{Config, Role};
 
 /// Extra postgresql.conf lines appended after initdb.
 /// wal_log_hints is required for pg_rewind (old-primary rejoin after failover).
+///
+/// Order matters: the user parameter file is included first, then the managed
+/// settings are repeated, so a user parameter can never override the settings
+/// HA depends on (last assignment wins in postgresql.conf).
 pub fn postgresql_conf_extra(port: u16) -> String {
     format!(
         "\n# --- managed by pglord-agent ---\n\
+         include_if_exists = '{}'\n\
          listen_addresses = '*'\n\
          port = {port}\n\
          wal_level = replica\n\
          max_wal_senders = 10\n\
          hot_standby = on\n\
-         wal_log_hints = on\n"
+         wal_log_hints = on\n",
+        crate::params::PARAMS_FILE
     )
 }
 
@@ -229,6 +235,11 @@ mod tests {
         assert!(conf.contains("hot_standby = on"));
         assert!(conf.contains("listen_addresses = '*'"));
         assert!(conf.contains("wal_log_hints = on"));
+        // The include must come before the managed settings so user parameters
+        // cannot override them.
+        let include_at = conf.find("include_if_exists").expect("include line");
+        let wal_level_at = conf.find("wal_level").expect("wal_level line");
+        assert!(include_at < wal_level_at);
     }
 
     #[test]
