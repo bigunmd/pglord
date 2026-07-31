@@ -1,4 +1,5 @@
 import { Component, OnDestroy, inject, signal } from '@angular/core';
+import { Router } from '@angular/router';
 import { TranslocoModule } from '@jsverse/transloco';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { lucideDatabase, lucidePlus, lucideTrash2 } from '@ng-icons/lucide';
@@ -79,7 +80,12 @@ export class ClusterDeleteDialogComponent {
             </thead>
             <tbody hlmTBody>
               @for (c of clusters(); track c.name) {
-                <tr hlmTr [attr.data-testid]="'cluster-row-' + c.name">
+                <tr
+                  hlmTr
+                  class="hover:bg-muted/50 cursor-pointer transition-colors"
+                  [attr.data-testid]="'cluster-row-' + c.name"
+                  (click)="openDetail(c.name)"
+                >
                   <td hlmTd class="font-mono text-sm font-medium">{{ c.name }}</td>
                   <td hlmTd>
                     <span class="inline-flex items-center gap-2">
@@ -113,7 +119,7 @@ export class ClusterDeleteDialogComponent {
                       class="text-muted-foreground hover:text-destructive"
                       [attr.aria-label]="'clusters.delete' | transloco"
                       [attr.data-testid]="'delete-' + c.name"
-                      (click)="openDelete(c)"
+                      (click)="$event.stopPropagation(); openDelete(c)"
                     >
                       <ng-icon name="lucideTrash2" size="16" />
                     </button>
@@ -137,6 +143,11 @@ export class ClusterDeleteDialogComponent {
 export class ClustersComponent implements OnDestroy {
   private readonly api = inject(Api);
   private readonly dialog = inject(HlmDialogService);
+  private readonly router = inject(Router);
+
+  openDetail(name: string): void {
+    void this.router.navigate(['/clusters', name]);
+  }
 
   protected readonly clusters = signal<ClusterSummary[]>([]);
   protected readonly loaded = signal(false);

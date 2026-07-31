@@ -42,5 +42,21 @@
     "deleteWarning": "The cluster and all of its data volumes will be removed. This cannot be undone.",
     "emptyTitle": "No clusters yet",
     "emptyHint": "Create your first HA Postgres cluster to get started."
+  },
+  "clusterDetail": {
+    "back": "Clusters",
+    "primaryIs": "primary: {{pod}}",
+    "recordedPrimary": "Recorded primary",
+    "instance": "Instance",
+    "role": "Role",
+    "health": "Health",
+    "lsn": "WAL position",
+    "ready": "Ready",
+    "notReady": "Not ready",
+    "roles": {
+      "primary": "Primary",
+      "standby": "Standby",
+      "unknown": "Unknown"
+    }
   }
 }

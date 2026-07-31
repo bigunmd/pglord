@@ -4,7 +4,7 @@ import {
   provideBrowserGlobalErrorListeners,
 } from '@angular/core';
 import { provideHttpClient } from '@angular/common/http';
-import { provideRouter } from '@angular/router';
+import { provideRouter, withComponentInputBinding } from '@angular/router';
 import { provideTransloco } from '@jsverse/transloco';
 
 import { provideApiConfiguration } from './api/api-configuration';
@@ -15,7 +15,7 @@ import { environment } from '../environments/environment';
 export const appConfig: ApplicationConfig = {
   providers: [
     provideBrowserGlobalErrorListeners(),
-    provideRouter(routes),
+    provideRouter(routes, withComponentInputBinding()),
     provideHttpClient(),
     provideApiConfiguration(environment.apiBaseUrl),
     provideTransloco({
