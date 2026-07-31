@@ -14,10 +14,15 @@ metadata:
   namespace: pglord
 rules:
   - apiGroups: [""]
-    resources: [configmaps, secrets, services, pods]
+    resources: [configmaps, secrets, services, pods, serviceaccounts]
     verbs: [get, list, watch, create, update, patch, delete]
   - apiGroups: [apps]
     resources: [statefulsets]
+    verbs: [get, list, watch, create, update, patch, delete]
+  # The reconciler provisions a least-privilege Role/Binding per cluster so
+  # instance agents can read their own spec ConfigMap (primary record).
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [roles, rolebindings]
     verbs: [get, list, watch, create, update, patch, delete]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
