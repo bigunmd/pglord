@@ -7,9 +7,15 @@ set -euo pipefail
 KUBECTL="minikube -p pglord kubectl --"
 API=http://127.0.0.1:18090
 
+kill_pf() {
+  # Killing the minikube wrapper leaves the real kubectl child alive; kill by
+  # command line so no stale forward keeps the port bound to a dead pod.
+  pkill -f "kubectl.*port-forward.*pglord-server" 2>/dev/null || true
+}
+
 cleanup() {
-  kill "${PF:-}" 2>/dev/null || true
   curl -s -X DELETE "$API/api/v1/clusters/demo" >/dev/null 2>&1 || true
+  kill_pf
 }
 trap cleanup EXIT
 
@@ -32,8 +38,8 @@ $KUBECTL apply -f deploy/k8s/ >/dev/null
 $KUBECTL -n pglord scale deploy/pglord-server --replicas=1 >/dev/null
 $KUBECTL -n pglord rollout status deploy/pglord-server --timeout=120s >/dev/null
 
+kill_pf
 $KUBECTL -n pglord port-forward svc/pglord-server 18090:80 >/dev/null 2>&1 &
-PF=$!
 sleep 2
 
 echo "==> creating cluster 'demo' via REST API"
