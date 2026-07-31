@@ -16,6 +16,7 @@ use crate::status;
 pub fn router(cfg: Arc<Config>) -> Router {
     Router::new()
         .route("/healthz", get(|| async { StatusCode::OK }))
+        .route("/readyz", get(readyz))
         .route("/status", get(get_status))
         .route("/promote", post(promote))
         .with_state(cfg)
@@ -23,6 +24,15 @@ pub fn router(cfg: Arc<Config>) -> Router {
 
 async fn get_status(State(cfg): State<Arc<Config>>) -> impl IntoResponse {
     Json(status::query_status(&cfg).await)
+}
+
+/// Pod readinessProbe target: ready only when postgres accepts connections.
+async fn readyz(State(cfg): State<Arc<Config>>) -> StatusCode {
+    if status::query_status(&cfg).await.ready {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    }
 }
 
 async fn promote(State(cfg): State<Arc<Config>>) -> impl IntoResponse {

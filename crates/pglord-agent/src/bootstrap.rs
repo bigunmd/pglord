@@ -44,6 +44,7 @@ pub async fn ensure_bootstrapped(cfg: &Config) -> anyhow::Result<()> {
     match cfg.role {
         Role::Primary => bootstrap_primary(cfg).await,
         Role::Standby => bootstrap_standby(cfg).await,
+        Role::Auto => bail!("role must be resolved before bootstrap (see rolestrategy)"),
     }
 }
 

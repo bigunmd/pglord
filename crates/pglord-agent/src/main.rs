@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use pglord_agent::config::Config;
-use pglord_agent::{bootstrap, http, supervisor};
+use pglord_agent::{bootstrap, http, rolestrategy, supervisor};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -15,8 +15,15 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let cfg = Arc::new(Config::load()?);
-    tracing::info!(role = ?cfg.role, version = env!("CARGO_PKG_VERSION"), "pglord-agent starting");
+    let mut cfg = Config::load()?;
+    let hostname = std::env::var("HOSTNAME")
+        .ok()
+        .or_else(|| std::fs::read_to_string("/etc/hostname").ok())
+        .map(|h| h.trim().to_string())
+        .unwrap_or_default();
+    cfg.role = rolestrategy::resolve_role(cfg.role, &hostname)?;
+    let cfg = Arc::new(cfg);
+    tracing::info!(role = ?cfg.role, %hostname, version = env!("CARGO_PKG_VERSION"), "pglord-agent starting");
 
     bootstrap::ensure_bootstrapped(&cfg).await?;
     let child = supervisor::spawn_postgres(&cfg)?;

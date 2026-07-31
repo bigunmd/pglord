@@ -12,6 +12,8 @@ use serde::Deserialize;
 pub enum Role {
     Primary,
     Standby,
+    /// Derive from the StatefulSet pod ordinal: 0 = primary, else standby.
+    Auto,
 }
 
 #[derive(Debug, Clone, Deserialize)]
