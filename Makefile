@@ -52,5 +52,26 @@ stand-smoke: ## Port-forward and curl healthz/readyz/ping
 stand-down: ## Delete the minikube stand
 	minikube delete -p $(PROFILE)
 
+ui-install: ## Install UI dependencies
+	cd ui && npm ci
+
+ui-dev: ## Run UI dev server (:4200)
+	cd ui && npm start
+
+ui-build: ## Build UI for production
+	cd ui && npm run build
+
+ui-lint: ## Lint UI
+	cd ui && npm run lint
+
+ui-test: ## Run UI unit tests
+	cd ui && npm test
+
+ui-client: ## Regenerate TS API client from spec/openapi.yaml
+	cd ui && npm run gen:api
+
+ui-client-check: ui-client ## Fail if committed TS client drifts from spec
+	git diff --exit-code ui/src/app/api
+
 clean: ## Remove build artifacts
 	cargo clean

@@ -20,3 +20,24 @@ jobs:
         run: |
           cargo run -p pglord-server -- --dump-openapi
           git diff --exit-code spec/
+
+  ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - run: npm ci
+        working-directory: ui
+      - run: npm run lint
+        working-directory: ui
+      - run: npm run build
+        working-directory: ui
+      - name: TS client drift gate
+        working-directory: ui
+        run: |
+          npm run gen:api
+          git diff --exit-code src/app/api
