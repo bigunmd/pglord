@@ -43,9 +43,12 @@ const REPLICA_CHOICES = [1, 2, 3, 4, 5] as const;
           placeholder="orders-db"
           autocomplete="off"
         />
-        @if (name() && !nameValid()) {
-          <p class="text-destructive text-xs">{{ 'clusters.nameInvalid' | transloco }}</p>
-        }
+        <!-- Fixed-height slot so the error appearing never resizes the dialog. -->
+        <p class="min-h-4 text-xs" [class.text-destructive]="name() && !nameValid()">
+          @if (name() && !nameValid()) {
+            {{ 'clusters.nameInvalid' | transloco }}
+          }
+        </p>
       </div>
       <div class="grid gap-1.5">
         <span hlmLabel>{{ 'clusters.replicas' | transloco }}</span>
@@ -76,9 +79,11 @@ const REPLICA_CHOICES = [1, 2, 3, 4, 5] as const;
           (ngModelChange)="storage.set($event)"
           placeholder="1Gi"
         />
-        @if (storage() && !storageValid()) {
-          <p class="text-destructive text-xs">{{ 'clusters.storageInvalid' | transloco }}</p>
-        }
+        <p class="min-h-4 text-xs" [class.text-destructive]="storage() && !storageValid()">
+          @if (storage() && !storageValid()) {
+            {{ 'clusters.storageInvalid' | transloco }}
+          }
+        </p>
       </div>
       <div class="grid gap-1.5">
         <label hlmLabel for="pg-cluster-image">{{ 'clusters.image' | transloco }}</label>
