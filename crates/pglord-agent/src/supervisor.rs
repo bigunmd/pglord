@@ -10,12 +10,16 @@ use crate::config::Config;
 
 pub fn spawn_postgres(cfg: &Config) -> anyhow::Result<Child> {
     tracing::info!(pgdata = %cfg.pgdata.display(), "starting postgres");
-    Command::new("postgres")
-        .arg("-D")
-        .arg(&cfg.pgdata)
-        .kill_on_drop(true)
-        .spawn()
-        .context("spawn postgres")
+    let mut cmd = Command::new("postgres");
+    cmd.arg("-D").arg(&cfg.pgdata).kill_on_drop(true);
+    // archive_command runs pgbackrest as a child of postgres, so the object
+    // storage credentials have to be in postgres' environment — the agent's own
+    // environment is not inherited by that path.
+    if !cfg.s3_access_key.is_empty() {
+        cmd.env("PGBACKREST_REPO1_S3_KEY", &cfg.s3_access_key);
+        cmd.env("PGBACKREST_REPO1_S3_KEY_SECRET", &cfg.s3_secret_key);
+    }
+    cmd.spawn().context("spawn postgres")
 }
 
 /// Runs until postgres exits or a shutdown signal arrives.
