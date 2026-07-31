@@ -44,9 +44,20 @@ fn is_bootstrapped(pgdata: &Path) -> bool {
     pgdata.join("PG_VERSION").exists()
 }
 
-/// Idempotently prepare PGDATA for the configured role.
+fn has_standby_signal(pgdata: &Path) -> bool {
+    pgdata.join("standby.signal").exists()
+}
+
+/// Idempotently prepare PGDATA for the configured role. A standby role with
+/// primary-shaped data (no standby.signal) is a deposed ex-primary rejoining
+/// after failover: rewind it BEFORE postgres starts — doing this at startup
+/// (not at fence time) avoids racing the process supervisor.
 pub async fn ensure_bootstrapped(cfg: &Config) -> anyhow::Result<()> {
     if is_bootstrapped(&cfg.pgdata) {
+        if cfg.role == Role::Standby && !has_standby_signal(&cfg.pgdata) {
+            tracing::warn!("ex-primary PGDATA with standby role: rewinding to new primary");
+            return demote_to_standby(cfg).await;
+        }
         tracing::info!(pgdata = %cfg.pgdata.display(), "PGDATA already bootstrapped");
         return Ok(());
     }
@@ -55,6 +66,56 @@ pub async fn ensure_bootstrapped(cfg: &Config) -> anyhow::Result<()> {
         Role::Standby => bootstrap_standby(cfg).await,
         Role::Auto => bail!("role must be resolved before bootstrap (see rolestrategy)"),
     }
+}
+
+/// Connection user/password for streaming: replication role when configured,
+/// superuser in trust-mode dev runs.
+fn stream_credentials(cfg: &Config) -> (&str, &str) {
+    if cfg.repl_password.is_empty() {
+        (cfg.superuser.as_str(), cfg.superuser_password.as_str())
+    } else {
+        (cfg.repl_user.as_str(), cfg.repl_password.as_str())
+    }
+}
+
+/// The primary_conninfo line a rejoining standby streams with.
+pub fn primary_conninfo(cfg: &Config, application_name: &str) -> String {
+    let (user, password) = stream_credentials(cfg);
+    format!(
+        "primary_conninfo = 'host={} port={} user={user} password={password} application_name={application_name}'\n",
+        cfg.primary_host, cfg.primary_port,
+    )
+}
+
+/// pg_rewind against the current primary; fall back to a fresh basebackup if
+/// the rewind fails (e.g. missing WAL).
+async fn demote_to_standby(cfg: &Config) -> anyhow::Result<()> {
+    let source = format!(
+        "host={} port={} user={} password={} dbname=postgres",
+        cfg.primary_host, cfg.primary_port, cfg.superuser, cfg.superuser_password,
+    );
+    let rewound = Command::new("pg_rewind")
+        .arg(format!("--target-pgdata={}", cfg.pgdata.display()))
+        .arg(format!("--source-server={source}"))
+        .status()
+        .await
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    if rewound {
+        let me = std::env::var("HOSTNAME").unwrap_or_default();
+        append(
+            &cfg.pgdata.join("postgresql.auto.conf"),
+            &primary_conninfo(cfg, &me),
+        )?;
+        std::fs::write(cfg.pgdata.join("standby.signal"), "").context("write standby.signal")?;
+        tracing::info!("rewind complete; prepared as standby");
+        return Ok(());
+    }
+
+    tracing::warn!("pg_rewind failed; wiping PGDATA for a fresh basebackup");
+    std::fs::remove_dir_all(&cfg.pgdata).context("wipe PGDATA")?;
+    bootstrap_standby(cfg).await
 }
 
 async fn bootstrap_primary(cfg: &Config) -> anyhow::Result<()> {

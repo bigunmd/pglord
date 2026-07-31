@@ -112,68 +112,17 @@ pub async fn follow(reader: RecordReader, cfg: std::sync::Arc<Config>, me: Strin
     }
 }
 
-/// Stop postgres, rewind PGDATA to the new primary's timeline, prepare
-/// standby files, and exit — the restarted pod comes back as a standby.
+/// Fence a deposed primary: stop postgres and exit. Nothing else — the
+/// restarted agent resolves its role from the record (standby), finds
+/// primary-shaped PGDATA, and runs pg_rewind at STARTUP where nothing can
+/// race the process supervisor (see bootstrap::ensure_bootstrapped).
 async fn fence(cfg: &Config, new_primary: &str) {
+    tracing::warn!(%new_primary, "fencing: stopping postgres, restart will rewind and rejoin");
     let _ = Command::new("pg_ctl")
         .args(["stop", "-m", "fast", "-D"])
         .arg(&cfg.pgdata)
         .status()
         .await;
-
-    let source = format!(
-        "host={} port={} user={} password={} dbname=postgres",
-        pod_fqdn(new_primary, &cfg.cluster, &cfg.namespace),
-        cfg.primary_port,
-        cfg.superuser,
-        cfg.superuser_password,
-    );
-    let rewound = Command::new("pg_rewind")
-        .arg(format!("--target-pgdata={}", cfg.pgdata.display()))
-        .arg(format!("--source-server={source}"))
-        .status()
-        .await
-        .map(|s| s.success())
-        .unwrap_or(false);
-
-    if rewound {
-        let conninfo = format!(
-            "primary_conninfo = 'host={} port={} user={} password={} application_name={}'\n",
-            pod_fqdn(new_primary, &cfg.cluster, &cfg.namespace),
-            cfg.primary_port,
-            if cfg.repl_password.is_empty() {
-                &cfg.superuser
-            } else {
-                &cfg.repl_user
-            },
-            if cfg.repl_password.is_empty() {
-                &cfg.superuser_password
-            } else {
-                &cfg.repl_password
-            },
-            std::env::var("HOSTNAME").unwrap_or_default(),
-        );
-        let auto_conf = cfg.pgdata.join("postgresql.auto.conf");
-        let append_ok = std::fs::OpenOptions::new()
-            .append(true)
-            .create(true)
-            .open(&auto_conf)
-            .and_then(|mut f| {
-                use std::io::Write;
-                f.write_all(conninfo.as_bytes())
-            })
-            .is_ok();
-        let signal_ok = std::fs::write(cfg.pgdata.join("standby.signal"), "").is_ok();
-        if append_ok && signal_ok {
-            tracing::warn!("fenced: rewound and prepared as standby; exiting for restart");
-            std::process::exit(1);
-        }
-    }
-
-    // Rewind (or standby prep) failed: wipe PGDATA so the restarted agent
-    // re-clones with pg_basebackup.
-    tracing::warn!("fence fallback: wiping PGDATA for fresh basebackup");
-    let _ = std::fs::remove_dir_all(&cfg.pgdata);
     std::process::exit(1);
 }
 
