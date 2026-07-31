@@ -185,8 +185,27 @@ restart, so the cluster shows a pending restart afterwards. Restart it, then use
 Archiving stays off while no repository is configured — otherwise WAL would
 accumulate on disk with nowhere to ship it.
 
-Backups always run on the primary. The list shows each backup's type, size in
-the repository, and when it finished.
+Backups always run on the primary.
+
+**Backup types.** *Full* copies everything and is the base the others build on.
+*Differential* copies what changed since the last full backup. *Incremental*
+copies what changed since the last backup of any type — smallest and quickest.
+Restoring always needs the full backup plus the chain that follows it, so a
+schedule of incrementals still depends on taking a full one regularly.
+
+**On a schedule.** Give the repository a cron expression (UTC) and the type to
+take — for example `0 3 * * *` for 03:00 daily, or `0 3 * * 0` for Sundays.
+Ordinary five-field cron works as you would write it in a crontab. The shortest
+interval allowed is 15 minutes, since backups that overlap only cost storage. If
+pglord is down when a schedule fires, it takes one catch-up backup when it comes
+back rather than one for every window it missed.
+
+**Two lists, deliberately.** *Recent runs* shows what happened, including
+backups still running and ones that failed with the reason. *In the repository*
+shows what actually exists and could be restored. A failed run leaves nothing in
+the repository, which is exactly why both are shown. Only one backup of a
+cluster runs at a time; asking for another while one is in flight is refused
+rather than queued.
 
 **Restore is not available yet.** A backup you cannot restore is not yet a
 safety net, so until that ships, take a `pg_dump` before anything irreversible
