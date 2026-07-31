@@ -1,7 +1,11 @@
 //! Cluster specification: the user-facing desired state. These types later
 //! become the CRD schema verbatim in operator mode, so evolve them carefully.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
+
+use crate::guc;
 
 const MAX_NAME_LEN: usize = 40; // leaves room for "-pods"/"-rw"/ordinal suffixes
 const MAX_REPLICAS: u8 = 5;
@@ -19,6 +23,10 @@ pub struct ClusterSpec {
     /// PVC size per instance, e.g. "1Gi".
     #[serde(default = "default_storage_size")]
     pub storage_size: String,
+    /// PostgreSQL settings applied on top of the defaults. Only settings in the
+    /// GUC catalog are accepted; pglord-managed settings are rejected.
+    #[serde(default)]
+    pub parameters: BTreeMap<String, String>,
 }
 
 fn default_image() -> String {
@@ -41,6 +49,12 @@ pub enum SpecError {
     InvalidStorage(String),
     #[error("storage cannot shrink: {from} -> {to}")]
     StorageShrink { from: String, to: String },
+    #[error("unknown PostgreSQL setting '{0}'")]
+    UnknownParameter(String),
+    #[error("'{0}' is managed by pglord and cannot be overridden")]
+    ReservedParameter(String),
+    #[error("invalid value for '{name}': {reason}")]
+    InvalidParameterValue { name: String, reason: String },
 }
 
 /// The fields a running cluster may change. Name and image are deliberately
@@ -52,6 +66,10 @@ pub struct SpecChange {
     pub replicas: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub storage_size: Option<String>,
+    /// Full replacement of the parameter map: settings absent from it are
+    /// removed, which is how the UI clears a setting back to its default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parameters: Option<BTreeMap<String, String>>,
 }
 
 /// Size in bytes for comparison; None when the quantity is malformed.
@@ -91,6 +109,9 @@ impl ClusterSpec {
             }
             next.storage_size = storage.clone();
         }
+        if let Some(parameters) = &change.parameters {
+            next.parameters = parameters.clone();
+        }
         next.validate()?;
         Ok(next)
     }
@@ -104,6 +125,18 @@ impl ClusterSpec {
         }
         if !is_quantity(&self.storage_size) {
             return Err(SpecError::InvalidStorage(self.storage_size.clone()));
+        }
+        for (name, value) in &self.parameters {
+            if guc::is_reserved(name) {
+                return Err(SpecError::ReservedParameter(name.clone()));
+            }
+            let Some(g) = guc::lookup(name) else {
+                return Err(SpecError::UnknownParameter(name.clone()));
+            };
+            guc::validate_value(g, value).map_err(|reason| SpecError::InvalidParameterValue {
+                name: name.clone(),
+                reason,
+            })?;
         }
         Ok(())
     }
@@ -248,6 +281,54 @@ mod tests {
             }),
             Err(SpecError::StorageShrink { .. })
         ));
+    }
+
+    #[test]
+    fn parameters_are_validated_against_the_catalog() {
+        let mut s = spec("demo");
+        s.parameters = BTreeMap::from([("work_mem".into(), "16MB".into())]);
+        assert_eq!(s.validate(), Ok(()));
+
+        s.parameters = BTreeMap::from([("wrk_mem".into(), "16MB".into())]);
+        assert!(matches!(s.validate(), Err(SpecError::UnknownParameter(_))));
+
+        // Overriding a managed setting would break replication or the agent's
+        // ability to reach postgres.
+        s.parameters = BTreeMap::from([("wal_level".into(), "minimal".into())]);
+        assert!(matches!(s.validate(), Err(SpecError::ReservedParameter(_))));
+
+        s.parameters = BTreeMap::from([("max_connections".into(), "many".into())]);
+        assert!(matches!(
+            s.validate(),
+            Err(SpecError::InvalidParameterValue { .. })
+        ));
+    }
+
+    #[test]
+    fn parameter_change_replaces_the_whole_map() {
+        let mut s = spec("demo");
+        s.parameters = BTreeMap::from([
+            ("work_mem".into(), "16MB".into()),
+            ("log_connections".into(), "on".into()),
+        ]);
+        let next = s
+            .apply_change(&SpecChange {
+                parameters: Some(BTreeMap::from([("work_mem".into(), "32MB".into())])),
+                ..Default::default()
+            })
+            .expect("change");
+        // log_connections is gone: absent from the new map means "back to default".
+        assert_eq!(next.parameters.len(), 1);
+        assert_eq!(next.parameters["work_mem"], "32MB");
+
+        // Changing only replicas leaves parameters untouched.
+        let scaled = s
+            .apply_change(&SpecChange {
+                replicas: Some(3),
+                ..Default::default()
+            })
+            .expect("change");
+        assert_eq!(scaled.parameters, s.parameters);
     }
 
     #[test]
