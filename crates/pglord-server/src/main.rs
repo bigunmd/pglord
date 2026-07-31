@@ -2,9 +2,11 @@
 
 use std::sync::Arc;
 
-use pglord_server::app;
+use pglord_server::app::{self, ClusterOps};
 use pglord_server::config::Config;
 use pglord_server::health::Readiness;
+use pglord_server::spec_store::ConfigMapSpecStore;
+use pglord_server::{kube_client, reconciler};
 use tokio::sync::Notify;
 
 #[tokio::main]
@@ -13,7 +15,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Early exit: emit the OpenAPI artifact without touching the network.
     if std::env::args().any(|a| a == "--dump-openapi") {
-        let (_router, api) = app::build(Readiness::default(), &cfg);
+        let (_router, api) = app::build(Readiness::default(), &cfg, None);
         std::fs::create_dir_all("spec")?;
         std::fs::write("spec/openapi.yaml", api.to_yaml()?)?;
         println!("wrote spec/openapi.yaml");
@@ -28,7 +30,23 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let readiness = Readiness::default();
-    let (router, _api) = app::build(readiness, &cfg);
+
+    let cluster_ops = match kube_client::init(&readiness).await {
+        Some(client) => {
+            let ns = kube_client::current_namespace();
+            tracing::info!(%ns, "kubernetes environment detected");
+            tokio::spawn(kube_client::health_loop(client.clone(), readiness.clone()));
+            tokio::spawn(reconciler::run(client.clone(), ns.clone()));
+            Some(ClusterOps {
+                store: std::sync::Arc::new(ConfigMapSpecStore::new(client.clone(), &ns)),
+                kube: client,
+                ns,
+            })
+        }
+        None => None,
+    };
+
+    let (router, _api) = app::build(readiness, &cfg, cluster_ops);
     let router = router.layer(
         tower_http::trace::TraceLayer::new_for_http()
             .make_span_with(tower_http::trace::DefaultMakeSpan::new().level(tracing::Level::INFO)),

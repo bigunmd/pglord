@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 const MAX_NAME_LEN: usize = 40; // leaves room for "-pods"/"-rw"/ordinal suffixes
 const MAX_REPLICAS: u8 = 5;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 pub struct ClusterSpec {
     /// RFC1123 label; used as the prefix of every derived object name.
     pub name: String,

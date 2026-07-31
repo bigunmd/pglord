@@ -16,6 +16,7 @@ use utoipa_swagger_ui::SwaggerUi;
 
 use crate::config::Config;
 use crate::health::{self, Readiness};
+use crate::spec_store::SpecStore;
 
 #[derive(OpenApi)]
 #[openapi(info(
@@ -24,10 +25,20 @@ use crate::health::{self, Readiness};
 ))]
 struct ApiDoc;
 
+/// Everything cluster management needs; absent when no Kubernetes environment
+/// is available (handlers then answer 503 kube_unavailable).
+#[derive(Clone)]
+pub struct ClusterOps {
+    pub store: Arc<dyn SpecStore>,
+    pub kube: kube::Client,
+    pub ns: String,
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub readiness: Readiness,
     pub cfg: Arc<Config>,
+    pub cluster_ops: Option<ClusterOps>,
 }
 
 impl FromRef<AppState> for Readiness {
@@ -36,10 +47,28 @@ impl FromRef<AppState> for Readiness {
     }
 }
 
-pub fn build(readiness: Readiness, cfg: &Config) -> (Router, utoipa::openapi::OpenApi) {
+impl FromRef<AppState> for Option<ClusterOps> {
+    fn from_ref(s: &AppState) -> Option<ClusterOps> {
+        s.cluster_ops.clone()
+    }
+}
+
+pub fn build(
+    readiness: Readiness,
+    cfg: &Config,
+    cluster_ops: Option<ClusterOps>,
+) -> (Router, utoipa::openapi::OpenApi) {
     let api = OpenApiRouter::new()
         .routes(routes!(crate::api::ping::ping))
-        .routes(routes!(crate::api::version::version));
+        .routes(routes!(crate::api::version::version))
+        .routes(routes!(
+            crate::api::clusters::create_cluster,
+            crate::api::clusters::list_clusters
+        ))
+        .routes(routes!(
+            crate::api::clusters::get_cluster,
+            crate::api::clusters::delete_cluster
+        ));
 
     let (api_router, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
         .merge(api)
@@ -79,6 +108,7 @@ pub fn build(readiness: Readiness, cfg: &Config) -> (Router, utoipa::openapi::Op
     let state = AppState {
         readiness,
         cfg: Arc::new(cfg.clone()),
+        cluster_ops,
     };
     (router.with_state(state), api)
 }

@@ -10,6 +10,110 @@ info:
     identifier: AGPL-3.0-or-later
   version: 0.1.0
 paths:
+  /api/v1/clusters:
+    get:
+      tags:
+      - clusters
+      summary: List clusters.
+      operationId: list_clusters
+      responses:
+        '200':
+          description: Clusters
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ClusterSummary'
+        '503':
+          description: No Kubernetes environment
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+    post:
+      tags:
+      - clusters
+      summary: Create a new Postgres cluster.
+      operationId: create_cluster
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClusterSpec'
+        required: true
+      responses:
+        '201':
+          description: Cluster spec stored
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClusterSpec'
+        '409':
+          description: Cluster already exists
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '422':
+          description: Invalid spec
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '503':
+          description: No Kubernetes environment
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+  /api/v1/clusters/{name}:
+    get:
+      tags:
+      - clusters
+      summary: Get one cluster.
+      operationId: get_cluster
+      parameters:
+      - name: name
+        in: path
+        description: Cluster name
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Cluster
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClusterSummary'
+        '404':
+          description: Not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+    delete:
+      tags:
+      - clusters
+      summary: Delete a cluster (children are garbage-collected via ownerReferences).
+      operationId: delete_cluster
+      parameters:
+      - name: name
+        in: path
+        description: Cluster name
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: Deleted
+        '404':
+          description: Not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
   /api/v1/ping:
     get:
       tags:
@@ -39,6 +143,45 @@ paths:
                 $ref: '#/components/schemas/VersionResponse'
 components:
   schemas:
+    ClusterSpec:
+      type: object
+      required:
+      - name
+      properties:
+        image:
+          type: string
+          description: Image containing postgres + pglord-agent (agent is the entrypoint).
+        name:
+          type: string
+          description: RFC1123 label; used as the prefix of every derived object name.
+        replicas:
+          type: integer
+          format: int32
+          description: 'Total instances: 1 primary + (replicas - 1) streaming standbys.'
+          minimum: 0
+        storage_size:
+          type: string
+          description: PVC size per instance, e.g. "1Gi".
+    ClusterSummary:
+      type: object
+      required:
+      - name
+      - image
+      - replicas
+      - ready_replicas
+      properties:
+        image:
+          type: string
+        name:
+          type: string
+        ready_replicas:
+          type: integer
+          format: int32
+          description: Instances currently passing their readiness probe.
+        replicas:
+          type: integer
+          format: int32
+          minimum: 0
     PingResponse:
       type: object
       required:
@@ -46,6 +189,31 @@ components:
       properties:
         message:
           type: string
+    ProblemDetails:
+      type: object
+      required:
+      - type
+      - title
+      - status
+      - code
+      - detail
+      properties:
+        code:
+          type: string
+          description: Stable machine-readable code; clients must key on this, not `detail`.
+        detail:
+          type: string
+          description: Human-readable explanation; not part of the stable contract.
+        status:
+          type: integer
+          format: int32
+          minimum: 0
+        title:
+          type: string
+          description: Canonical reason phrase for the status.
+        type:
+          type: string
+          description: 'URI reference identifying the problem type: `{PROBLEM_BASE_URL}/{code}`.'
     VersionResponse:
       type: object
       required:
