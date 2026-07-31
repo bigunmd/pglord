@@ -1,0 +1,6 @@
+target
+.git
+docs
+spec
+deploy/k8s
+**/*.md
