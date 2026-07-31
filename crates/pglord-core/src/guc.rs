@@ -56,6 +56,11 @@ pub const RESERVED: &[&str] = &[
     "primary_conninfo",
     "hba_file",
     "data_directory",
+    // Archiving is driven by the backup configuration, not tuned by hand:
+    // a mismatched archive_command silently breaks the backup repository.
+    "archive_mode",
+    "archive_command",
+    "archive_timeout",
 ];
 
 macro_rules! guc {

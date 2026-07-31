@@ -30,6 +30,10 @@ pub struct ClusterSpec {
     /// Scheduling, resources and Kubernetes metadata for the instances.
     #[serde(default)]
     pub workload: crate::workload::WorkloadSpec,
+    /// Backup repository. Disabled by default; enabling it also turns on WAL
+    /// archiving, which needs a restart.
+    #[serde(default)]
+    pub backup: crate::backup::BackupSpec,
 }
 
 fn default_image() -> String {
@@ -60,6 +64,8 @@ pub enum SpecError {
     InvalidParameterValue { name: String, reason: String },
     #[error("{0}")]
     InvalidWorkload(#[from] crate::workload::WorkloadError),
+    #[error("{0}")]
+    InvalidBackup(#[from] crate::backup::BackupError),
 }
 
 /// The fields a running cluster may change. Name and image are deliberately
@@ -79,6 +85,9 @@ pub struct SpecChange {
     /// current one (volume claim templates are immutable).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workload: Option<crate::workload::WorkloadSpec>,
+    /// Full replacement of the backup block.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backup: Option<crate::backup::BackupSpec>,
 }
 
 /// Size in bytes for comparison; None when the quantity is malformed.
@@ -125,6 +134,9 @@ impl ClusterSpec {
             crate::workload::check_storage_class_change(&self.workload, workload)?;
             next.workload = workload.clone();
         }
+        if let Some(backup) = &change.backup {
+            next.backup = backup.clone();
+        }
         next.validate()?;
         Ok(next)
     }
@@ -152,6 +164,7 @@ impl ClusterSpec {
             })?;
         }
         crate::workload::validate(&self.workload)?;
+        crate::backup::validate(&self.backup)?;
         Ok(())
     }
 }
