@@ -54,6 +54,10 @@ stand-deploy: stand-image ## Deploy pglord into the stand
 stand-smoke: ## Port-forward and curl healthz/readyz/ping
 	./scripts/stand-smoke.sh
 
+stand-ui: ## Port-forward the UI to http://localhost:8080
+	@echo "pglord UI: http://localhost:8080  (Ctrl-C to stop)"
+	$(KUBECTL) -n pglord port-forward svc/pglord-server 8080:80
+
 stand-down: ## Delete the minikube stand
 	minikube delete -p $(PROFILE)
 
