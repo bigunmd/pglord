@@ -154,16 +154,23 @@ done
 echo "OK schedule stored, invalid schedules refused"
 
 echo "==> confirming objects really exist in the bucket"
-objects=$(mc ls --insecure --recursive "local/$BUCKET/$PREFIX" | wc -l)
+# List once into a variable: `... | grep -q` under pipefail reports failure when
+# grep matches early and SIGPIPEs the upstream command.
+listing=$(mc ls --insecure --recursive "local/$BUCKET/$PREFIX")
+objects=$(printf '%s\n' "$listing" | grep -c . || true)
 [ "$objects" -gt 0 ] || { echo "FAIL: bucket is empty"; exit 1; }
-mc ls --insecure --recursive "local/$BUCKET/$PREFIX" | grep -q 'backup' || { echo "FAIL: no backup objects in bucket"; exit 1; }
-echo "OK $objects objects in $BUCKET"
+case "$listing" in
+  *backup*) ;;
+  *) echo "FAIL: no backup objects in bucket"; printf '%s\n' "$listing" | head -5; exit 1 ;;
+esac
+echo "OK $objects objects in $BUCKET/$PREFIX"
 
 echo "==> confirming WAL is archived"
 for _ in $(seq 1 30); do
   psql_on "SELECT pg_switch_wal()" >/dev/null
   sleep 2
-  mc ls --insecure --recursive "local/$BUCKET/$PREFIX" | grep -q 'archive' && { archived=yes; break; }
+  listing=$(mc ls --insecure --recursive "local/$BUCKET/$PREFIX")
+  case "$listing" in *archive*) archived=yes; break ;; esac
 done
 [ "${archived:-}" = "yes" ] || { echo "FAIL: no archived WAL in the repository"; exit 1; }
 echo "OK WAL archived to the repository"
