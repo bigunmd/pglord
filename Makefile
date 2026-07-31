@@ -52,6 +52,12 @@ stand-smoke: ## Port-forward and curl healthz/readyz/ping
 stand-down: ## Delete the minikube stand
 	minikube delete -p $(PROFILE)
 
+agent-image: ## Build agent docker image (postgres:17 base)
+	docker build -f deploy/Dockerfile.agent -t pglord-agent:dev .
+
+agent-e2e: ## Docker e2e: replication + promotion with two agents
+	./scripts/agent-e2e.sh
+
 ui-install: ## Install UI dependencies
 	cd ui && npm ci
 
