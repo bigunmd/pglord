@@ -63,14 +63,16 @@ async fn main() -> anyhow::Result<()> {
                     );
                 }
             });
-            Some(ClusterOps {
+            let ops = ClusterOps {
                 store: std::sync::Arc::new(ConfigMapSpecStore::new(client.clone(), &ns)),
                 kube: client,
                 http: reqwest::Client::builder()
                     .timeout(std::time::Duration::from_secs(2))
                     .build()?,
                 ns,
-            })
+            };
+            tokio::spawn(pglord_server::backup_scheduler::run(ops.clone()));
+            Some(ops)
         }
         None => None,
     };

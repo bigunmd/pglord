@@ -37,9 +37,22 @@ async fn readyz(State(cfg): State<Arc<Config>>) -> StatusCode {
     }
 }
 
+#[derive(serde::Deserialize, Default)]
+struct BackupRequest {
+    /// "full" (default), "diff" or "incr".
+    #[serde(default)]
+    kind: Option<String>,
+}
+
 /// Take a backup. Only the primary may: pgBackRest backs up from the instance
 /// that owns the WAL timeline.
-async fn take_backup(State(cfg): State<Arc<Config>>) -> impl IntoResponse {
+async fn take_backup(
+    State(cfg): State<Arc<Config>>,
+    body: Option<Json<BackupRequest>>,
+) -> impl IntoResponse {
+    let kind = body
+        .and_then(|Json(b)| b.kind)
+        .unwrap_or_else(|| "full".to_string());
     let st = status::query_status(&cfg).await;
     if st.in_recovery != Some(false) {
         return (
@@ -55,10 +68,10 @@ async fn take_backup(State(cfg): State<Arc<Config>>) -> impl IntoResponse {
             Json(serde_json::json!({ "error": format!("stanza-create: {err}") })),
         );
     }
-    match crate::backup::take_backup(&cfg, "full").await {
+    match crate::backup::take_backup(&cfg, &kind).await {
         Ok(()) => (
             StatusCode::OK,
-            Json(serde_json::json!({ "status": "completed" })),
+            Json(serde_json::json!({ "status": "completed", "kind": kind })),
         ),
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,

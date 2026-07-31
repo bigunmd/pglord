@@ -3,7 +3,10 @@
 
 export type { AntiAffinity } from './models/anti-affinity';
 export type { BackupEntry } from './models/backup-entry';
+export type { BackupKind } from './models/backup-kind';
 export type { BackupList } from './models/backup-list';
+export type { BackupRequest } from './models/backup-request';
+export type { BackupRun } from './models/backup-run';
 export type { BackupSpec } from './models/backup-spec';
 export type { ClusterDetail } from './models/cluster-detail';
 export type { ClusterSpec } from './models/cluster-spec';
@@ -15,6 +18,7 @@ export type { PreflightCheck } from './models/preflight-check';
 export type { PreflightReport } from './models/preflight-report';
 export type { ProblemDetails } from './models/problem-details';
 export type { Resources } from './models/resources';
+export type { RunState } from './models/run-state';
 export type { SpecChange } from './models/spec-change';
 export type { SwitchoverRequest } from './models/switchover-request';
 export type { Toleration } from './models/toleration';

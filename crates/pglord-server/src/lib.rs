@@ -3,6 +3,8 @@
 
 pub mod api;
 pub mod app;
+pub mod backup_runs;
+pub mod backup_scheduler;
 pub mod config;
 pub mod error;
 pub mod health;

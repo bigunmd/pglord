@@ -7,6 +7,7 @@ import { filter, map } from 'rxjs/operators';
 import { StrictHttpResponse } from '../../strict-http-response';
 import { RequestBuilder } from '../../request-builder';
 
+import { BackupRequest } from '../../models/backup-request';
 
 export interface CreateBackup$Params {
 
@@ -14,12 +15,14 @@ export interface CreateBackup$Params {
  * Cluster name
  */
   name: string;
+      body?: BackupRequest
 }
 
 export function createBackup(http: HttpClient, rootUrl: string, params: CreateBackup$Params, context?: HttpContext): Observable<StrictHttpResponse<void>> {
   const rb = new RequestBuilder(rootUrl, createBackup.PATH, 'post');
   if (params) {
     rb.path('name', params.name, {});
+    rb.body(params.body, 'application/json');
   }
 
   return http.request(

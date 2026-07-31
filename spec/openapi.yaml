@@ -189,6 +189,11 @@ paths:
         required: true
         schema:
           type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BackupRequest'
       responses:
         '202':
           description: Backup started
@@ -373,16 +378,24 @@ components:
           type:
           - string
           - 'null'
+    BackupKind:
+      type: string
+      enum:
+      - full
+      - diff
+      - incr
     BackupList:
       type: object
       required:
       - enabled
       - backups
+      - runs
       properties:
         backups:
           type: array
           items:
             $ref: '#/components/schemas/BackupEntry'
+          description: What is in the repository — this is what could be restored.
         enabled:
           type: boolean
         repository:
@@ -390,6 +403,56 @@ components:
           - string
           - 'null'
           description: Where backups are stored, or null when backups are off.
+        runs:
+          type: array
+          items:
+            $ref: '#/components/schemas/BackupRun'
+          description: What happened recently, including running and failed attempts.
+        schedule:
+          type:
+          - string
+          - 'null'
+          description: Cron schedule, or null when backups are taken manually only.
+    BackupRequest:
+      type: object
+      properties:
+        kind:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/BackupKind'
+            description: '"full" (default), "diff" or "incr".'
+    BackupRun:
+      type: object
+      required:
+      - id
+      - kind
+      - trigger
+      - state
+      - started
+      properties:
+        error:
+          type:
+          - string
+          - 'null'
+        finished:
+          type:
+          - integer
+          - 'null'
+          format: int64
+        id:
+          type: string
+        kind:
+          type: string
+          description: '"full", "diff" or "incr".'
+        started:
+          type: integer
+          format: int64
+          description: Unix seconds.
+        state:
+          $ref: '#/components/schemas/RunState'
+        trigger:
+          type: string
+          description: '"manual" or "schedule".'
     BackupSpec:
       type: object
       properties:
@@ -422,6 +485,14 @@ components:
           description: S3-compatible endpoint, e.g. "https://s3.amazonaws.com" or a MinIO URL.
         s3_region:
           type: string
+        schedule:
+          type:
+          - string
+          - 'null'
+          description: Cron expression (UTC) for automatic backups. None = manual only.
+        schedule_kind:
+          $ref: '#/components/schemas/BackupKind'
+          description: Backup type the schedule takes.
         verify_tls:
           type: boolean
           description: |-
@@ -674,6 +745,13 @@ components:
           type:
           - string
           - 'null'
+    RunState:
+      type: string
+      enum:
+      - running
+      - succeeded
+      - failed
+      - unknown
     SpecChange:
       type: object
       description: |-
