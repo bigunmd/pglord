@@ -8,6 +8,14 @@
  * rolling-upgrade concern with its own (future) workflow.
  */
 export interface SpecChange {
+
+  /**
+   * Full replacement of the parameter map: settings absent from it are
+   * removed, which is how the UI clears a setting back to its default.
+   */
+  parameters?: ({
+[key: string]: string;
+} | null);
   replicas?: (number | null);
   storage_size?: (string | null);
 }

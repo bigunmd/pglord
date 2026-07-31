@@ -14,6 +14,14 @@ export interface ClusterSpec {
   name: string;
 
   /**
+   * PostgreSQL settings applied on top of the defaults. Only settings in the
+   * GUC catalog are accepted; pglord-managed settings are rejected.
+   */
+  parameters?: {
+[key: string]: string;
+};
+
+  /**
    * Total instances: 1 primary + (replicas - 1) streaming standbys.
    */
   replicas?: number;

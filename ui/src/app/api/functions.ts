@@ -11,8 +11,12 @@ export type { DeleteCluster$Params as DeleteCluster$Params } from './fn/clusters
 export { deleteCluster as deleteCluster } from './fn/clusters/delete-cluster';
 export type { PatchCluster$Params as PatchCluster$Params } from './fn/clusters/patch-cluster';
 export { patchCluster as patchCluster } from './fn/clusters/patch-cluster';
+export type { RestartCluster$Params as RestartCluster$Params } from './fn/clusters/restart-cluster';
+export { restartCluster as restartCluster } from './fn/clusters/restart-cluster';
 export type { Switchover$Params as Switchover$Params } from './fn/clusters/switchover';
 export { switchover as switchover } from './fn/clusters/switchover';
+export type { ListGucs$Params as ListGucs$Params } from './fn/system/list-gucs';
+export { listGucs as listGucs } from './fn/system/list-gucs';
 export type { Ping$Params as Ping$Params } from './fn/system/ping';
 export { ping as ping } from './fn/system/ping';
 export type { GetPreflight$Params as GetPreflight$Params } from './fn/system/get-preflight';

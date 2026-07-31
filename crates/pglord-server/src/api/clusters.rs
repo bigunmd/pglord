@@ -29,6 +29,8 @@ pub struct InstanceDto {
     pub ready: bool,
     /// Current/receive WAL LSN as reported by the agent.
     pub lsn: Option<String>,
+    /// Settings are staged on this instance that only a restart will apply.
+    pub pending_restart: bool,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -40,6 +42,10 @@ pub struct ClusterDetail {
     pub ready_replicas: i32,
     /// Recorded primary pod (the single writer per the primary record).
     pub primary: String,
+    /// PostgreSQL settings applied on top of the defaults.
+    pub parameters: std::collections::BTreeMap<String, String>,
+    /// Any instance is waiting on a restart to apply staged settings.
+    pub pending_restart: bool,
     pub instances: Vec<InstanceDto>,
 }
 
@@ -170,6 +176,7 @@ pub async fn get_cluster(
     let observations =
         crate::instance_probe::observe_cluster(&ops.http, &spec.name, &ops.ns, spec.replicas).await;
     let ready_replicas = observations.iter().filter(|o| o.ready).count() as i32;
+    let pending_restart = observations.iter().any(|o| o.pending_restart);
     let instances = observations
         .into_iter()
         .map(|o| InstanceDto {
@@ -177,6 +184,7 @@ pub async fn get_cluster(
             pod: o.pod,
             ready: o.ready,
             lsn: o.lsn,
+            pending_restart: o.pending_restart,
         })
         .collect();
     Ok(Json(ClusterDetail {
@@ -186,6 +194,8 @@ pub async fn get_cluster(
         storage_size: spec.storage_size,
         ready_replicas,
         primary,
+        parameters: spec.parameters,
+        pending_restart,
         instances,
     }))
 }
@@ -199,6 +209,9 @@ pub struct SwitchoverRequest {
 fn spec_error(e: SpecError) -> ApiError {
     let code = match e {
         SpecError::StorageShrink { .. } => "storage_shrink",
+        SpecError::UnknownParameter(_)
+        | SpecError::ReservedParameter(_)
+        | SpecError::InvalidParameterValue { .. } => "invalid_parameter",
         _ => "invalid_spec",
     };
     ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, code).with_detail(e.to_string())
@@ -344,6 +357,70 @@ pub async fn switchover(
     if let Err(err) = ops.http.post(&url).send().await {
         tracing::debug!(%err, "promote POST failed (agent will self-promote)");
     }
+    Ok(StatusCode::ACCEPTED)
+}
+
+/// Restart every instance so staged settings take effect. Standbys go first
+/// and the primary last, keeping writes available for as long as possible.
+#[utoipa::path(
+    post,
+    path = "/api/v1/clusters/{name}/restart",
+    tag = "clusters",
+    params(("name" = String, Path, description = "Cluster name")),
+    responses(
+        (status = 202, description = "Rolling restart started"),
+        (status = 404, description = "Not found", body = crate::error::ProblemDetails, content_type = "application/problem+json"),
+    )
+)]
+pub async fn restart_cluster(
+    State(state): State<Option<ClusterOps>>,
+    Path(name): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let ops = ops(&state)?;
+    let Some((spec, _owner)) = ops.store.get(&name).await.map_err(ApiError::internal)? else {
+        return Err(ApiError::not_found());
+    };
+    let primary = ops
+        .store
+        .primary(&name)
+        .await
+        .map_err(ApiError::internal)?
+        .unwrap_or_else(|| format!("{name}-0"));
+
+    let ops = ops.clone();
+    tokio::spawn(async move {
+        let mut order: Vec<String> = (0..spec.replicas)
+            .map(|i| format!("{}-{i}", spec.name))
+            .filter(|p| *p != primary)
+            .collect();
+        order.push(primary.clone());
+        tracing::info!(cluster = %spec.name, ?order, "rolling restart started");
+
+        let pods: Api<k8s_openapi::api::core::v1::Pod> = Api::namespaced(ops.kube.clone(), &ops.ns);
+        for pod in order {
+            if let Err(err) = pods.delete(&pod, &Default::default()).await {
+                tracing::warn!(%pod, %err, "restart: pod delete failed");
+                continue;
+            }
+            // Wait for it back and ready before touching the next one, so the
+            // cluster never loses more than one instance at a time.
+            for _ in 0..60u32 {
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                let obs = crate::instance_probe::observe_cluster(
+                    &ops.http,
+                    &spec.name,
+                    &ops.ns,
+                    spec.replicas,
+                )
+                .await;
+                if obs.iter().any(|o| o.pod == pod && o.ready) {
+                    break;
+                }
+            }
+            tracing::info!(%pod, "restart: instance back");
+        }
+        tracing::info!(cluster = %spec.name, "rolling restart finished");
+    });
     Ok(StatusCode::ACCEPTED)
 }
 

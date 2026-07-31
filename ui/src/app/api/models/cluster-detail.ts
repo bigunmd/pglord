@@ -8,6 +8,18 @@ export interface ClusterDetail {
   name: string;
 
   /**
+   * PostgreSQL settings applied on top of the defaults.
+   */
+  parameters: {
+[key: string]: string;
+};
+
+  /**
+   * Any instance is waiting on a restart to apply staged settings.
+   */
+  pending_restart: boolean;
+
+  /**
    * Recorded primary pod (the single writer per the primary record).
    */
   primary: string;

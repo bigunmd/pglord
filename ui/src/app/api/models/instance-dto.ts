@@ -9,6 +9,11 @@ export interface InstanceDto {
   lsn?: (string | null);
 
   /**
+   * Settings are staged on this instance that only a restart will apply.
+   */
+  pending_restart: boolean;
+
+  /**
    * Pod name, e.g. "demo-0".
    */
   pod: string;

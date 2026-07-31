@@ -151,6 +151,30 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
+  /api/v1/clusters/{name}/restart:
+    post:
+      tags:
+      - clusters
+      summary: |-
+        Restart every instance so staged settings take effect. Standbys go first
+        and the primary last, keeping writes available for as long as possible.
+      operationId: restart_cluster
+      parameters:
+      - name: name
+        in: path
+        description: Cluster name
+        required: true
+        schema:
+          type: string
+      responses:
+        '202':
+          description: Rolling restart started
+        '404':
+          description: Not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
   /api/v1/clusters/{name}/switchover:
     post:
       tags:
@@ -191,6 +215,21 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
+  /api/v1/gucs:
+    get:
+      tags:
+      - system
+      summary: The settings pglord lets you tune, with the metadata a config editor needs.
+      operationId: list_gucs
+      responses:
+        '200':
+          description: Tunable settings
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/GucInfo'
   /api/v1/ping:
     get:
       tags:
@@ -250,6 +289,8 @@ components:
       - storage_size
       - ready_replicas
       - primary
+      - parameters
+      - pending_restart
       - instances
       properties:
         image:
@@ -260,6 +301,16 @@ components:
             $ref: '#/components/schemas/InstanceDto'
         name:
           type: string
+        parameters:
+          type: object
+          description: PostgreSQL settings applied on top of the defaults.
+          additionalProperties:
+            type: string
+          propertyNames:
+            type: string
+        pending_restart:
+          type: boolean
+          description: Any instance is waiting on a restart to apply staged settings.
         primary:
           type: string
           description: Recorded primary pod (the single writer per the primary record).
@@ -283,6 +334,15 @@ components:
         name:
           type: string
           description: RFC1123 label; used as the prefix of every derived object name.
+        parameters:
+          type: object
+          description: |-
+            PostgreSQL settings applied on top of the defaults. Only settings in the
+            GUC catalog are accepted; pglord-managed settings are rejected.
+          additionalProperties:
+            type: string
+          propertyNames:
+            type: string
         replicas:
           type: integer
           format: int32
@@ -311,18 +371,46 @@ components:
           type: integer
           format: int32
           minimum: 0
+    GucInfo:
+      type: object
+      required:
+      - name
+      - kind
+      - apply
+      - category
+      - summary
+      - default
+      properties:
+        apply:
+          type: string
+          description: '"reload" (applies live) or "restart".'
+        category:
+          type: string
+        default:
+          type: string
+        kind:
+          type: string
+          description: 'Value shape: integer, real, bool, memory, duration, enum or stringlike.'
+        name:
+          type: string
+        summary:
+          type: string
     InstanceDto:
       type: object
       required:
       - pod
       - role
       - ready
+      - pending_restart
       properties:
         lsn:
           type:
           - string
           - 'null'
           description: Current/receive WAL LSN as reported by the agent.
+        pending_restart:
+          type: boolean
+          description: Settings are staged on this instance that only a restart will apply.
         pod:
           type: string
           description: Pod name, e.g. "demo-0".
@@ -411,6 +499,17 @@ components:
         absent: renaming would orphan every derived object, and image changes are a
         rolling-upgrade concern with its own (future) workflow.
       properties:
+        parameters:
+          type:
+          - object
+          - 'null'
+          description: |-
+            Full replacement of the parameter map: settings absent from it are
+            removed, which is how the UI clears a setting back to its default.
+          additionalProperties:
+            type: string
+          propertyNames:
+            type: string
         replicas:
           type:
           - integer

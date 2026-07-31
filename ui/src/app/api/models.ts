@@ -4,6 +4,7 @@
 export type { ClusterDetail } from './models/cluster-detail';
 export type { ClusterSpec } from './models/cluster-spec';
 export type { ClusterSummary } from './models/cluster-summary';
+export type { GucInfo } from './models/guc-info';
 export type { InstanceDto } from './models/instance-dto';
 export type { PingResponse } from './models/ping-response';
 export type { PreflightCheck } from './models/preflight-check';

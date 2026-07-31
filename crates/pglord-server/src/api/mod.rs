@@ -1,6 +1,7 @@
 //! Versioned REST API handlers. Everything here is part of the OpenAPI contract.
 
 pub mod clusters;
+pub mod gucs;
 pub mod ping;
 pub mod preflight;
 pub mod version;

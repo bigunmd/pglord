@@ -10,6 +10,8 @@ struct AgentStatus {
     ready: bool,
     in_recovery: Option<bool>,
     lsn: Option<String>,
+    #[serde(default)]
+    pending_restart: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -18,6 +20,8 @@ pub struct InstanceObservation {
     pub ready: bool,
     pub in_recovery: Option<bool>,
     pub lsn: Option<String>,
+    /// Postgres has settings staged that only a restart will apply.
+    pub pending_restart: bool,
 }
 
 pub async fn observe_cluster(
@@ -44,12 +48,14 @@ pub async fn observe_cluster(
                 ready: s.ready,
                 in_recovery: s.in_recovery,
                 lsn: s.lsn,
+                pending_restart: s.pending_restart,
             },
             None => InstanceObservation {
                 pod,
                 ready: false,
                 in_recovery: None,
                 lsn: None,
+                pending_restart: false,
             },
         });
     }
