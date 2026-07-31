@@ -20,14 +20,19 @@ mc() { $KUBECTL -n pglord exec deploy/minio -- mc "$@" 2>/dev/null; }
 psql_on() { $KUBECTL -n pglord exec bk-0 -- env PGPASSWORD="$SU_PW" psql -U postgres -tAc "$1" 2>/dev/null || echo ""; }
 
 echo "==> building + loading images"
-make image agent-image >/dev/null
+# The agent image gets a unique tag per run. `minikube image rm` cannot remove
+# an image any pod is using, so reusing :dev would silently keep a stale agent
+# whenever another cluster is running — and the cluster spec lets us pin the
+# tag we just built.
+AGENT_IMAGE="pglord-agent:e2e-$$"
+make image >/dev/null
+docker build -q -f deploy/Dockerfile.agent -t "$AGENT_IMAGE" . >/dev/null
 $KUBECTL apply -f deploy/k8s/namespace.yaml >/dev/null
 $KUBECTL -n pglord scale deploy/pglord-server --replicas=0 >/dev/null 2>&1 || true
 $KUBECTL -n pglord wait --for=delete pod -l app=pglord-server --timeout=60s >/dev/null 2>&1 || true
-for img in pglord-server:dev pglord-agent:dev; do
-  minikube -p pglord image rm "docker.io/library/$img" >/dev/null 2>&1 || true
-  minikube -p pglord image load "$img"
-done
+minikube -p pglord image rm docker.io/library/pglord-server:dev >/dev/null 2>&1 || true
+minikube -p pglord image load pglord-server:dev
+minikube -p pglord image load "$AGENT_IMAGE"
 $KUBECTL apply -f deploy/k8s/ >/dev/null
 $KUBECTL -n pglord scale deploy/pglord-server --replicas=1 >/dev/null
 $KUBECTL -n pglord rollout status deploy/pglord-server --timeout=120s >/dev/null
@@ -47,6 +52,7 @@ echo "==> creating cluster with backups configured"
 code=$(curl -s -o /tmp/bk.json -w '%{http_code}' -X POST "$API/api/v1/clusters" \
   -H 'content-type: application/json' -d "{
     \"name\":\"bk\",\"replicas\":1,
+    \"image\":\"$AGENT_IMAGE\",
     \"backup\":{
       \"enabled\":true,
       \"s3_endpoint\":\"http://minio.pglord.svc.cluster.local:9000\",
