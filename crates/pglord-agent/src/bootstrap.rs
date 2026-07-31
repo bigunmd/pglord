@@ -18,13 +18,15 @@ pub fn postgresql_conf_extra(port: u16) -> String {
     format!(
         "\n# --- managed by pglord-agent ---\n\
          include_if_exists = '{}'\n\
+         include_if_exists = '{}'\n\
          listen_addresses = '*'\n\
          port = {port}\n\
          wal_level = replica\n\
          max_wal_senders = 10\n\
          hot_standby = on\n\
          wal_log_hints = on\n",
-        crate::params::PARAMS_FILE
+        crate::params::PARAMS_FILE,
+        crate::params::ARCHIVE_FILE,
     )
 }
 

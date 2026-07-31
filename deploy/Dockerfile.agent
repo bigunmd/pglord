@@ -12,6 +12,13 @@ COPY . .
 RUN cargo build --release -p pglord-agent
 
 FROM postgres:17 AS runtime
+# pgBackRest ships in the pgdg repo the postgres image already trusts.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends pgbackrest \
+    && rm -rf /var/lib/apt/lists/*
+# pgbackrest writes its config and spool here; postgres must own them.
+RUN mkdir -p /etc/pgbackrest /var/log/pgbackrest /var/lib/pgbackrest \
+    && chown -R postgres:postgres /etc/pgbackrest /var/log/pgbackrest /var/lib/pgbackrest
 COPY --from=builder /app/target/release/pglord-agent /usr/local/bin/pglord-agent
 # The agent replaces the postgres entrypoint: it bootstraps PGDATA itself and
 # supervises the postgres process as its child.

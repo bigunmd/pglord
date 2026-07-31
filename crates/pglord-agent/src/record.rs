@@ -55,17 +55,15 @@ impl RecordReader {
         )
     }
 
-    /// The user parameters from the spec, already rendered as a
-    /// postgresql.conf fragment.
-    pub async fn rendered_parameters(&self) -> Option<String> {
+    /// The cluster spec as stored, when readable.
+    pub async fn spec(&self) -> Option<pglord_core::spec::ClusterSpec> {
         let cm = self
             .api
             .get_opt(&format!("{}-spec", self.cluster))
             .await
             .ok()??;
         let raw = cm.data.as_ref()?.get("spec")?;
-        let spec: pglord_core::spec::ClusterSpec = serde_json::from_str(raw).ok()?;
-        Some(pglord_core::guc::render_parameters(&spec.parameters))
+        serde_json::from_str(raw).ok()
     }
 }
 
@@ -126,25 +124,42 @@ pub async fn follow(reader: RecordReader, cfg: std::sync::Arc<Config>, me: Strin
     }
 }
 
-/// Render the spec's parameters and reload postgres when they changed.
-/// Reload-safe settings take effect at once; the rest surface as
-/// pending_restart until the user restarts the cluster.
+/// Apply everything the spec drives on this instance: user parameters,
+/// archiving, and the backup repository config. Reload-safe settings take
+/// effect at once; the rest surface as pending_restart.
 async fn apply_parameters(reader: &RecordReader, cfg: &Config) {
-    let Some(rendered) = reader.rendered_parameters().await else {
+    let Some(spec) = reader.spec().await else {
         return;
     };
+    let mut changed = false;
+
+    let rendered = pglord_core::guc::render_parameters(&spec.parameters);
     match crate::params::write_if_changed(&cfg.pgdata, &rendered) {
+        Ok(true) => changed = true,
         Ok(false) => {}
-        Ok(true) => {
-            tracing::info!(
-                bytes = rendered.len(),
-                "parameters changed, reloading postgres"
-            );
-            if let Err(err) = crate::params::reload(&cfg.pgdata).await {
-                tracing::warn!(%err, "reload failed");
-            }
-        }
         Err(err) => tracing::warn!(%err, "failed to write parameter file"),
+    }
+
+    let archive = crate::params::archive_conf(&cfg.cluster, spec.backup.enabled);
+    match crate::params::write_archive_if_changed(&cfg.pgdata, &archive) {
+        Ok(true) => changed = true,
+        Ok(false) => {}
+        Err(err) => tracing::warn!(%err, "failed to write archive settings"),
+    }
+
+    if spec.backup.enabled {
+        match crate::backup::write_conf_if_changed(cfg, &spec.backup) {
+            Ok(true) => tracing::info!("backup repository configuration updated"),
+            Ok(false) => {}
+            Err(err) => tracing::warn!(%err, "failed to write pgbackrest.conf"),
+        }
+    }
+
+    if changed {
+        tracing::info!("configuration changed, reloading postgres");
+        if let Err(err) = crate::params::reload(&cfg.pgdata).await {
+            tracing::warn!(%err, "reload failed");
+        }
     }
 }
 

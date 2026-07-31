@@ -55,6 +55,12 @@ pub struct Config {
     /// Namespace (set by the reconciler via fieldRef).
     #[serde(default = "default_namespace")]
     pub namespace: String,
+    /// Object-storage credentials, mounted from the user's Secret. Empty when
+    /// backups are not configured.
+    #[serde(default = "default_empty")]
+    pub s3_access_key: String,
+    #[serde(default = "default_empty")]
+    pub s3_secret_key: String,
 }
 
 fn default_namespace() -> String {

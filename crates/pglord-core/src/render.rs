@@ -185,6 +185,38 @@ fn secret_env(name: &str, cluster: &str, key: &str) -> EnvVar {
     }
 }
 
+/// Object-storage credentials from the user's Secret, only when backups are
+/// configured. `optional: true` keeps pods schedulable if the Secret is added
+/// after the cluster.
+fn backup_env(spec: &ClusterSpec) -> Vec<EnvVar> {
+    let Some(secret) = spec
+        .backup
+        .s3_credentials_secret
+        .as_deref()
+        .filter(|_| spec.backup.enabled)
+    else {
+        return Vec::new();
+    };
+    [
+        ("PGLORD_AGENT_S3_ACCESS_KEY", crate::backup::ACCESS_KEY_KEY),
+        ("PGLORD_AGENT_S3_SECRET_KEY", crate::backup::SECRET_KEY_KEY),
+    ]
+    .into_iter()
+    .map(|(var, key)| EnvVar {
+        name: var.to_string(),
+        value_from: Some(EnvVarSource {
+            secret_key_ref: Some(SecretKeySelector {
+                name: secret.to_string(),
+                key: key.to_string(),
+                optional: Some(true),
+            }),
+            ..Default::default()
+        }),
+        ..Default::default()
+    })
+    .collect()
+}
+
 pub fn pod_fqdn(pod: &str, cluster: &str, ns: &str) -> String {
     format!(
         "{pod}.{}.{ns}.svc.cluster.local",
@@ -242,49 +274,54 @@ pub fn render_statefulset(spec: &ClusterSpec, ns: &str, owner: &OwnerRef) -> Sta
         name: "postgres".to_string(),
         image: Some(spec.image.clone()),
         image_pull_policy: Some("IfNotPresent".to_string()),
-        env: Some(vec![
-            EnvVar {
-                name: "PGLORD_AGENT_ROLE".to_string(),
-                value: Some("auto".to_string()),
-                ..Default::default()
-            },
-            EnvVar {
-                name: "PGLORD_AGENT_PRIMARY_HOST".to_string(),
-                value: Some(pod_fqdn(&format!("{}-0", spec.name), &spec.name, ns)),
-                ..Default::default()
-            },
-            EnvVar {
-                name: "PGLORD_AGENT_CLUSTER".to_string(),
-                value: Some(spec.name.clone()),
-                ..Default::default()
-            },
-            EnvVar {
-                name: "PGLORD_AGENT_NAMESPACE".to_string(),
-                value_from: Some(EnvVarSource {
-                    field_ref: Some(ObjectFieldSelector {
-                        field_path: "metadata.namespace".to_string(),
+        env: Some(
+            vec![
+                EnvVar {
+                    name: "PGLORD_AGENT_ROLE".to_string(),
+                    value: Some("auto".to_string()),
+                    ..Default::default()
+                },
+                EnvVar {
+                    name: "PGLORD_AGENT_PRIMARY_HOST".to_string(),
+                    value: Some(pod_fqdn(&format!("{}-0", spec.name), &spec.name, ns)),
+                    ..Default::default()
+                },
+                EnvVar {
+                    name: "PGLORD_AGENT_CLUSTER".to_string(),
+                    value: Some(spec.name.clone()),
+                    ..Default::default()
+                },
+                EnvVar {
+                    name: "PGLORD_AGENT_NAMESPACE".to_string(),
+                    value_from: Some(EnvVarSource {
+                        field_ref: Some(ObjectFieldSelector {
+                            field_path: "metadata.namespace".to_string(),
+                            ..Default::default()
+                        }),
                         ..Default::default()
                     }),
                     ..Default::default()
-                }),
-                ..Default::default()
-            },
-            EnvVar {
-                name: "RUST_LOG".to_string(),
-                value: Some("info".to_string()),
-                ..Default::default()
-            },
-            secret_env(
-                "PGLORD_AGENT_SUPERUSER_PASSWORD",
-                &spec.name,
-                SUPERUSER_PASSWORD_KEY,
-            ),
-            secret_env(
-                "PGLORD_AGENT_REPL_PASSWORD",
-                &spec.name,
-                REPLICATION_PASSWORD_KEY,
-            ),
-        ]),
+                },
+                EnvVar {
+                    name: "RUST_LOG".to_string(),
+                    value: Some("info".to_string()),
+                    ..Default::default()
+                },
+                secret_env(
+                    "PGLORD_AGENT_SUPERUSER_PASSWORD",
+                    &spec.name,
+                    SUPERUSER_PASSWORD_KEY,
+                ),
+                secret_env(
+                    "PGLORD_AGENT_REPL_PASSWORD",
+                    &spec.name,
+                    REPLICATION_PASSWORD_KEY,
+                ),
+            ]
+            .into_iter()
+            .chain(backup_env(spec))
+            .collect(),
+        ),
         ports: Some(vec![
             ContainerPort {
                 container_port: PG_PORT,
@@ -473,6 +510,53 @@ mod tests {
             .expect("requests")
             .clone();
         assert_eq!(req["storage"].0, "1Gi");
+    }
+
+    #[test]
+    fn backup_credentials_are_mounted_only_when_enabled() {
+        let (mut spec, owner) = demo();
+        let env_of = |s: &ClusterSpec| {
+            render_statefulset(s, "ns", &owner)
+                .spec
+                .expect("spec")
+                .template
+                .spec
+                .expect("pod")
+                .containers[0]
+                .env
+                .clone()
+                .expect("env")
+        };
+        assert!(
+            !env_of(&spec)
+                .iter()
+                .any(|e| e.name.starts_with("PGLORD_AGENT_S3")),
+            "no S3 env before backups are configured"
+        );
+
+        spec.backup = crate::backup::BackupSpec {
+            enabled: true,
+            s3_endpoint: Some("https://s3.example.com".into()),
+            s3_bucket: Some("b".into()),
+            s3_credentials_secret: Some("backup-creds".into()),
+            ..Default::default()
+        };
+        let env = env_of(&spec);
+        let access = env
+            .iter()
+            .find(|e| e.name == "PGLORD_AGENT_S3_ACCESS_KEY")
+            .expect("access key env");
+        let sel = access
+            .value_from
+            .as_ref()
+            .expect("value_from")
+            .secret_key_ref
+            .as_ref()
+            .expect("secret ref");
+        assert_eq!(sel.name, "backup-creds");
+        assert_eq!(sel.key, "access-key");
+        // Optional so a missing Secret does not make pods unschedulable.
+        assert_eq!(sel.optional, Some(true));
     }
 
     #[test]
