@@ -38,7 +38,9 @@ interface Row {
   ],
   providers: [provideIcons({ lucidePlus, lucideTrash2 })],
   template: `
-    <div hlmDialogHeader>
+    <!-- A rule under the title separates chrome from content, matching the
+         dividers between sections below. -->
+    <div hlmDialogHeader class="border-border border-b pb-4">
       <h2 hlmDialogTitle>{{ 'config.editTitle' | transloco }}</h2>
     </div>
 
