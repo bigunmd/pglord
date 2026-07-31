@@ -161,6 +161,40 @@ primary automatically; it starts streaming when the clone finishes.
 Removing instances **deletes their data volumes**. Only the highest-numbered
 instances are removed, and the primary is never one of them.
 
+### Placement and resources
+
+**Placement and resources → Edit placement.**
+
+**Instance spreading** decides whether two instances of a cluster may share a
+node. The default, *Preferred*, spreads them across nodes when nodes are
+available and still schedules when they are not — which is what you want on a
+small or single-node cluster. Switch to *Required* on a multi-node cluster if
+you want a hard guarantee: instances will never share a node, and any instance
+that cannot find a free node stays pending rather than co-locating. *Off*
+removes the rule entirely; a single node failure can then take the whole
+cluster down.
+
+**Resources** set CPU and memory requests and limits per instance. Requests
+matter most: without them the instances are best-effort and are the first thing
+Kubernetes evicts when a node runs short of memory. A request also reserves
+capacity so the scheduler will not overcommit the node your database is on. Use
+quantities like `100m`, `1`, `256Mi`, `2Gi`; leave a field blank to set none.
+
+**Labels and annotations** are added to instance pods — useful for cost
+allocation, Prometheus scrape selection, service-mesh injection and backup
+tooling. Keys under `app.kubernetes.io/`, `pglord.dev/` and
+`statefulset.kubernetes.io/` are refused, because pglord uses them to find its
+own objects.
+
+Changing placement or resources rolls the instances one at a time, the same way
+a restart does.
+
+Also available through the API (`workload` on create or `PATCH`): `node_selector`
+and `tolerations` for dedicated database node pools, `image_pull_secrets` for
+private registries, `priority_class_name` for eviction protection, and
+`storage_class` to pick a StorageClass. The StorageClass can only be set when
+the cluster is created — Kubernetes does not allow changing it afterwards.
+
 ### Tune PostgreSQL settings
 
 **Configuration → Edit configuration.** Pick a setting, give it a value, and

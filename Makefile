@@ -79,6 +79,9 @@ day2-e2e: ## Minikube e2e: planned switchover and scale-up
 config-e2e: ## Minikube e2e: live settings, pending restart, rolling restart
 	./scripts/config-e2e.sh
 
+workload-e2e: ## Minikube e2e: labels, resources and anti-affinity on pods
+	./scripts/workload-e2e.sh
+
 ui-install: ## Install UI dependencies
 	cd ui && npm ci
 
