@@ -161,6 +161,38 @@ primary automatically; it starts streaming when the clone finishes.
 Removing instances **deletes their data volumes**. Only the highest-numbered
 instances are removed, and the primary is never one of them.
 
+### Back up to object storage
+
+pglord backs clusters up with pgBackRest to any S3-compatible storage.
+
+**Before you start**, create a Secret in the cluster's namespace holding the
+object-storage credentials. pglord stores only its *name*; the keys never enter
+a cluster spec.
+
+```bash
+kubectl -n pglord create secret generic backup-credentials \
+  --from-literal=access-key=AKIA... \
+  --from-literal=secret-key=...
+```
+
+Then **Backups → Configure repository**: endpoint (a full URL), bucket, region,
+the Secret name, an optional path prefix so several clusters can share a bucket,
+and how many full backups to keep — pgBackRest expires older ones for you.
+
+Enabling backups turns on WAL archiving, which PostgreSQL only picks up on
+restart, so the cluster shows a pending restart afterwards. Restart it, then use
+**Back up now** to take the first backup and confirm the repository works.
+Archiving stays off while no repository is configured — otherwise WAL would
+accumulate on disk with nowhere to ship it.
+
+Backups always run on the primary. The list shows each backup's type, size in
+the repository, and when it finished.
+
+**Restore is not available yet.** A backup you cannot restore is not yet a
+safety net, so until that ships, take a `pg_dump` before anything irreversible
+(see *Delete a cluster*). Scheduled backups are also still to come; for now a
+backup happens when you ask for one.
+
 ### Placement and resources
 
 **Placement and resources → Edit placement.**
@@ -248,7 +280,8 @@ kubectl -n pglord exec <name>-0 -- \
   env PGPASSWORD=<password> pg_dump -U postgres postgres > backup.sql
 ```
 
-Scheduled backups to object storage are on the roadmap, not shipped yet.
+A repository backup is not a substitute here: restoring from one is not
+supported yet, so a dump is the only way to get this data back.
 
 ## 8. Troubleshooting
 
@@ -265,7 +298,8 @@ Scheduled backups to object storage are on the roadmap, not shipped yet.
 
 - No authentication in front of the UI — put it behind your ingress auth.
 - Asynchronous replication only (synchronous is not exposed yet).
-- No scheduled backups or point-in-time restore yet.
+- Backups can be taken and listed, but **not restored** yet, and cannot be
+  scheduled — see *Back up to object storage*.
 - Custom images must be built on the pglord agent image; stock `postgres:NN`
   images are not usable yet.
 - Cluster name and image cannot be changed after creation (instances, storage

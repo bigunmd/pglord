@@ -82,6 +82,9 @@ config-e2e: ## Minikube e2e: live settings, pending restart, rolling restart
 workload-e2e: ## Minikube e2e: labels, resources and anti-affinity on pods
 	./scripts/workload-e2e.sh
 
+backup-e2e: ## Minikube e2e: back up to MinIO and verify objects land
+	./scripts/backup-e2e.sh
+
 ui-install: ## Install UI dependencies
 	cd ui && npm ci
 

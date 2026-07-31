@@ -1,0 +1,55 @@
+# Dev-only object storage for backup testing. NOT part of a pglord install:
+# it uses fixed credentials and ephemeral storage. Real deployments point at
+# their own S3-compatible endpoint.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minio
+  namespace: pglord
+  labels: { app: minio }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: minio }
+  template:
+    metadata:
+      labels: { app: minio }
+    spec:
+      containers:
+        - name: minio
+          image: minio/minio:latest
+          args: ["server", "/data", "--console-address", ":9001"]
+          env:
+            - { name: MINIO_ROOT_USER, value: pglordtest }
+            - { name: MINIO_ROOT_PASSWORD, value: pglordtest123 }
+          ports:
+            - { containerPort: 9000, name: api }
+            - { containerPort: 9001, name: console }
+          readinessProbe:
+            httpGet: { path: /minio/health/ready, port: api }
+            initialDelaySeconds: 5
+          volumeMounts:
+            - { name: data, mountPath: /data }
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+  namespace: pglord
+spec:
+  selector: { app: minio }
+  ports:
+    - { name: api, port: 9000, targetPort: api }
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: backup-credentials
+  namespace: pglord
+type: Opaque
+stringData:
+  access-key: pglordtest
+  secret-key: pglordtest123
