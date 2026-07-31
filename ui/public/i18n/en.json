@@ -8,6 +8,27 @@
     "clusters": "Clusters",
     "permissions": "Permissions"
   },
+  "config": {
+    "title": "Configuration",
+    "edit": "Edit configuration",
+    "editTitle": "PostgreSQL settings",
+    "setting": "Setting",
+    "value": "Value",
+    "usingDefaults": "This cluster uses PostgreSQL defaults.",
+    "noneSet": "No settings overridden yet.",
+    "addSetting": "Add a setting",
+    "choose": "Choose a setting…",
+    "add": "Add",
+    "remove": "Remove setting",
+    "apply": "Apply settings",
+    "appliesLive": "applies live",
+    "needsRestart": "needs restart",
+    "defaultIs": "Default: {{value}}.",
+    "pendingRestart": "Some settings need a restart before they take effect.",
+    "restart": "Restart cluster",
+    "restartTitle": "Restart {{name}}?",
+    "restartWarning": "Instances restart one at a time, standbys first and the primary last. Connections drop briefly as each instance comes back."
+  },
   "preflight": {
     "title": "Cluster permissions",
     "intro": "What pglord is allowed to do in its namespace, as reported by the Kubernetes API server.",

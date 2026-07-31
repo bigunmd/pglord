@@ -2,7 +2,15 @@ import { Component, OnDestroy, inject, input, signal } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { TranslocoModule } from '@jsverse/transloco';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { lucideArrowLeft, lucideCrown, lucidePencil, lucideRefreshCw } from '@ng-icons/lucide';
+import {
+  lucideArrowLeft,
+  lucideCrown,
+  lucidePencil,
+  lucidePower,
+  lucideRefreshCw,
+  lucideSettings,
+  lucideTriangleAlert,
+} from '@ng-icons/lucide';
 import { BrnDialogRef, injectBrnDialogContext } from '@spartan-ng/brain/dialog';
 import { HlmButton } from '@spartan-ng/helm/button';
 import {
@@ -17,9 +25,13 @@ import { firstValueFrom } from 'rxjs';
 import { Api } from '../../api/api';
 import { ClusterDetail } from '../../api/models/cluster-detail';
 import { SpecChange } from '../../api/models/spec-change';
+import { GucInfo } from '../../api/models/guc-info';
 import { getCluster } from '../../api/fn/clusters/get-cluster';
+import { listGucs } from '../../api/fn/system/list-gucs';
 import { patchCluster } from '../../api/fn/clusters/patch-cluster';
+import { restartCluster } from '../../api/fn/clusters/restart-cluster';
 import { switchover } from '../../api/fn/clusters/switchover';
+import { ClusterConfigDialogComponent } from './cluster-config-dialog.component';
 import { ClusterEditDialogComponent } from './cluster-edit-dialog.component';
 
 const REFRESH_MS = 5000;
@@ -50,10 +62,44 @@ export class SwitchoverDialogComponent {
   protected readonly pod = injectBrnDialogContext<{ pod: string }>().pod;
 }
 
+/** Confirm a rolling restart. */
+@Component({
+  selector: 'pg-restart-dialog',
+  imports: [TranslocoModule, HlmButton, HlmDialogFooter, HlmDialogHeader, HlmDialogTitle],
+  template: `
+    <div hlmDialogHeader>
+      <h2 hlmDialogTitle>{{ 'config.restartTitle' | transloco: { name: name } }}</h2>
+    </div>
+    <p class="text-muted-foreground py-2 text-sm">{{ 'config.restartWarning' | transloco }}</p>
+    <div hlmDialogFooter>
+      <button hlmBtn variant="ghost" (click)="ref.close(false)">
+        {{ 'common.cancel' | transloco }}
+      </button>
+      <button hlmBtn data-testid="confirm-restart" (click)="ref.close(true)">
+        {{ 'config.restart' | transloco }}
+      </button>
+    </div>
+  `,
+})
+export class RestartDialogComponent {
+  protected readonly ref = inject<BrnDialogRef<boolean>>(BrnDialogRef);
+  protected readonly name = injectBrnDialogContext<{ name: string }>().name;
+}
+
 @Component({
   selector: 'pg-cluster-detail',
   imports: [RouterLink, TranslocoModule, NgIcon, HlmButton, HlmTableImports],
-  providers: [provideIcons({ lucideArrowLeft, lucideCrown, lucidePencil, lucideRefreshCw })],
+  providers: [
+    provideIcons({
+      lucideArrowLeft,
+      lucideCrown,
+      lucidePencil,
+      lucidePower,
+      lucideRefreshCw,
+      lucideSettings,
+      lucideTriangleAlert,
+    }),
+  ],
   template: `
     <div class="mx-auto max-w-4xl">
       <a hlmBtn variant="ghost" size="sm" routerLink="/clusters" class="mb-3 -ml-2">
@@ -160,6 +206,66 @@ export class SwitchoverDialogComponent {
             </tbody>
           </table>
         </div>
+
+        <!-- Configuration -->
+        <div class="mt-6 flex items-center justify-between">
+          <h2 class="font-medium">{{ 'config.title' | transloco }}</h2>
+          <button
+            hlmBtn
+            variant="outline"
+            size="sm"
+            data-testid="open-config"
+            [disabled]="busy()"
+            (click)="openConfig(d)"
+          >
+            <ng-icon name="lucideSettings" size="14" />
+            {{ 'config.edit' | transloco }}
+          </button>
+        </div>
+
+        @if (d.pending_restart) {
+          <div
+            class="border-warning mt-2 flex items-center gap-2 rounded-lg border p-3 text-sm"
+            data-testid="restart-banner"
+          >
+            <ng-icon name="lucideTriangleAlert" size="18" class="text-warning" />
+            <span>{{ 'config.pendingRestart' | transloco }}</span>
+            <button
+              hlmBtn
+              size="sm"
+              class="ml-auto"
+              data-testid="open-restart"
+              [disabled]="busy()"
+              (click)="openRestart()"
+            >
+              <ng-icon name="lucidePower" size="14" />
+              {{ 'config.restart' | transloco }}
+            </button>
+          </div>
+        }
+
+        @if (parameterRows(d).length) {
+          <div class="border-border mt-2 overflow-x-auto rounded-lg border">
+            <table hlmTable class="w-full">
+              <thead hlmTHead>
+                <tr hlmTr>
+                  <th hlmTh>{{ 'config.setting' | transloco }}</th>
+                  <th hlmTh>{{ 'config.value' | transloco }}</th>
+                </tr>
+              </thead>
+              <tbody hlmTBody>
+                @for (p of parameterRows(d); track p.name) {
+                  <tr hlmTr [attr.data-testid]="'config-row-' + p.name">
+                    <td hlmTd class="font-mono text-xs">{{ p.name }}</td>
+                    <td hlmTd class="font-mono text-xs">{{ p.value }}</td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
+        } @else {
+          <p class="text-muted-foreground mt-2 text-sm">{{ 'config.usingDefaults' | transloco }}</p>
+        }
       } @else if (!error()) {
         <p class="text-muted-foreground text-sm">{{ 'common.loading' | transloco }}</p>
       }
@@ -176,6 +282,44 @@ export class ClusterDetailComponent implements OnDestroy {
   protected readonly error = signal<string | null>(null);
   /** Blocks concurrent operations so a double-click cannot fire twice. */
   protected readonly busy = signal(false);
+
+  protected parameterRows(d: ClusterDetail): { name: string; value: string }[] {
+    return Object.entries(d.parameters ?? {})
+      .map(([name, value]) => ({ name, value }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  async openConfig(d: ClusterDetail): Promise<void> {
+    let catalog: GucInfo[];
+    try {
+      catalog = await this.api.invoke(listGucs);
+    } catch {
+      this.error.set('Could not load the settings catalog.');
+      return;
+    }
+    const parameters = await firstValueFrom(
+      this.dialog.open<Record<string, string> | undefined>(ClusterConfigDialogComponent, {
+        context: { parameters: d.parameters ?? {}, catalog },
+      }).closed$,
+    );
+    if (!parameters) {
+      return;
+    }
+    await this.run(() =>
+      this.api.invoke(patchCluster, { name: this.name(), body: { parameters } }),
+    );
+  }
+
+  async openRestart(): Promise<void> {
+    const confirmed = await firstValueFrom(
+      this.dialog.open<boolean>(RestartDialogComponent, { context: { name: this.name() } })
+        .closed$,
+    );
+    if (!confirmed) {
+      return;
+    }
+    await this.run(() => this.api.invoke(restartCluster, { name: this.name() }));
+  }
 
   async openEdit(d: ClusterDetail): Promise<void> {
     const change = await firstValueFrom(
