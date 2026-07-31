@@ -72,13 +72,34 @@ pub async fn take_backup(cfg: &Config, kind: &str) -> anyhow::Result<()> {
         "incr" | "diff" | "full" => kind,
         other => anyhow::bail!("unknown backup type '{other}'"),
     };
-    let status = command(cfg, &["backup", &format!("--type={kind}")])
-        .status()
+    let out = command(cfg, &["backup", &format!("--type={kind}")])
+        .output()
         .await?;
-    if !status.success() {
-        anyhow::bail!("pgbackrest backup failed with {status}");
+    if !out.status.success() {
+        // Carry pgBackRest's own message: an exit code alone sends people
+        // digging through pod logs to find out what actually went wrong.
+        anyhow::bail!("{}", pgbackrest_error(&out.stdout, &out.stderr, out.status));
     }
     Ok(())
+}
+
+/// Pull the ERROR line out of pgBackRest's output, falling back to the exit
+/// status when it said nothing useful.
+pub fn pgbackrest_error(stdout: &[u8], stderr: &[u8], status: std::process::ExitStatus) -> String {
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(stdout),
+        String::from_utf8_lossy(stderr)
+    );
+    let message = combined
+        .lines()
+        .filter(|l| l.contains("ERROR:"))
+        .map(|l| l.split("ERROR:").nth(1).unwrap_or(l).trim().to_string())
+        .next_back();
+    match message {
+        Some(m) if !m.is_empty() => m.chars().take(400).collect(),
+        _ => format!("pgbackrest failed with {status}"),
+    }
 }
 
 pub async fn list_backups(cfg: &Config) -> anyhow::Result<Vec<BackupInfo>> {
@@ -169,5 +190,25 @@ mod tests {
     #[test]
     fn malformed_output_is_reported() {
         assert!(parse_info("not json").is_err());
+    }
+
+    #[test]
+    fn errors_carry_pgbackrests_own_message() {
+        let status = std::process::Command::new("false")
+            .status()
+            .expect("run false");
+        let stdout = b"P00   INFO: backup command begin\n\
+                       P00  ERROR: [051]: backup and archive info files exist but do not match the database\n\
+                       P00   INFO: backup command end: aborted";
+        let message = pgbackrest_error(stdout, b"", status);
+        assert!(
+            message.contains("do not match the database"),
+            "expected the pgbackrest message, got: {message}"
+        );
+        assert!(!message.contains("INFO"));
+
+        // With nothing useful in the output, fall back to the exit status.
+        let fallback = pgbackrest_error(b"", b"", status);
+        assert!(fallback.contains("pgbackrest failed"));
     }
 }

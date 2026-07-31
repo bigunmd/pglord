@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 
 use k8s_openapi::api::core::v1::ConfigMap;
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, OwnerReference};
 use kube::api::{Api, Patch, PatchParams};
 use serde::{Deserialize, Serialize};
 
@@ -108,6 +108,23 @@ async fn save(
 ) -> anyhow::Result<()> {
     let api: Api<ConfigMap> = Api::namespaced(client.clone(), ns);
     let name = runs_cm_name(cluster);
+    // Own the history from the spec ConfigMap so deleting a cluster takes its
+    // run history with it; otherwise a cluster recreated with the same name
+    // inherits a stranger's history.
+    let owner = api
+        .get_opt(&crate::spec_store::spec_cm_name(cluster))
+        .await
+        .ok()
+        .flatten()
+        .and_then(|spec_cm| spec_cm.metadata.uid)
+        .map(|uid| OwnerReference {
+            api_version: "v1".to_string(),
+            kind: "ConfigMap".to_string(),
+            name: crate::spec_store::spec_cm_name(cluster),
+            uid,
+            controller: Some(true),
+            block_owner_deletion: Some(true),
+        });
     let cm = ConfigMap {
         metadata: ObjectMeta {
             name: Some(name.clone()),
@@ -119,6 +136,7 @@ async fn save(
                     cluster.to_string(),
                 ),
             ])),
+            owner_references: owner.map(|o| vec![o]),
             ..Default::default()
         },
         data: Some(BTreeMap::from([(

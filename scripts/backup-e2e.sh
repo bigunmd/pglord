@@ -6,6 +6,9 @@ set -euo pipefail
 KUBECTL="minikube -p pglord kubectl --"
 API=http://127.0.0.1:18103
 BUCKET=pglord-backups
+# A previous run's stanza belongs to a different database; give each run its
+# own path so pgBackRest never sees a mismatched system identifier.
+PREFIX="e2e-$$"
 
 kill_pf() { pkill -f "kubectl.*port-forward.*pglord-server" 2>/dev/null || true; }
 cleanup() {
@@ -58,6 +61,7 @@ code=$(curl -s -o /tmp/bk.json -w '%{http_code}' -X POST "$API/api/v1/clusters" 
       \"s3_endpoint\":\"https://minio.pglord.svc.cluster.local:9000\",
       \"verify_tls\":false,
       \"s3_bucket\":\"$BUCKET\",
+      \"path_prefix\":\"$PREFIX\",
       \"s3_credentials_secret\":\"backup-credentials\",
       \"retention_full\":2
     }}")
@@ -138,7 +142,7 @@ echo "OK incremental backup taken and listed"
 
 echo "==> setting a schedule"
 code=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "$API/api/v1/clusters/bk" \
-  -H 'content-type: application/json' -d "{\"backup\":{\"enabled\":true,\"s3_endpoint\":\"https://minio.pglord.svc.cluster.local:9000\",\"verify_tls\":false,\"s3_bucket\":\"$BUCKET\",\"s3_credentials_secret\":\"backup-credentials\",\"retention_full\":2,\"schedule\":\"0 3 * * *\",\"schedule_kind\":\"incr\"}}")
+  -H 'content-type: application/json' -d "{\"backup\":{\"enabled\":true,\"s3_endpoint\":\"https://minio.pglord.svc.cluster.local:9000\",\"verify_tls\":false,\"s3_bucket\":\"$BUCKET\",\"path_prefix\":\"$PREFIX\",\"s3_credentials_secret\":\"backup-credentials\",\"retention_full\":2,\"schedule\":\"0 3 * * *\",\"schedule_kind\":\"incr\"}}")
 [ "$code" = "200" ] || { echo "FAIL: setting a schedule returned $code"; exit 1; }
 [ "$(field '/backups' "['schedule']")" = "0 3 * * *" ] || { echo "FAIL: schedule not reported"; exit 1; }
 # Nonsense and too-frequent schedules must be refused.
@@ -150,16 +154,16 @@ done
 echo "OK schedule stored, invalid schedules refused"
 
 echo "==> confirming objects really exist in the bucket"
-objects=$(mc ls --insecure --recursive "local/$BUCKET" | wc -l)
+objects=$(mc ls --insecure --recursive "local/$BUCKET/$PREFIX" | wc -l)
 [ "$objects" -gt 0 ] || { echo "FAIL: bucket is empty"; exit 1; }
-mc ls --insecure --recursive "local/$BUCKET" | grep -q 'backup' || { echo "FAIL: no backup objects in bucket"; exit 1; }
+mc ls --insecure --recursive "local/$BUCKET/$PREFIX" | grep -q 'backup' || { echo "FAIL: no backup objects in bucket"; exit 1; }
 echo "OK $objects objects in $BUCKET"
 
 echo "==> confirming WAL is archived"
 for _ in $(seq 1 30); do
   psql_on "SELECT pg_switch_wal()" >/dev/null
   sleep 2
-  mc ls --insecure --recursive "local/$BUCKET" | grep -q 'archive' && { archived=yes; break; }
+  mc ls --insecure --recursive "local/$BUCKET/$PREFIX" | grep -q 'archive' && { archived=yes; break; }
 done
 [ "${archived:-}" = "yes" ] || { echo "FAIL: no archived WAL in the repository"; exit 1; }
 echo "OK WAL archived to the repository"
