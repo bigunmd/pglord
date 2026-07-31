@@ -21,6 +21,7 @@ import {
   HlmDialogService,
   HlmDialogTitle,
 } from '@spartan-ng/helm/dialog';
+import { HlmDropdownMenuImports } from '@spartan-ng/helm/dropdown-menu';
 import { HlmTableImports } from '@spartan-ng/helm/table';
 import { firstValueFrom } from 'rxjs';
 
@@ -36,6 +37,7 @@ import { switchover } from '../../api/fn/clusters/switchover';
 import { WorkloadSpec } from '../../api/models/workload-spec';
 import { BackupSpec } from '../../api/models/backup-spec';
 import { BackupList } from '../../api/models/backup-list';
+import { BackupRun } from '../../api/models/backup-run';
 import { listBackups } from '../../api/fn/backups/list-backups';
 import { createBackup } from '../../api/fn/backups/create-backup';
 import { ClusterBackupDialogComponent } from './cluster-backup-dialog.component';
@@ -103,7 +105,14 @@ export class RestartDialogComponent {
 
 @Component({
   selector: 'pg-cluster-detail',
-  imports: [RouterLink, TranslocoModule, NgIcon, HlmButton, HlmTableImports],
+  imports: [
+    RouterLink,
+    TranslocoModule,
+    NgIcon,
+    HlmButton,
+    HlmTableImports,
+    HlmDropdownMenuImports,
+  ],
   providers: [
     provideIcons({
       lucideArrowLeft,
@@ -267,12 +276,30 @@ export class RestartDialogComponent {
                 hlmBtn
                 size="sm"
                 data-testid="backup-now"
-                [disabled]="busy()"
-                (click)="backupNow()"
+                [disabled]="busy() || backupRunning()"
+                [hlmDropdownMenuTrigger]="backupKindMenu"
               >
                 <ng-icon name="lucideDatabaseBackup" size="14" />
-                {{ 'backups.backupNow' | transloco }}
+                {{ (backupRunning() ? 'backups.running' : 'backups.backupNow') | transloco }}
               </button>
+              <ng-template #backupKindMenu>
+                <hlm-dropdown-menu class="w-64">
+                  @for (k of backupKinds; track k) {
+                    <button
+                      hlmDropdownMenuItem
+                      [attr.data-testid]="'backup-kind-' + k"
+                      (click)="backupNow(k)"
+                    >
+                      <span class="grid gap-0.5">
+                        <span>{{ 'backups.kinds.' + k | transloco }}</span>
+                        <span class="text-muted-foreground text-xs">
+                          {{ 'backups.kindHelp.' + k | transloco }}
+                        </span>
+                      </span>
+                    </button>
+                  }
+                </hlm-dropdown-menu>
+              </ng-template>
             }
             <button
               hlmBtn
@@ -294,7 +321,70 @@ export class RestartDialogComponent {
             <p class="text-muted-foreground mt-2 text-sm">
               <span class="font-mono text-xs">{{ b.repository }}</span>
               · {{ 'backups.keeping' | transloco: { count: d.backup.retention_full } }}
+              @if (b.schedule) {
+                · {{ 'backups.scheduled' | transloco: { cron: b.schedule } }}
+              } @else {
+                · {{ 'backups.manualOnly' | transloco }}
+              }
             </p>
+
+            @if (b.runs.length) {
+              <h3 class="text-muted-foreground mt-4 text-xs font-medium uppercase">
+                {{ 'backups.runs' | transloco }}
+              </h3>
+              <div class="border-border mt-1 overflow-x-auto rounded-lg border">
+                <table hlmTable class="w-full">
+                  <thead hlmTHead>
+                    <tr hlmTr>
+                      <th hlmTh>{{ 'backups.state' | transloco }}</th>
+                      <th hlmTh>{{ 'backups.kind' | transloco }}</th>
+                      <th hlmTh>{{ 'backups.trigger' | transloco }}</th>
+                      <th hlmTh>{{ 'backups.started' | transloco }}</th>
+                      <th hlmTh>{{ 'backups.duration' | transloco }}</th>
+                    </tr>
+                  </thead>
+                  <tbody hlmTBody>
+                    @for (r of b.runs; track r.id) {
+                      <tr hlmTr [attr.data-testid]="'run-' + r.id">
+                        <td hlmTd>
+                          <span class="inline-flex items-center gap-1.5 text-sm">
+                            <span
+                              class="h-2.5 w-2.5 rounded-full"
+                              [class.bg-primary]="r.state === 'running'"
+                              [class.animate-pulse]="r.state === 'running'"
+                              [class.bg-success]="r.state === 'succeeded'"
+                              [class.bg-destructive]="r.state === 'failed'"
+                              [class.bg-warning]="r.state === 'unknown'"
+                            ></span>
+                            {{ 'backups.states.' + r.state | transloco }}
+                          </span>
+                        </td>
+                        <td hlmTd class="text-sm">{{ 'backups.kinds.' + r.kind | transloco }}</td>
+                        <td hlmTd class="text-muted-foreground text-sm">
+                          {{ 'backups.triggers.' + r.trigger | transloco }}
+                        </td>
+                        <td hlmTd class="text-muted-foreground text-xs">
+                          {{ formatTime(r.started) }}
+                        </td>
+                        <td hlmTd class="font-mono text-xs tabular-nums">
+                          {{ formatDuration(r) }}
+                        </td>
+                      </tr>
+                      @if (r.error) {
+                        <tr hlmTr>
+                          <td hlmTd colspan="5" class="text-destructive pt-0 text-xs">
+                            {{ r.error }}
+                          </td>
+                        </tr>
+                      }
+                    }
+                  </tbody>
+                </table>
+              </div>
+              <h3 class="text-muted-foreground mt-4 text-xs font-medium uppercase">
+                {{ 'backups.inRepository' | transloco }}
+              </h3>
+            }
             @if (b.backups.length) {
               <div class="border-border mt-2 overflow-x-auto rounded-lg border">
                 <table hlmTable class="w-full">
@@ -438,8 +528,25 @@ export class ClusterDetailComponent implements OnDestroy {
     await this.run(() => this.api.invoke(patchCluster, { name: this.name(), body: { backup } }));
   }
 
-  async backupNow(): Promise<void> {
-    await this.run(() => this.api.invoke(createBackup, { name: this.name() }));
+  protected readonly backupKinds = ['full', 'diff', 'incr'] as const;
+
+  /** A backup is in flight; the button waits rather than queueing another. */
+  protected backupRunning(): boolean {
+    return (this.backups()?.runs ?? []).some((r) => r.state === 'running');
+  }
+
+  protected formatDuration(run: BackupRun): string {
+    const end = run.finished ?? Math.floor(Date.now() / 1000);
+    const seconds = Math.max(0, end - run.started);
+    if (seconds < 60) {
+      return `${seconds}s`;
+    }
+    const minutes = Math.floor(seconds / 60);
+    return minutes < 60 ? `${minutes}m ${seconds % 60}s` : `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+  }
+
+  async backupNow(kind: 'full' | 'diff' | 'incr'): Promise<void> {
+    await this.run(() => this.api.invoke(createBackup, { name: this.name(), body: { kind } }));
   }
   /** Blocks concurrent operations so a double-click cannot fire twice. */
   protected readonly busy = signal(false);

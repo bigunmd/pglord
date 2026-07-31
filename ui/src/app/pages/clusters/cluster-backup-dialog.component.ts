@@ -126,6 +126,50 @@ import { BackupSpec } from '../../api/models/backup-spec';
             </div>
           </div>
 
+          <div class="border-border grid gap-4 border-t pt-6">
+            <div class="grid gap-2">
+              <label hlmLabel for="bk-schedule">{{ 'backups.schedule' | transloco }}</label>
+              <input
+                hlmInput
+                id="bk-schedule"
+                data-testid="backup-schedule"
+                placeholder="0 3 * * *"
+                class="font-mono"
+                [ngModel]="schedule()"
+                (ngModelChange)="schedule.set($event)"
+              />
+              <p class="text-muted-foreground text-xs leading-relaxed">
+                {{ 'backups.scheduleHelp' | transloco }}
+              </p>
+            </div>
+
+            @if (schedule().trim()) {
+              <div class="grid gap-2">
+                <span hlmLabel>{{ 'backups.scheduleKind' | transloco }}</span>
+                <div class="bg-muted grid grid-cols-3 gap-1 rounded-lg p-1" role="tablist">
+                  @for (k of kinds; track k) {
+                    <button
+                      type="button"
+                      class="cursor-pointer rounded-md px-2 py-1.5 text-sm font-medium transition-colors"
+                      [class.bg-background]="scheduleKind() === k"
+                      [class.shadow-sm]="scheduleKind() === k"
+                      [class.text-muted-foreground]="scheduleKind() !== k"
+                      role="tab"
+                      [attr.aria-selected]="scheduleKind() === k"
+                      [attr.data-testid]="'schedule-kind-' + k"
+                      (click)="scheduleKind.set(k)"
+                    >
+                      {{ 'backups.kinds.' + k | transloco }}
+                    </button>
+                  }
+                </div>
+                <p class="text-muted-foreground text-xs leading-relaxed">
+                  {{ 'backups.kindHelp.' + scheduleKind() | transloco }}
+                </p>
+              </div>
+            }
+          </div>
+
           <label class="flex cursor-pointer items-start gap-3">
             <input
               type="checkbox"
@@ -171,6 +215,11 @@ export class ClusterBackupDialogComponent {
   protected readonly prefix = signal(this.ctx.backup.path_prefix ?? '');
   protected readonly retention = signal(this.ctx.backup.retention_full ?? 2);
   protected readonly verifyTls = signal(this.ctx.backup.verify_tls ?? true);
+  protected readonly schedule = signal(this.ctx.backup.schedule ?? '');
+  protected readonly kinds = ['full', 'diff', 'incr'] as const;
+  protected readonly scheduleKind = signal<'full' | 'diff' | 'incr'>(
+    this.ctx.backup.schedule_kind ?? 'full',
+  );
 
   /** pgBackRest requires TLS, so only https endpoints are accepted. */
   protected readonly endpointValid = computed(() => /^https:\/\/.+/.test(this.endpoint().trim()));
@@ -198,6 +247,8 @@ export class ClusterBackupDialogComponent {
       path_prefix: trimmed(this.prefix()),
       retention_full: this.retention(),
       verify_tls: this.verifyTls(),
+      schedule: trimmed(this.schedule()),
+      schedule_kind: this.scheduleKind(),
     });
   }
 }

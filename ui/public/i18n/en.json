@@ -34,7 +34,39 @@
     "finished": "Finished",
     "noRestoreYet": "Restoring from a backup is not available yet — take a pg_dump before anything irreversible.",
     "verifyTls": "Verify the storage certificate",
-    "verifyTlsHelp": "Leave on for real object storage. Turn off only if your endpoint uses a self-signed certificate."
+    "verifyTlsHelp": "Leave on for real object storage. Turn off only if your endpoint uses a self-signed certificate.",
+    "schedule": "Schedule (cron, UTC)",
+    "scheduleHelp": "Standard five-field cron, for example 0 3 * * * for 03:00 daily or 0 3 * * 0 for Sundays. Leave empty to back up only when you ask. Minimum interval is 15 minutes.",
+    "scheduleKind": "Scheduled backup type",
+    "scheduled": "scheduled {{cron}}",
+    "manualOnly": "manual backups only",
+    "running": "Backup running…",
+    "runs": "Recent runs",
+    "inRepository": "In the repository",
+    "state": "State",
+    "trigger": "Trigger",
+    "started": "Started",
+    "duration": "Duration",
+    "kinds": {
+      "full": "Full",
+      "diff": "Differential",
+      "incr": "Incremental"
+    },
+    "kindHelp": {
+      "full": "Everything. Slowest and largest, and the base the others build on.",
+      "diff": "Only what changed since the last full backup.",
+      "incr": "Only what changed since the last backup of any type. Smallest and quickest."
+    },
+    "states": {
+      "running": "Running",
+      "succeeded": "Succeeded",
+      "failed": "Failed",
+      "unknown": "Unknown"
+    },
+    "triggers": {
+      "manual": "Manual",
+      "schedule": "Scheduled"
+    }
   },
   "workload": {
     "title": "Placement and resources",
