@@ -8,6 +8,36 @@
     "clusters": "Clusters",
     "permissions": "Permissions"
   },
+  "workload": {
+    "title": "Placement and resources",
+    "edit": "Edit placement",
+    "editTitle": "Placement and resources",
+    "antiAffinity": "Instance spreading",
+    "antiAffinityModes": {
+      "preferred": "Preferred",
+      "required": "Required",
+      "disabled": "Off"
+    },
+    "antiAffinityHelp": {
+      "preferred": "Instances are spread across nodes when possible, and still schedule if only one node is available.",
+      "required": "Instances never share a node. On a cluster with fewer nodes than instances, the extra instances stay pending.",
+      "disabled": "Instances may share a node, so one node failure can take the whole cluster down."
+    },
+    "resources": "Resources",
+    "resourcesHelp": "Quantities like 100m, 1, 256Mi or 2Gi. Leave blank to set no limit.",
+    "cpu_request": "CPU request",
+    "cpu_limit": "CPU limit",
+    "memory_request": "Memory request",
+    "memory_limit": "Memory limit",
+    "labels": "Labels",
+    "annotations": "Annotations",
+    "keyPlaceholder": "key",
+    "valuePlaceholder": "value",
+    "addRow": "Add",
+    "removeRow": "Remove",
+    "reservedKey": "'{{key}}' is reserved by pglord and cannot be used.",
+    "apply": "Apply"
+  },
   "config": {
     "title": "Configuration",
     "edit": "Edit configuration",

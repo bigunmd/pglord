@@ -8,6 +8,7 @@ import {
   lucidePencil,
   lucidePower,
   lucideRefreshCw,
+  lucideServer,
   lucideSettings,
   lucideTriangleAlert,
 } from '@ng-icons/lucide';
@@ -31,8 +32,10 @@ import { listGucs } from '../../api/fn/system/list-gucs';
 import { patchCluster } from '../../api/fn/clusters/patch-cluster';
 import { restartCluster } from '../../api/fn/clusters/restart-cluster';
 import { switchover } from '../../api/fn/clusters/switchover';
+import { WorkloadSpec } from '../../api/models/workload-spec';
 import { ClusterConfigDialogComponent } from './cluster-config-dialog.component';
 import { ClusterEditDialogComponent } from './cluster-edit-dialog.component';
+import { ClusterWorkloadDialogComponent } from './cluster-workload-dialog.component';
 
 const REFRESH_MS = 5000;
 
@@ -96,6 +99,7 @@ export class RestartDialogComponent {
       lucidePencil,
       lucidePower,
       lucideRefreshCw,
+      lucideServer,
       lucideSettings,
       lucideTriangleAlert,
     }),
@@ -207,6 +211,40 @@ export class RestartDialogComponent {
           </table>
         </div>
 
+        <!-- Placement and resources -->
+        <div class="mt-6 flex items-center justify-between">
+          <h2 class="font-medium">{{ 'workload.title' | transloco }}</h2>
+          <button
+            hlmBtn
+            variant="outline"
+            size="sm"
+            data-testid="open-workload"
+            [disabled]="busy()"
+            (click)="openWorkload(d)"
+          >
+            <ng-icon name="lucideServer" size="14" />
+            {{ 'workload.edit' | transloco }}
+          </button>
+        </div>
+        <dl class="text-muted-foreground mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
+          <dt>{{ 'workload.antiAffinity' | transloco }}</dt>
+          <dd class="text-foreground" data-testid="workload-anti-affinity">
+            {{ 'workload.antiAffinityModes.' + (d.workload.anti_affinity ?? 'preferred') | transloco }}
+          </dd>
+          <dt>{{ 'workload.resources' | transloco }}</dt>
+          <dd class="text-foreground font-mono text-xs" data-testid="workload-resources">
+            {{ resourceSummary(d.workload) }}
+          </dd>
+          @if (labelSummary(d.workload); as l) {
+            <dt>{{ 'workload.labels' | transloco }}</dt>
+            <dd class="text-foreground font-mono text-xs">{{ l }}</dd>
+          }
+          @if (annotationSummary(d.workload); as a) {
+            <dt>{{ 'workload.annotations' | transloco }}</dt>
+            <dd class="text-foreground font-mono text-xs">{{ a }}</dd>
+          }
+        </dl>
+
         <!-- Configuration -->
         <div class="mt-6 flex items-center justify-between">
           <h2 class="font-medium">{{ 'config.title' | transloco }}</h2>
@@ -287,6 +325,37 @@ export class ClusterDetailComponent implements OnDestroy {
     return Object.entries(d.parameters ?? {})
       .map(([name, value]) => ({ name, value }))
       .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  protected resourceSummary(w: WorkloadSpec): string {
+    const r = w.resources ?? {};
+    const parts = [
+      r.cpu_request ? `cpu ${r.cpu_request}` : null,
+      r.cpu_limit ? `cpu limit ${r.cpu_limit}` : null,
+      r.memory_request ? `mem ${r.memory_request}` : null,
+      r.memory_limit ? `mem limit ${r.memory_limit}` : null,
+    ].filter(Boolean);
+    return parts.length ? parts.join(' · ') : '—';
+  }
+
+  protected labelSummary(w: WorkloadSpec): string {
+    return summarizeMap(w.labels);
+  }
+
+  protected annotationSummary(w: WorkloadSpec): string {
+    return summarizeMap(w.annotations);
+  }
+
+  async openWorkload(d: ClusterDetail): Promise<void> {
+    const workload = await firstValueFrom(
+      this.dialog.open<WorkloadSpec | undefined>(ClusterWorkloadDialogComponent, {
+        context: { workload: d.workload },
+      }).closed$,
+    );
+    if (!workload) {
+      return;
+    }
+    await this.run(() => this.api.invoke(patchCluster, { name: this.name(), body: { workload } }));
   }
 
   async openConfig(d: ClusterDetail): Promise<void> {
@@ -378,4 +447,9 @@ export class ClusterDetailComponent implements OnDestroy {
       this.error.set(e?.error?.detail ?? e?.error?.code ?? e?.message ?? 'Request failed');
     }
   }
+}
+
+function summarizeMap(map: Record<string, string> | undefined): string {
+  const entries = Object.entries(map ?? {});
+  return entries.map(([k, v]) => `${k}=${v}`).join(' · ');
 }

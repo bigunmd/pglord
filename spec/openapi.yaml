@@ -280,6 +280,12 @@ paths:
                 $ref: '#/components/schemas/VersionResponse'
 components:
   schemas:
+    AntiAffinity:
+      type: string
+      enum:
+      - preferred
+      - required
+      - disabled
     ClusterDetail:
       type: object
       required:
@@ -290,6 +296,7 @@ components:
       - ready_replicas
       - primary
       - parameters
+      - workload
       - pending_restart
       - instances
       properties:
@@ -323,6 +330,9 @@ components:
           minimum: 0
         storage_size:
           type: string
+        workload:
+          $ref: '#/components/schemas/WorkloadSpec'
+          description: Scheduling, resources and Kubernetes metadata for the instances.
     ClusterSpec:
       type: object
       required:
@@ -351,6 +361,9 @@ components:
         storage_size:
           type: string
           description: PVC size per instance, e.g. "1Gi".
+        workload:
+          $ref: '#/components/schemas/WorkloadSpec'
+          description: Scheduling, resources and Kubernetes metadata for the instances.
     ClusterSummary:
       type: object
       required:
@@ -492,6 +505,25 @@ components:
         type:
           type: string
           description: 'URI reference identifying the problem type: `{PROBLEM_BASE_URL}/{code}`.'
+    Resources:
+      type: object
+      properties:
+        cpu_limit:
+          type:
+          - string
+          - 'null'
+        cpu_request:
+          type:
+          - string
+          - 'null'
+        memory_limit:
+          type:
+          - string
+          - 'null'
+        memory_request:
+          type:
+          - string
+          - 'null'
     SpecChange:
       type: object
       description: |-
@@ -520,6 +552,13 @@ components:
           type:
           - string
           - 'null'
+        workload:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/WorkloadSpec'
+            description: |-
+              Full replacement of the workload block. StorageClass must match the
+              current one (volume claim templates are immutable).
     SwitchoverRequest:
       type: object
       required:
@@ -528,6 +567,27 @@ components:
         target:
           type: string
           description: Pod to promote, e.g. "demo-1".
+    Toleration:
+      type: object
+      required:
+      - key
+      properties:
+        effect:
+          type:
+          - string
+          - 'null'
+          description: '"NoSchedule", "PreferNoSchedule" or "NoExecute".'
+        key:
+          type: string
+        operator:
+          type:
+          - string
+          - 'null'
+          description: '"Equal" (default) or "Exists".'
+        value:
+          type:
+          - string
+          - 'null'
     VersionResponse:
       type: object
       required:
@@ -535,3 +595,46 @@ components:
       properties:
         version:
           type: string
+    WorkloadSpec:
+      type: object
+      properties:
+        annotations:
+          type: object
+          additionalProperties:
+            type: string
+          propertyNames:
+            type: string
+        anti_affinity:
+          $ref: '#/components/schemas/AntiAffinity'
+        image_pull_secrets:
+          type: array
+          items:
+            type: string
+        labels:
+          type: object
+          description: Extra labels on instance pods (cost allocation, scrape selection).
+          additionalProperties:
+            type: string
+          propertyNames:
+            type: string
+        node_selector:
+          type: object
+          additionalProperties:
+            type: string
+          propertyNames:
+            type: string
+        priority_class_name:
+          type:
+          - string
+          - 'null'
+        resources:
+          $ref: '#/components/schemas/Resources'
+        storage_class:
+          type:
+          - string
+          - 'null'
+          description: StorageClass for instance volumes. Immutable after creation.
+        tolerations:
+          type: array
+          items:
+            $ref: '#/components/schemas/Toleration'
