@@ -1,0 +1,28 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pglord-server
+  namespace: pglord
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: pglord-server }
+  template:
+    metadata:
+      labels: { app: pglord-server }
+    spec:
+      serviceAccountName: pglord-server
+      containers:
+        - name: server
+          image: pglord-server:dev
+          imagePullPolicy: Never # loaded via `minikube image load`
+          ports: [{ containerPort: 8080, name: http }]
+          env:
+            - { name: PGLORD_LOG_LEVEL, value: "info" }
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+          resources:
+            requests: { cpu: 50m, memory: 32Mi }
+            limits: { memory: 128Mi }

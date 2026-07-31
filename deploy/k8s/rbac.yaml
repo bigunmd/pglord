@@ -1,0 +1,35 @@
+# Namespaced-only RBAC: pglord standalone mode never needs cluster-admin.
+# The Role is sized for the coming reconciler (statefulsets/services/configmaps/
+# secrets/pods), not just the current server.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pglord-server
+  namespace: pglord
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: pglord-server
+  namespace: pglord
+rules:
+  - apiGroups: [""]
+    resources: [configmaps, secrets, services, pods]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [apps]
+    resources: [statefulsets]
+    verbs: [get, list, watch, create, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: pglord-server
+  namespace: pglord
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: pglord-server
+subjects:
+  - kind: ServiceAccount
+    name: pglord-server
+    namespace: pglord
