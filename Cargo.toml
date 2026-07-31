@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/pglord-core", "crates/pglord-server"]
+members = ["crates/pglord-agent", "crates/pglord-core", "crates/pglord-server"]
 
 [workspace.package]
 version = "0.1.0"
