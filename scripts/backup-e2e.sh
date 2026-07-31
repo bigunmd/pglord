@@ -78,9 +78,12 @@ echo "OK incomplete repository refused"
 
 echo "==> restarting so WAL archiving takes effect"
 curl -s -o /dev/null -X POST "$API/api/v1/clusters/bk/restart"
-sleep 10
-for _ in $(seq 1 90); do
-  [ "$(field '' "['ready_replicas']")" = "1" ] && break
+# ready_replicas still reports the *old* pod until Kubernetes deletes it, so
+# wait on the pod itself: gone, then back and Ready, then settled.
+$KUBECTL -n pglord wait --for=delete pod/bk-0 --timeout=120s >/dev/null 2>&1 || true
+$KUBECTL -n pglord wait --for=condition=Ready pod/bk-0 --timeout=180s >/dev/null 2>&1 || true
+for _ in $(seq 1 60); do
+  [ "$(psql_on "SHOW archive_mode")" = "on" ] && break
   sleep 2
 done
 archive=$(psql_on "SHOW archive_mode")
@@ -95,7 +98,12 @@ for _ in $(seq 1 90); do
   [ "$count" = "1" ] && break
   sleep 4
 done
-[ "$count" = "1" ] || { echo "FAIL: no backup listed (count='$count')"; $KUBECTL -n pglord logs bk-0 --tail 30; exit 1; }
+[ "$count" = "1" ] || {
+  echo "FAIL: no backup listed (count='$count')"
+  echo "run records:"; curl -s "$API/api/v1/clusters/bk/backups" | python3 -m json.tool | head -30
+  $KUBECTL -n pglord logs bk-0 --tail 30
+  exit 1
+}
 kind=$(field '/backups' "['backups'][0]['kind']")
 size=$(field '/backups' "['backups'][0]['size_bytes']")
 [ "$kind" = "full" ] || { echo "FAIL: backup type '$kind'"; exit 1; }
