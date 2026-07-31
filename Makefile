@@ -39,8 +39,13 @@ image: ## Build server docker image
 stand-up: ## Start minikube dev stand (profile: pglord)
 	minikube start -p $(PROFILE) --driver=docker
 
+# minikube keeps cached tags, and `image rm` fails while a running pod uses
+# the image — scale the server down before swapping (see scripts/cluster-e2e.sh).
 stand-image: image ## Build + load server image into minikube
-	minikube -p $(PROFILE) image load --overwrite $(IMAGE)
+	$(KUBECTL) -n pglord scale deploy/pglord-server --replicas=0 2>/dev/null || true
+	$(KUBECTL) -n pglord wait --for=delete pod -l app=pglord-server --timeout=60s 2>/dev/null || true
+	minikube -p $(PROFILE) image rm docker.io/library/$(IMAGE) || true
+	minikube -p $(PROFILE) image load $(IMAGE)
 
 stand-deploy: stand-image ## Deploy pglord into the stand
 	$(KUBECTL) apply -f deploy/k8s/namespace.yaml
@@ -57,6 +62,9 @@ agent-image: ## Build agent docker image (postgres:17 base)
 
 agent-e2e: ## Docker e2e: replication + promotion with two agents
 	./scripts/agent-e2e.sh
+
+cluster-e2e: ## Minikube e2e: cluster via REST API with streaming replication
+	./scripts/cluster-e2e.sh
 
 ui-install: ## Install UI dependencies
 	cd ui && npm ci
