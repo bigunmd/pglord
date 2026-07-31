@@ -4,6 +4,9 @@ Control plane for HA PostgreSQL clusters on Kubernetes: deploy, control, and mon
 highly-available Postgres from a web UI or REST API — standalone in your own namespace
 (no cluster-admin required) or, later, as a cluster operator.
 
+**Using pglord? Start with the [user guide](docs/user-guide.md)** — install,
+create a cluster, and connect an application to it.
+
 Status: early foundation. See `docs/superpowers/specs/` for the design and
 `docs/superpowers/plans/` for implementation plans.
 
