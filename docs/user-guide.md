@@ -137,7 +137,46 @@ Uncommitted transactions on the old primary are lost. This is asynchronous
 replication: a small window of recently-committed writes can be lost if the
 primary fails before the standby receives them.
 
-## 6. Delete a cluster
+## 6. Day-2 operations
+
+Open a cluster from the Clusters list to reach these.
+
+### Switch the primary on purpose
+
+Before draining a node, upgrading it, or moving load off an instance, hand the
+primary role to a specific standby: **Make primary** on that instance's row,
+then confirm. The old primary steps down, the chosen instance takes over, and
+`<name>-rw` follows within seconds.
+
+Only ready standbys offer the button. Promoting an instance that is not
+streaming would lose whatever WAL it never received, so pglord refuses.
+
+As with a failover, applications see a brief dropped connection and reconnect.
+
+### Add or remove instances
+
+**Edit → Instances.** Adding an instance provisions it and clones the current
+primary automatically; it starts streaming when the clone finishes.
+
+Removing instances **deletes their data volumes**. Only the highest-numbered
+instances are removed, and the primary is never one of them.
+
+### Grow storage
+
+**Edit → Storage per instance.** Storage can only grow — Kubernetes cannot
+shrink a volume — and your StorageClass must have `allowVolumeExpansion: true`.
+If it does not, the change is rejected and nothing is modified. Check with:
+
+```bash
+kubectl get storageclass -o custom-columns=NAME:.metadata.name,EXPANSION:.allowVolumeExpansion
+```
+
+Depending on the storage driver, a filesystem resize may only complete when the
+instance restarts.
+
+Changing the cluster name or image after creation is not supported.
+
+## 7. Delete a cluster
 
 **Clusters → trash icon → Delete.** This removes the instances, their persistent
 volumes, and the generated credentials. It cannot be undone; take a dump first if
@@ -150,7 +189,7 @@ kubectl -n pglord exec <name>-0 -- \
 
 Scheduled backups to object storage are on the roadmap, not shipped yet.
 
-## 7. Troubleshooting
+## 8. Troubleshooting
 
 | Symptom | Likely cause and fix |
 |---|---|
@@ -168,5 +207,5 @@ Scheduled backups to object storage are on the roadmap, not shipped yet.
 - No scheduled backups or point-in-time restore yet.
 - Custom images must be built on the pglord agent image; stock `postgres:NN`
   images are not usable yet.
-- Changing a cluster's settings after creation is not supported yet; the
-  supported flow is create and delete.
+- Cluster name and image cannot be changed after creation (instances and
+  storage can — see Day-2 operations).

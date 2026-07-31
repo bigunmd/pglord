@@ -73,6 +73,9 @@ cluster-e2e: ## Minikube e2e: cluster via REST API with streaming replication
 failover-e2e: ## Minikube e2e: kill primary -> promote, repoint, rejoin
 	./scripts/failover-e2e.sh
 
+day2-e2e: ## Minikube e2e: planned switchover and scale-up
+	./scripts/day2-e2e.sh
+
 ui-install: ## Install UI dependencies
 	cd ui && npm ci
 
