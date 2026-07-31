@@ -2,10 +2,26 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>PglordUi</title>
+  <title>pglord</title>
   <base href="/">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="icon" type="image/x-icon" href="favicon.ico">
+  <script>
+    // Anti-FOUC: apply the persisted theme before first paint.
+    (function () {
+      try {
+        var settings = JSON.parse(localStorage.getItem('pglord.settings') || '{}');
+        var mode = settings.theme || 'system';
+        var dark =
+          mode === 'dark' ||
+          (mode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        document.documentElement.classList.toggle('dark', dark);
+        document.documentElement.style.colorScheme = mode === 'system' ? 'light dark' : mode;
+      } catch (e) {
+        /* first visit or corrupted settings: default light */
+      }
+    })();
+  </script>
 </head>
 <body>
   <pg-root></pg-root>

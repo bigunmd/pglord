@@ -1,5 +1,3 @@
-/* To learn more about Typescript configuration file: https://www.typescriptlang.org/docs/handbook/tsconfig-json.html. */
-/* To learn more about Angular compiler options: https://angular.dev/reference/configs/angular-compiler-options. */
 {
   "compileOnSave": false,
   "compilerOptions": {
@@ -12,7 +10,13 @@
     "experimentalDecorators": true,
     "importHelpers": true,
     "target": "ES2022",
-    "module": "preserve"
+    "module": "preserve",
+    "paths": {
+      "@spartan-ng/helm/button": ["./src/app/ui/button/src/index.ts"],
+      "@spartan-ng/helm/utils": ["./src/app/ui/utils/src/index.ts"],
+      "@spartan-ng/helm/card": ["./src/app/ui/card/src/index.ts"],
+      "@spartan-ng/helm/dropdown-menu": ["./src/app/ui/dropdown-menu/src/index.ts"]
+    }
   },
   "angularCompilerOptions": {
     "enableI18nLegacyMessageIdFormat": false,

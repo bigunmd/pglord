@@ -5,6 +5,10 @@ const tseslint = require('typescript-eslint');
 const angular = require('angular-eslint');
 
 module.exports = defineConfig([
+  // Generated API client is machine-written; never lint it.
+  {
+    ignores: ['src/app/api/**'],
+  },
   {
     files: ['**/*.ts'],
     extends: [
@@ -31,6 +35,21 @@ module.exports = defineConfig([
           style: 'kebab-case',
         },
       ],
+    },
+  },
+  // Vendored spartan helm layer keeps its upstream `hlm` selector prefix so
+  // regenerating components stays a no-op.
+  {
+    files: ['src/app/ui/**/*.ts'],
+    rules: {
+      '@angular-eslint/directive-selector': 'off',
+      '@angular-eslint/component-selector': 'off',
+      '@angular-eslint/component-class-suffix': 'off',
+      '@angular-eslint/directive-class-suffix': 'off',
+      '@angular-eslint/no-input-rename': 'off',
+      '@angular-eslint/no-output-rename': 'off',
+      '@typescript-eslint/consistent-type-definitions': 'off',
+      '@typescript-eslint/no-explicit-any': 'off',
     },
   },
   {

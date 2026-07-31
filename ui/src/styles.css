@@ -1,1 +1,80 @@
-/* You can add global styles to this file, and also import other style files */
+/* Tailwind v4 CSS-first config. The explicit layer split is required so the
+   spartan preset lands in the right cascade layer. */
+@layer theme, base, components, utilities;
+@import 'tailwindcss/theme.css' layer(theme);
+@import 'tailwindcss/preflight.css' layer(base);
+@import 'tailwindcss/utilities.css';
+
+@import '@spartan-ng/brain/hlm-tailwind-preset.css';
+
+@import '@fontsource-variable/inter';
+@import '@fontsource-variable/jetbrains-mono';
+
+/* pglord palette — derived from the PostgreSQL brand blue #336791.
+   Light mode sits on cool off-whites; dark mode on a deep Postgres navy. */
+:root {
+  color-scheme: light;
+  --background: #fbfcfd;
+  --foreground: #10202e;
+  --card: #ffffff;
+  --card-foreground: #10202e;
+  --popover: #ffffff;
+  --popover-foreground: #10202e;
+  --primary: #336791; /* PostgreSQL brand blue */
+  --primary-foreground: #ffffff;
+  --secondary: #e7eef4;
+  --secondary-foreground: #244a68;
+  --muted: #eff3f7;
+  --muted-foreground: #587184;
+  --accent: #dcebf5;
+  --accent-foreground: #244a68;
+  --destructive: #c0392b;
+  --destructive-foreground: #ffffff;
+  --border: #d8e1e9;
+  --input: #d8e1e9;
+  --ring: #336791;
+  --success: #2e7d4f;
+  --warning: #b7791f;
+  --radius: 0.5rem;
+  --font-sans: 'Inter Variable', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono Variable', ui-monospace, monospace;
+}
+
+:root.dark {
+  color-scheme: dark;
+  --background: #0d1620; /* deep Postgres navy */
+  --foreground: #dbe6ef;
+  --card: #131f2b;
+  --card-foreground: #dbe6ef;
+  --popover: #131f2b;
+  --popover-foreground: #dbe6ef;
+  --primary: #6ba5cd; /* lightened Postgres blue for dark surfaces */
+  --primary-foreground: #0d1620;
+  --secondary: #1c2c3a;
+  --secondary-foreground: #b9cbda;
+  --muted: #192634;
+  --muted-foreground: #8aa0b4;
+  --accent: #223f55;
+  --accent-foreground: #cfe2f0;
+  --destructive: #e5534b;
+  --destructive-foreground: #10202e;
+  --border: #243849;
+  --input: #243849;
+  --ring: #6ba5cd;
+  --success: #4caf7d;
+  --warning: #d29a3d;
+}
+
+@theme inline {
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground font-sans;
+  }
+}
