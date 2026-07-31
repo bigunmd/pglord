@@ -19,6 +19,50 @@ pub struct ClusterSummary {
     pub ready_replicas: i32,
 }
 
+#[derive(Serialize, ToSchema)]
+pub struct InstanceDto {
+    /// Pod name, e.g. "demo-0".
+    pub pod: String,
+    /// "primary" | "standby" | "unknown" (agent unreachable).
+    pub role: String,
+    pub ready: bool,
+    /// Current/receive WAL LSN as reported by the agent.
+    pub lsn: Option<String>,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct ClusterDetail {
+    pub name: String,
+    pub image: String,
+    pub replicas: u8,
+    pub storage_size: String,
+    pub ready_replicas: i32,
+    /// Recorded primary pod (the single writer per the primary record).
+    pub primary: String,
+    pub instances: Vec<InstanceDto>,
+}
+
+/// Map an agent observation to the user-facing role string.
+pub fn role_of(in_recovery: Option<bool>) -> &'static str {
+    match in_recovery {
+        Some(false) => "primary",
+        Some(true) => "standby",
+        None => "unknown",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::role_of;
+
+    #[test]
+    fn role_mapping_matches_recovery_state() {
+        assert_eq!(role_of(Some(false)), "primary");
+        assert_eq!(role_of(Some(true)), "standby");
+        assert_eq!(role_of(None), "unknown");
+    }
+}
+
 fn ops(state: &Option<ClusterOps>) -> Result<&ClusterOps, ApiError> {
     state.as_ref().ok_or_else(|| {
         ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "kube_unavailable")
@@ -97,26 +141,52 @@ pub async fn list_clusters(
     Ok(Json(out))
 }
 
-/// Get one cluster.
+/// Get one cluster with per-instance topology.
 #[utoipa::path(
     get,
     path = "/api/v1/clusters/{name}",
     tag = "clusters",
     params(("name" = String, Path, description = "Cluster name")),
     responses(
-        (status = 200, description = "Cluster", body = ClusterSummary),
+        (status = 200, description = "Cluster detail", body = ClusterDetail),
         (status = 404, description = "Not found", body = crate::error::ProblemDetails, content_type = "application/problem+json"),
     )
 )]
 pub async fn get_cluster(
     State(state): State<Option<ClusterOps>>,
     Path(name): Path<String>,
-) -> Result<Json<ClusterSummary>, ApiError> {
+) -> Result<Json<ClusterDetail>, ApiError> {
     let ops = ops(&state)?;
-    match ops.store.get(&name).await.map_err(ApiError::internal)? {
-        Some((spec, _owner)) => Ok(Json(summarize(ops, spec).await)),
-        None => Err(ApiError::not_found()),
-    }
+    let Some((spec, _owner)) = ops.store.get(&name).await.map_err(ApiError::internal)? else {
+        return Err(ApiError::not_found());
+    };
+    let primary = ops
+        .store
+        .primary(&name)
+        .await
+        .map_err(ApiError::internal)?
+        .unwrap_or_else(|| format!("{name}-0"));
+    let observations =
+        crate::instance_probe::observe_cluster(&ops.http, &spec.name, &ops.ns, spec.replicas).await;
+    let ready_replicas = observations.iter().filter(|o| o.ready).count() as i32;
+    let instances = observations
+        .into_iter()
+        .map(|o| InstanceDto {
+            role: role_of(o.in_recovery).to_string(),
+            pod: o.pod,
+            ready: o.ready,
+            lsn: o.lsn,
+        })
+        .collect();
+    Ok(Json(ClusterDetail {
+        name: spec.name,
+        image: spec.image,
+        replicas: spec.replicas,
+        storage_size: spec.storage_size,
+        ready_replicas,
+        primary,
+        instances,
+    }))
 }
 
 /// Delete a cluster (children are garbage-collected via ownerReferences).

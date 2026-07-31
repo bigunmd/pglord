@@ -67,6 +67,9 @@ pub trait SpecStore: Send + Sync {
     async fn get(&self, name: &str) -> anyhow::Result<Option<(ClusterSpec, OwnerRef)>>;
     async fn put(&self, spec: &ClusterSpec) -> anyhow::Result<()>;
     async fn delete(&self, name: &str) -> anyhow::Result<bool>;
+    /// The recorded primary pod for the cluster, if the spec exists
+    /// (annotation on the spec object; caller applies the `<name>-0` default).
+    async fn primary(&self, name: &str) -> anyhow::Result<Option<String>>;
 }
 
 pub struct ConfigMapSpecStore {
@@ -127,6 +130,17 @@ impl SpecStore for ConfigMapSpecStore {
             Err(kube::Error::Api(e)) if e.code == 404 => Ok(false),
             Err(e) => Err(e.into()),
         }
+    }
+
+    async fn primary(&self, name: &str) -> anyhow::Result<Option<String>> {
+        Ok(self.api.get_opt(&spec_cm_name(name)).await?.map(|cm| {
+            cm.metadata
+                .annotations
+                .as_ref()
+                .and_then(|a| a.get(pglord_core::PRIMARY_ANNOTATION))
+                .cloned()
+                .unwrap_or_else(|| format!("{name}-0"))
+        }))
     }
 }
 

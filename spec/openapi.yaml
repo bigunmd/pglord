@@ -71,7 +71,7 @@ paths:
     get:
       tags:
       - clusters
-      summary: Get one cluster.
+      summary: Get one cluster with per-instance topology.
       operationId: get_cluster
       parameters:
       - name: name
@@ -82,11 +82,11 @@ paths:
           type: string
       responses:
         '200':
-          description: Cluster
+          description: Cluster detail
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ClusterSummary'
+                $ref: '#/components/schemas/ClusterDetail'
         '404':
           description: Not found
           content:
@@ -143,6 +143,37 @@ paths:
                 $ref: '#/components/schemas/VersionResponse'
 components:
   schemas:
+    ClusterDetail:
+      type: object
+      required:
+      - name
+      - image
+      - replicas
+      - storage_size
+      - ready_replicas
+      - primary
+      - instances
+      properties:
+        image:
+          type: string
+        instances:
+          type: array
+          items:
+            $ref: '#/components/schemas/InstanceDto'
+        name:
+          type: string
+        primary:
+          type: string
+          description: Recorded primary pod (the single writer per the primary record).
+        ready_replicas:
+          type: integer
+          format: int32
+        replicas:
+          type: integer
+          format: int32
+          minimum: 0
+        storage_size:
+          type: string
     ClusterSpec:
       type: object
       required:
@@ -182,6 +213,26 @@ components:
           type: integer
           format: int32
           minimum: 0
+    InstanceDto:
+      type: object
+      required:
+      - pod
+      - role
+      - ready
+      properties:
+        lsn:
+          type:
+          - string
+          - 'null'
+          description: Current/receive WAL LSN as reported by the agent.
+        pod:
+          type: string
+          description: Pod name, e.g. "demo-0".
+        ready:
+          type: boolean
+        role:
+          type: string
+          description: '"primary" | "standby" | "unknown" (agent unreachable).'
     PingResponse:
       type: object
       required:

@@ -41,6 +41,9 @@ async fn main() -> anyhow::Result<()> {
             Some(ClusterOps {
                 store: std::sync::Arc::new(ConfigMapSpecStore::new(client.clone(), &ns)),
                 kube: client,
+                http: reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(2))
+                    .build()?,
                 ns,
             })
         }

@@ -1,0 +1,57 @@
+//! Agent status polling over headless-service DNS. The ONE code path for
+//! observing instances — the orchestrator's failover decisions and the API's
+//! detail view must never see different data shapes.
+
+use pglord_core::render::{AGENT_HTTP_PORT, pod_fqdn};
+use serde::Deserialize;
+
+#[derive(Debug, Deserialize)]
+struct AgentStatus {
+    ready: bool,
+    in_recovery: Option<bool>,
+    lsn: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct InstanceObservation {
+    pub pod: String,
+    pub ready: bool,
+    pub in_recovery: Option<bool>,
+    pub lsn: Option<String>,
+}
+
+pub async fn observe_cluster(
+    http: &reqwest::Client,
+    cluster: &str,
+    ns: &str,
+    replicas: u8,
+) -> Vec<InstanceObservation> {
+    let mut out = Vec::with_capacity(replicas as usize);
+    for i in 0..replicas {
+        let pod = format!("{cluster}-{i}");
+        let url = format!(
+            "http://{}:{}/status",
+            pod_fqdn(&pod, cluster, ns),
+            AGENT_HTTP_PORT
+        );
+        let status = match http.get(&url).send().await {
+            Ok(resp) => resp.json::<AgentStatus>().await.ok(),
+            Err(_) => None,
+        };
+        out.push(match status {
+            Some(s) => InstanceObservation {
+                pod,
+                ready: s.ready,
+                in_recovery: s.in_recovery,
+                lsn: s.lsn,
+            },
+            None => InstanceObservation {
+                pod,
+                ready: false,
+                in_recovery: None,
+                lsn: None,
+            },
+        });
+    }
+    out
+}

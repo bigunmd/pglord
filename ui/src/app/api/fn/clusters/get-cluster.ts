@@ -7,7 +7,7 @@ import { filter, map } from 'rxjs/operators';
 import { StrictHttpResponse } from '../../strict-http-response';
 import { RequestBuilder } from '../../request-builder';
 
-import { ClusterSummary } from '../../models/cluster-summary';
+import { ClusterDetail } from '../../models/cluster-detail';
 
 export interface GetCluster$Params {
 
@@ -17,7 +17,7 @@ export interface GetCluster$Params {
   name: string;
 }
 
-export function getCluster(http: HttpClient, rootUrl: string, params: GetCluster$Params, context?: HttpContext): Observable<StrictHttpResponse<ClusterSummary>> {
+export function getCluster(http: HttpClient, rootUrl: string, params: GetCluster$Params, context?: HttpContext): Observable<StrictHttpResponse<ClusterDetail>> {
   const rb = new RequestBuilder(rootUrl, getCluster.PATH, 'get');
   if (params) {
     rb.path('name', params.name, {});
@@ -28,7 +28,7 @@ export function getCluster(http: HttpClient, rootUrl: string, params: GetCluster
   ).pipe(
     filter((r: any): r is HttpResponse<any> => r instanceof HttpResponse),
     map((r: HttpResponse<any>) => {
-      return r as StrictHttpResponse<ClusterSummary>;
+      return r as StrictHttpResponse<ClusterDetail>;
     })
   );
 }

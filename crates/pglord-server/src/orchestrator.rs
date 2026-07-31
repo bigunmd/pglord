@@ -10,8 +10,8 @@ use std::time::Duration;
 use k8s_openapi::api::core::v1::ConfigMap;
 use kube::api::Api;
 use pglord_core::render::{AGENT_HTTP_PORT, pod_fqdn};
-use serde::Deserialize;
 
+use crate::instance_probe::observe_cluster;
 use crate::primary_record::{cas_set_primary, parse_lsn, recorded_primary};
 use crate::reconciler;
 use crate::spec_store::{configmap_to_spec, spec_label_selector};
@@ -19,19 +19,6 @@ use crate::spec_store::{configmap_to_spec, spec_label_selector};
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
 const FAILURES_BEFORE_FAILOVER: u32 = 3;
 const STATUS_TIMEOUT: Duration = Duration::from_secs(2);
-
-#[derive(Debug, Deserialize)]
-struct AgentStatus {
-    ready: bool,
-    in_recovery: Option<bool>,
-    lsn: Option<String>,
-}
-
-#[derive(Debug)]
-struct PodObservation {
-    pod: String,
-    status: Option<AgentStatus>,
-}
 
 /// Pure election rule: among ready in-recovery standbys, pick the highest LSN.
 pub fn elect_candidate(
@@ -74,13 +61,12 @@ pub async fn run(client: kube::Client, ns: String) {
                 continue;
             };
             let primary = recorded_primary(cm, &spec.name);
-            let observations = observe(&http, &spec.name, &ns, spec.replicas).await;
+            let observations = observe_cluster(&http, &spec.name, &ns, spec.replicas).await;
 
             let primary_ok = observations
                 .iter()
                 .find(|o| o.pod == primary)
-                .and_then(|o| o.status.as_ref())
-                .map(|s| s.ready)
+                .map(|o| o.ready)
                 .unwrap_or(false);
 
             let count = failures.entry(spec.name.clone()).or_insert(0);
@@ -96,14 +82,7 @@ pub async fn run(client: kube::Client, ns: String) {
 
             let flat: Vec<_> = observations
                 .iter()
-                .map(|o| {
-                    (
-                        o.pod.clone(),
-                        o.status.as_ref().map(|s| s.ready).unwrap_or(false),
-                        o.status.as_ref().and_then(|s| s.in_recovery),
-                        o.status.as_ref().and_then(|s| s.lsn.clone()),
-                    )
-                })
+                .map(|o| (o.pod.clone(), o.ready, o.in_recovery, o.lsn.clone()))
                 .collect();
             let Some(candidate) = elect_candidate(&flat) else {
                 tracing::error!(cluster = %spec.name, "failover needed but no viable candidate");
@@ -141,29 +120,6 @@ pub async fn run(client: kube::Client, ns: String) {
             }
         }
     }
-}
-
-async fn observe(
-    http: &reqwest::Client,
-    cluster: &str,
-    ns: &str,
-    replicas: u8,
-) -> Vec<PodObservation> {
-    let mut out = Vec::with_capacity(replicas as usize);
-    for i in 0..replicas {
-        let pod = format!("{cluster}-{i}");
-        let url = format!(
-            "http://{}:{}/status",
-            pod_fqdn(&pod, cluster, ns),
-            AGENT_HTTP_PORT
-        );
-        let status = match http.get(&url).send().await {
-            Ok(resp) => resp.json::<AgentStatus>().await.ok(),
-            Err(_) => None,
-        };
-        out.push(PodObservation { pod, status });
-    }
-    out
 }
 
 #[cfg(test)]

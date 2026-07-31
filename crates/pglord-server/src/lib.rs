@@ -6,6 +6,7 @@ pub mod app;
 pub mod config;
 pub mod error;
 pub mod health;
+pub mod instance_probe;
 pub mod kube_client;
 pub mod orchestrator;
 pub mod primary_record;

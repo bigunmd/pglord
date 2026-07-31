@@ -31,6 +31,7 @@ struct ApiDoc;
 pub struct ClusterOps {
     pub store: Arc<dyn SpecStore>,
     pub kube: kube::Client,
+    pub http: reqwest::Client,
     pub ns: String,
 }
 
