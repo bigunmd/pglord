@@ -40,6 +40,19 @@ pub struct Config {
     pub primary_port: u16,
     #[serde(default = "default_superuser")]
     pub superuser: String,
+    /// Superuser password. Empty = trust auth (dev/e2e only).
+    #[serde(default = "default_empty")]
+    pub superuser_password: String,
+    /// Replication role name; created idempotently by the primary after boot.
+    #[serde(default = "default_repl_user")]
+    pub repl_user: String,
+    /// Replication password. Empty = trust auth (dev/e2e only).
+    #[serde(default = "default_empty")]
+    pub repl_password: String,
+}
+
+fn default_repl_user() -> String {
+    "replicator".into()
 }
 
 fn default_pgdata() -> PathBuf {

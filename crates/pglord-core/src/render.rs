@@ -5,9 +5,9 @@ use std::collections::BTreeMap;
 
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
-    Container, ContainerPort, EnvVar, HTTPGetAction, PersistentVolumeClaim,
-    PersistentVolumeClaimSpec, PodSpec, PodTemplateSpec, Probe, Service, ServicePort, ServiceSpec,
-    VolumeMount, VolumeResourceRequirements,
+    Container, ContainerPort, EnvVar, EnvVarSource, HTTPGetAction, PersistentVolumeClaim,
+    PersistentVolumeClaimSpec, PodSpec, PodTemplateSpec, Probe, SecretKeySelector, Service,
+    ServicePort, ServiceSpec, VolumeMount, VolumeResourceRequirements,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta, OwnerReference};
@@ -70,6 +70,28 @@ pub fn headless_service_name(cluster: &str) -> String {
     format!("{cluster}-pods")
 }
 
+pub fn credentials_secret_name(cluster: &str) -> String {
+    format!("{cluster}-credentials")
+}
+
+pub const SUPERUSER_PASSWORD_KEY: &str = "superuser-password";
+pub const REPLICATION_PASSWORD_KEY: &str = "replication-password";
+
+fn secret_env(name: &str, cluster: &str, key: &str) -> EnvVar {
+    EnvVar {
+        name: name.to_string(),
+        value_from: Some(EnvVarSource {
+            secret_key_ref: Some(SecretKeySelector {
+                name: credentials_secret_name(cluster),
+                key: key.to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
+}
+
 pub fn primary_pod_fqdn(cluster: &str, ns: &str) -> String {
     format!(
         "{cluster}-0.{}.{ns}.svc.cluster.local",
@@ -98,6 +120,16 @@ pub fn render_statefulset(spec: &ClusterSpec, ns: &str, owner: &OwnerRef) -> Sta
                 value: Some("info".to_string()),
                 ..Default::default()
             },
+            secret_env(
+                "PGLORD_AGENT_SUPERUSER_PASSWORD",
+                &spec.name,
+                SUPERUSER_PASSWORD_KEY,
+            ),
+            secret_env(
+                "PGLORD_AGENT_REPL_PASSWORD",
+                &spec.name,
+                REPLICATION_PASSWORD_KEY,
+            ),
         ]),
         ports: Some(vec![
             ContainerPort {
@@ -256,6 +288,29 @@ mod tests {
             .expect("requests")
             .clone();
         assert_eq!(req["storage"].0, "1Gi");
+    }
+
+    #[test]
+    fn statefulset_wires_credentials_from_secret() {
+        let (spec, owner) = demo();
+        let sts = render_statefulset(&spec, "pglord", &owner);
+        let pod = sts.spec.expect("spec").template.spec.expect("pod");
+        let env = pod.containers[0].env.as_ref().expect("env");
+        for (var, key) in [
+            ("PGLORD_AGENT_SUPERUSER_PASSWORD", SUPERUSER_PASSWORD_KEY),
+            ("PGLORD_AGENT_REPL_PASSWORD", REPLICATION_PASSWORD_KEY),
+        ] {
+            let e = env.iter().find(|e| e.name == var).expect(var);
+            let sel = e
+                .value_from
+                .as_ref()
+                .expect("value_from")
+                .secret_key_ref
+                .as_ref()
+                .expect("secret ref");
+            assert_eq!(sel.name, "demo-credentials");
+            assert_eq!(sel.key, key);
+        }
     }
 
     #[test]

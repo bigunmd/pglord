@@ -9,6 +9,7 @@ use tokio::process::Command;
 use crate::config::{Config, Role};
 
 /// Extra postgresql.conf lines appended after initdb.
+/// wal_log_hints is required for pg_rewind (old-primary rejoin after failover).
 pub fn postgresql_conf_extra(port: u16) -> String {
     format!(
         "\n# --- managed by pglord-agent ---\n\
@@ -16,19 +17,27 @@ pub fn postgresql_conf_extra(port: u16) -> String {
          port = {port}\n\
          wal_level = replica\n\
          max_wal_senders = 10\n\
-         hot_standby = on\n"
+         hot_standby = on\n\
+         wal_log_hints = on\n"
     )
 }
 
-/// Extra pg_hba.conf lines appended after initdb.
-/// SECURITY: trust-everyone is acceptable ONLY for the isolated MVP e2e
-/// network; the reconciler slice replaces this with scram + generated
-/// credentials before anything faces a real cluster.
-pub fn pg_hba_extra() -> String {
-    "\n# --- managed by pglord-agent (MVP: trust; see SECURITY note) ---\n\
-     host all all 0.0.0.0/0 trust\n\
-     host replication all 0.0.0.0/0 trust\n"
-        .to_string()
+/// Extra pg_hba.conf lines appended after initdb. With a password configured,
+/// network access is scram-only; the trust variant remains ONLY for
+/// credential-less dev runs and is loudly logged.
+pub fn pg_hba_extra(repl_user: &str, scram: bool) -> String {
+    if scram {
+        format!(
+            "\n# --- managed by pglord-agent ---\n\
+             host all all 0.0.0.0/0 scram-sha-256\n\
+             host replication {repl_user} 0.0.0.0/0 scram-sha-256\n"
+        )
+    } else {
+        "\n# --- managed by pglord-agent (INSECURE trust mode: no password configured) ---\n\
+         host all all 0.0.0.0/0 trust\n\
+         host replication all 0.0.0.0/0 trust\n"
+            .to_string()
+    }
 }
 
 fn is_bootstrapped(pgdata: &Path) -> bool {
@@ -50,13 +59,33 @@ pub async fn ensure_bootstrapped(cfg: &Config) -> anyhow::Result<()> {
 
 async fn bootstrap_primary(cfg: &Config) -> anyhow::Result<()> {
     tracing::info!(pgdata = %cfg.pgdata.display(), "running initdb");
-    let status = Command::new("initdb")
-        .arg("-D")
-        .arg(&cfg.pgdata)
-        .args(["-A", "trust", "-U", &cfg.superuser])
-        .status()
-        .await
-        .context("spawn initdb")?;
+    let scram = !cfg.superuser_password.is_empty();
+    let mut cmd = Command::new("initdb");
+    cmd.arg("-D").arg(&cfg.pgdata).args(["-U", &cfg.superuser]);
+
+    // Password file lives outside PGDATA and is removed right after initdb.
+    // create_new + 0600 defeats symlink attacks and other-user reads.
+    let pwfile = std::env::temp_dir().join(format!("pglord-initdb-pw.{}", std::process::id()));
+    if scram {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&pwfile)
+            .context("create initdb pwfile")?;
+        writeln!(f, "{}", cfg.superuser_password).context("write initdb pwfile")?;
+        drop(f);
+        cmd.args(["--auth", "scram-sha-256"])
+            .arg("--pwfile")
+            .arg(&pwfile);
+    } else {
+        tracing::warn!("no superuser password configured: bootstrapping in INSECURE trust mode");
+        cmd.args(["-A", "trust"]);
+    }
+    let status = cmd.status().await.context("spawn initdb")?;
+    let _ = std::fs::remove_file(&pwfile);
     if !status.success() {
         bail!("initdb failed with {status}");
     }
@@ -65,8 +94,11 @@ async fn bootstrap_primary(cfg: &Config) -> anyhow::Result<()> {
         &cfg.pgdata.join("postgresql.conf"),
         &postgresql_conf_extra(cfg.port),
     )?;
-    append(&cfg.pgdata.join("pg_hba.conf"), &pg_hba_extra())?;
-    tracing::info!("primary bootstrap complete");
+    append(
+        &cfg.pgdata.join("pg_hba.conf"),
+        &pg_hba_extra(&cfg.repl_user, scram),
+    )?;
+    tracing::info!(scram, "primary bootstrap complete");
     Ok(())
 }
 
@@ -75,18 +107,27 @@ async fn bootstrap_standby(cfg: &Config) -> anyhow::Result<()> {
         bail!("standby role requires PGLORD_AGENT_PRIMARY_HOST");
     }
     // The primary may still be coming up; retry with backoff.
+    let scram = !cfg.repl_password.is_empty();
+    // With credentials configured, stream as the replication role; trust-mode
+    // dev runs fall back to the superuser.
+    let (user, password) = if scram {
+        (cfg.repl_user.as_str(), cfg.repl_password.as_str())
+    } else {
+        (cfg.superuser.as_str(), "")
+    };
     for attempt in 1..=60u32 {
-        tracing::info!(attempt, primary = %cfg.primary_host, "running pg_basebackup");
+        tracing::info!(attempt, primary = %cfg.primary_host, user, "running pg_basebackup");
         let status = Command::new("pg_basebackup")
             .arg("-h")
             .arg(&cfg.primary_host)
             .arg("-p")
             .arg(cfg.primary_port.to_string())
             .arg("-U")
-            .arg(&cfg.superuser)
+            .arg(user)
             .arg("-D")
             .arg(&cfg.pgdata)
             .args(["-R", "-X", "stream"])
+            .env("PGPASSWORD", password)
             .status()
             .await
             .context("spawn pg_basebackup")?;
@@ -126,13 +167,22 @@ mod tests {
         assert!(conf.contains("max_wal_senders = 10"));
         assert!(conf.contains("hot_standby = on"));
         assert!(conf.contains("listen_addresses = '*'"));
+        assert!(conf.contains("wal_log_hints = on"));
     }
 
     #[test]
-    fn hba_extra_allows_replication() {
-        let hba = pg_hba_extra();
+    fn hba_scram_mode_has_no_trust_lines() {
+        let hba = pg_hba_extra("replicator", true);
+        assert!(hba.contains("host all all 0.0.0.0/0 scram-sha-256"));
+        assert!(hba.contains("host replication replicator 0.0.0.0/0 scram-sha-256"));
+        assert!(!hba.contains("trust"));
+    }
+
+    #[test]
+    fn hba_trust_fallback_kept_for_dev() {
+        let hba = pg_hba_extra("replicator", false);
         assert!(hba.contains("host replication all 0.0.0.0/0 trust"));
-        assert!(hba.contains("host all all 0.0.0.0/0 trust"));
+        assert!(hba.contains("INSECURE"));
     }
 
     #[test]

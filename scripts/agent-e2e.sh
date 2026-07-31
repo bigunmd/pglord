@@ -7,6 +7,8 @@ NET=pglord-e2e
 PRIMARY=pg-e2e-primary
 STANDBY=pg-e2e-standby
 IMAGE=pglord-agent:dev
+SU_PW=e2e-super-secret
+REPL_PW=e2e-repl-secret
 
 cleanup() {
   docker rm -f "$PRIMARY" "$STANDBY" >/dev/null 2>&1 || true
@@ -34,24 +36,34 @@ docker build -q -f deploy/Dockerfile.agent -t "$IMAGE" . >/dev/null
 echo "==> starting primary"
 docker network create "$NET" >/dev/null
 docker run -d --name "$PRIMARY" --network "$NET" -p 18008:8008 \
-  -e PGLORD_AGENT_ROLE=primary "$IMAGE" >/dev/null
+  -e PGLORD_AGENT_ROLE=primary \
+  -e PGLORD_AGENT_SUPERUSER_PASSWORD="$SU_PW" \
+  -e PGLORD_AGENT_REPL_PASSWORD="$REPL_PW" "$IMAGE" >/dev/null
 wait_status 18008 "['ready']" "True" 60
 wait_status 18008 "['in_recovery']" "False" 10
 echo "OK primary ready"
 
 echo "==> starting standby"
 docker run -d --name "$STANDBY" --network "$NET" -p 18009:8008 \
-  -e PGLORD_AGENT_ROLE=standby -e PGLORD_AGENT_PRIMARY_HOST="$PRIMARY" "$IMAGE" >/dev/null
+  -e PGLORD_AGENT_ROLE=standby -e PGLORD_AGENT_PRIMARY_HOST="$PRIMARY" \
+  -e PGLORD_AGENT_SUPERUSER_PASSWORD="$SU_PW" \
+  -e PGLORD_AGENT_REPL_PASSWORD="$REPL_PW" "$IMAGE" >/dev/null
 wait_status 18009 "['ready']" "True" 90
 wait_status 18009 "['in_recovery']" "True" 10
 echo "OK standby streaming (lsn: $(curl -s http://127.0.0.1:18009/status | python3 -c "import sys,json; print(json.load(sys.stdin)['lsn'])"))"
 
 echo "==> writing on primary"
-docker exec "$PRIMARY" psql -U postgres -c "CREATE TABLE pglord_e2e(x int); INSERT INTO pglord_e2e VALUES (42);" >/dev/null
+docker exec -e PGPASSWORD="$SU_PW" "$PRIMARY" psql -U postgres -c "CREATE TABLE pglord_e2e(x int); INSERT INTO pglord_e2e VALUES (42);" >/dev/null
+
+echo "==> verifying scram is enforced (wrong password must fail)"
+if docker exec -e PGPASSWORD=wrong "$STANDBY" psql -h "$PRIMARY" -U postgres -c "SELECT 1" >/dev/null 2>&1; then
+  echo "FAIL: wrong password was accepted"; exit 1
+fi
+echo "OK wrong password rejected"
 
 echo "==> verifying replication on standby"
 for _ in $(seq 1 30); do
-  got=$(docker exec "$STANDBY" psql -U postgres -tAc "SELECT x FROM pglord_e2e" 2>/dev/null || echo "")
+  got=$(docker exec -e PGPASSWORD="$SU_PW" "$STANDBY" psql -U postgres -tAc "SELECT x FROM pglord_e2e" 2>/dev/null || echo "")
   [ "$got" = "42" ] && break
   sleep 1
 done
@@ -65,7 +77,7 @@ wait_status 18009 "['in_recovery']" "False" 30
 echo "OK standby promoted"
 
 echo "==> verifying writes on promoted node"
-docker exec "$STANDBY" psql -U postgres -c "INSERT INTO pglord_e2e VALUES (43);" >/dev/null
+docker exec -e PGPASSWORD="$SU_PW" "$STANDBY" psql -U postgres -c "INSERT INTO pglord_e2e VALUES (43);" >/dev/null
 echo "OK promoted node accepts writes"
 
 echo "agent e2e passed"

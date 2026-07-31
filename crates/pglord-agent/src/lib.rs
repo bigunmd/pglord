@@ -3,6 +3,7 @@
 pub mod bootstrap;
 pub mod config;
 pub mod http;
+pub mod postboot;
 pub mod rolestrategy;
 pub mod status;
 pub mod supervisor;

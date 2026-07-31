@@ -38,12 +38,15 @@ pub async fn query_status(cfg: &Config) -> InstanceStatus {
 }
 
 async fn try_query(cfg: &Config) -> anyhow::Result<(bool, Option<String>)> {
-    let conn_str = format!(
+    let mut conn_str = format!(
         "host={} port={} user={} dbname=postgres connect_timeout=2",
         cfg.socket_dir.display(),
         cfg.port,
         cfg.superuser
     );
+    if !cfg.superuser_password.is_empty() {
+        conn_str.push_str(&format!(" password={}", cfg.superuser_password));
+    }
     let (client, connection) = tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await?;
     let conn_task = tokio::spawn(connection);
 

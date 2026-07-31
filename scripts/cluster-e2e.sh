@@ -51,10 +51,12 @@ done
 [ "$ready" = "2" ] || { echo "FAIL: ready_replicas=$ready"; $KUBECTL -n pglord get pods; $KUBECTL -n pglord logs demo-0 --tail 15 || true; exit 1; }
 echo "OK cluster ready 2/2"
 
-echo "==> verifying streaming replication"
-$KUBECTL -n pglord exec demo-0 -- psql -U postgres -c "CREATE TABLE pglord_e2e(x int); INSERT INTO pglord_e2e VALUES (42);" >/dev/null
+echo "==> verifying streaming replication (scram credentials from the generated Secret)"
+SU_PW=$($KUBECTL -n pglord get secret demo-credentials -o jsonpath='{.data.superuser-password}' | base64 -d)
+[ -n "$SU_PW" ] || { echo "FAIL: credentials secret missing"; exit 1; }
+$KUBECTL -n pglord exec demo-0 -- env PGPASSWORD="$SU_PW" psql -U postgres -c "CREATE TABLE pglord_e2e(x int); INSERT INTO pglord_e2e VALUES (42);" >/dev/null
 for _ in $(seq 1 30); do
-  got=$($KUBECTL -n pglord exec demo-1 -- psql -U postgres -tAc "SELECT x FROM pglord_e2e" 2>/dev/null || echo "")
+  got=$($KUBECTL -n pglord exec demo-1 -- env PGPASSWORD="$SU_PW" psql -U postgres -tAc "SELECT x FROM pglord_e2e" 2>/dev/null || echo "")
   [ "$got" = "42" ] && break
   sleep 1
 done

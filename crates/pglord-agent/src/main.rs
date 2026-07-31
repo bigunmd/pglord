@@ -28,6 +28,11 @@ async fn main() -> anyhow::Result<()> {
     bootstrap::ensure_bootstrapped(&cfg).await?;
     let child = supervisor::spawn_postgres(&cfg)?;
 
+    if cfg.role == pglord_agent::config::Role::Primary {
+        let cfg_pb = cfg.clone();
+        tokio::spawn(async move { pglord_agent::postboot::ensure_replication_role(&cfg_pb).await });
+    }
+
     let listener = tokio::net::TcpListener::bind(cfg.http_addr).await?;
     tracing::info!(addr = %cfg.http_addr, "control endpoint listening");
     let http_server = axum::serve(listener, http::router(cfg.clone()));

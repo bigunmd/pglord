@@ -6,15 +6,20 @@
 
 use std::time::Duration;
 
+use std::collections::BTreeMap;
+
 use futures::TryStreamExt;
 use k8s_openapi::api::apps::v1::StatefulSet;
-use k8s_openapi::api::core::v1::{ConfigMap, Service};
-use kube::api::{Api, Patch, PatchParams};
+use k8s_openapi::api::core::v1::{ConfigMap, Secret, Service};
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, OwnerReference};
+use kube::api::{Api, Patch, PatchParams, PostParams};
 use kube::runtime::watcher;
 use pglord_core::render::{
-    OwnerRef, render_headless_service, render_rw_service, render_statefulset,
+    OwnerRef, REPLICATION_PASSWORD_KEY, SUPERUSER_PASSWORD_KEY, credentials_secret_name, labels,
+    render_headless_service, render_rw_service, render_statefulset,
 };
 use pglord_core::spec::ClusterSpec;
+use rand::RngExt;
 
 use crate::spec_store::{FIELD_MANAGER, configmap_to_spec, spec_label_selector};
 
@@ -97,12 +102,66 @@ async fn sync_all(client: &kube::Client, cms: &Api<ConfigMap>, ns: &str) -> anyh
     Ok(())
 }
 
+pub fn generate_password() -> String {
+    rand::rng()
+        .sample_iter(rand::distr::Alphanumeric)
+        .take(32)
+        .map(char::from)
+        .collect()
+}
+
+/// Create-only: an existing credentials Secret is never touched, so passwords
+/// survive reconciles (rotation is a future, explicit operation).
+async fn ensure_credentials(
+    client: &kube::Client,
+    ns: &str,
+    spec: &ClusterSpec,
+    owner: &OwnerRef,
+) -> anyhow::Result<()> {
+    let secrets: Api<Secret> = Api::namespaced(client.clone(), ns);
+    let name = credentials_secret_name(&spec.name);
+    if secrets.get_opt(&name).await?.is_some() {
+        return Ok(());
+    }
+    let secret = Secret {
+        metadata: ObjectMeta {
+            name: Some(name.clone()),
+            namespace: Some(ns.to_string()),
+            labels: Some(labels(&spec.name)),
+            owner_references: Some(vec![OwnerReference {
+                api_version: owner.api_version.clone(),
+                kind: owner.kind.clone(),
+                name: owner.name.clone(),
+                uid: owner.uid.clone(),
+                controller: Some(true),
+                block_owner_deletion: Some(true),
+            }]),
+            ..Default::default()
+        },
+        string_data: Some(BTreeMap::from([
+            (SUPERUSER_PASSWORD_KEY.to_string(), generate_password()),
+            (REPLICATION_PASSWORD_KEY.to_string(), generate_password()),
+        ])),
+        ..Default::default()
+    };
+    match secrets.create(&PostParams::default(), &secret).await {
+        Ok(_) => {
+            tracing::info!(cluster = %spec.name, "credentials secret created");
+            Ok(())
+        }
+        // Lost a race with a concurrent create: fine, it exists.
+        Err(kube::Error::Api(e)) if e.code == 409 => Ok(()),
+        Err(e) => Err(e.into()),
+    }
+}
+
 async fn apply_cluster(
     client: &kube::Client,
     ns: &str,
     spec: &ClusterSpec,
     owner: &OwnerRef,
 ) -> anyhow::Result<()> {
+    ensure_credentials(client, ns, spec, owner).await?;
     let (sts, headless, rw) = desired_objects(spec, ns, owner);
     let pp = PatchParams::apply(FIELD_MANAGER).force();
 
@@ -120,6 +179,15 @@ async fn apply_cluster(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generated_passwords_are_long_alphanumeric_and_unique() {
+        let a = generate_password();
+        let b = generate_password();
+        assert_eq!(a.len(), 32);
+        assert!(a.chars().all(|c| c.is_ascii_alphanumeric()));
+        assert_ne!(a, b);
+    }
 
     #[test]
     fn desired_objects_are_consistently_named() {

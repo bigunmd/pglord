@@ -1600,6 +1600,7 @@ dependencies = [
  "kube",
  "mime_guess",
  "pglord-core",
+ "rand",
  "rust-embed",
  "serde",
  "serde_json",
