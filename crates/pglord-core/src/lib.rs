@@ -1,5 +1,6 @@
 //! Shared pglord domain types. Grows into the cluster spec model (see design doc).
 
+pub mod render;
 pub mod spec;
 
 /// Version of the pglord workspace, surfaced by the `/api/v1/version` endpoint.
