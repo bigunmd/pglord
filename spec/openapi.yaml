@@ -4,7 +4,7 @@ info:
   description: Control plane for HA PostgreSQL clusters on Kubernetes.
   contact:
     name: Mikhail Bigun
-    email: mikebigun@gmail.com
+    email: bigun.md@gmail.com
   license:
     name: AGPL-3.0-or-later
     identifier: AGPL-3.0-or-later

@@ -3,3 +3,4 @@ spec/.tmp/
 ui/node_modules/
 ui/dist/
 ui/.angular/
+.playwright-mcp/
