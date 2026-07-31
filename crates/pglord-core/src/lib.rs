@@ -1,0 +1,4 @@
+//! Shared pglord domain types. Grows into the cluster spec model (see design doc).
+
+/// Version of the pglord workspace, surfaced by the `/api/v1/version` endpoint.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");

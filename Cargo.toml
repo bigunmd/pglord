@@ -1,0 +1,14 @@
+[workspace]
+resolver = "2"
+members = ["crates/pglord-core", "crates/pglord-server"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["Mikhail Bigun <mikebigun@gmail.com>"]
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/bigunmd/pglord"
+publish = false
+
+[workspace.lints.clippy]
+unwrap_used = "warn"
