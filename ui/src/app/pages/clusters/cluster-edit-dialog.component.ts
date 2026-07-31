@@ -34,8 +34,8 @@ export interface ClusterEditContext {
     <div hlmDialogHeader>
       <h2 hlmDialogTitle>{{ 'clusterDetail.editTitle' | transloco }}</h2>
     </div>
-    <div class="grid gap-3 py-2">
-      <div class="grid gap-1.5">
+    <div class="grid gap-6 py-1">
+      <div class="grid gap-2">
         <span hlmLabel>{{ 'clusters.replicas' | transloco }}</span>
         <div class="bg-muted grid grid-cols-5 gap-1 rounded-lg p-1" role="tablist">
           @for (n of replicaChoices; track n) {
@@ -54,11 +54,15 @@ export interface ClusterEditContext {
             </button>
           }
         </div>
-        <p class="text-xs" [class.text-destructive]="shrinking()" [class.text-muted-foreground]="!shrinking()">
+        <p
+          class="min-h-8 text-xs leading-relaxed"
+          [class.text-destructive]="shrinking()"
+          [class.text-muted-foreground]="!shrinking()"
+        >
           {{ (shrinking() ? 'clusterDetail.scaleDownWarning' : 'clusters.replicasHint') | transloco }}
         </p>
       </div>
-      <div class="grid gap-1.5">
+      <div class="border-border grid gap-2 border-t pt-6">
         <label hlmLabel for="pg-edit-storage">{{ 'clusters.storage' | transloco }}</label>
         <input
           hlmInput
@@ -68,7 +72,7 @@ export interface ClusterEditContext {
           (ngModelChange)="storage.set($event)"
         />
         <p
-          class="text-xs"
+          class="text-xs leading-relaxed"
           [class.text-destructive]="!storageValid()"
           [class.text-muted-foreground]="storageValid()"
         >

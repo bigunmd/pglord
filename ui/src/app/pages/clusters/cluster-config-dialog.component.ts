@@ -42,11 +42,12 @@ interface Row {
       <h2 hlmDialogTitle>{{ 'config.editTitle' | transloco }}</h2>
     </div>
 
-    <div class="grid max-h-[24rem] gap-3 overflow-y-auto py-2">
+    <!-- Viewport-relative so the list uses tall screens instead of a fixed box. -->
+    <div class="-mx-1 grid max-h-[min(60vh,32rem)] gap-5 overflow-y-auto px-1 py-1">
       @for (row of rows(); track row.name) {
-        <div class="grid gap-1.5" [attr.data-testid]="'param-' + row.name">
-          <div class="flex items-center justify-between gap-2">
-            <label hlmLabel [for]="'param-input-' + row.name" class="font-mono text-xs">
+        <div class="grid gap-2" [attr.data-testid]="'param-' + row.name">
+          <div class="flex items-center justify-between gap-3">
+            <label hlmLabel [for]="'param-input-' + row.name" class="font-mono text-sm">
               {{ row.name }}
             </label>
             <span class="flex items-center gap-2">
@@ -74,22 +75,27 @@ interface Row {
               </button>
             </span>
           </div>
-          <input
-            hlmInput
-            [id]="'param-input-' + row.name"
-            [attr.data-testid]="'input-' + row.name"
-            [ngModel]="row.value"
-            (ngModelChange)="setValue(row.name, $event)"
-          />
-          <p class="text-muted-foreground text-xs">
-            {{ summaryOf(row.name) }} {{ 'config.defaultIs' | transloco: { value: defaultOf(row.name) } }}
-          </p>
+          <!-- Value beside its guidance: the input needs little width, the
+               explanation needs a readable measure. -->
+          <div class="grid gap-2 sm:grid-cols-[16rem_1fr] sm:items-start sm:gap-4">
+            <input
+              hlmInput
+              [id]="'param-input-' + row.name"
+              [attr.data-testid]="'input-' + row.name"
+              [ngModel]="row.value"
+              (ngModelChange)="setValue(row.name, $event)"
+            />
+            <p class="text-muted-foreground text-xs leading-relaxed sm:pt-2">
+              {{ summaryOf(row.name) }}
+              {{ 'config.defaultIs' | transloco: { value: defaultOf(row.name) } }}
+            </p>
+          </div>
         </div>
       } @empty {
-        <p class="text-muted-foreground text-sm">{{ 'config.noneSet' | transloco }}</p>
+        <p class="text-muted-foreground py-2 text-sm">{{ 'config.noneSet' | transloco }}</p>
       }
 
-      <div class="border-border grid gap-1.5 border-t pt-3">
+      <div class="border-border grid gap-2 border-t pt-5">
         <label hlmLabel for="param-add">{{ 'config.addSetting' | transloco }}</label>
         <div class="flex gap-2">
           <select

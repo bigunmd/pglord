@@ -31,7 +31,7 @@ const REPLICA_CHOICES = [1, 2, 3, 4, 5] as const;
     <div hlmDialogHeader>
       <h2 hlmDialogTitle>{{ 'clusters.createTitle' | transloco }}</h2>
     </div>
-    <div class="grid gap-3 py-2">
+    <div class="grid gap-6 py-1">
       <div class="grid gap-1.5">
         <label hlmLabel for="pg-cluster-name">{{ 'clusters.name' | transloco }}</label>
         <input

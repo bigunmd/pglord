@@ -39,6 +39,12 @@ import { ClusterWorkloadDialogComponent } from './cluster-workload-dialog.compon
 
 const REFRESH_MS = 5000;
 
+/** Editors hold forms and lists; the default dialog (sm:max-w-sm, p-4) is too
+ * tight for them. Confirmations keep the narrow default. */
+export const EDITOR_DIALOG_CLASS = 'sm:max-w-2xl p-6 gap-6';
+/** Short forms: roomier than the default, narrower than the list editors. */
+export const FORM_DIALOG_CLASS = 'sm:max-w-lg p-6 gap-6';
+
 /** Confirm a planned switchover; resolves true only on explicit confirmation. */
 @Component({
   selector: 'pg-switchover-dialog',
@@ -350,6 +356,7 @@ export class ClusterDetailComponent implements OnDestroy {
     const workload = await firstValueFrom(
       this.dialog.open<WorkloadSpec | undefined>(ClusterWorkloadDialogComponent, {
         context: { workload: d.workload },
+        contentClass: EDITOR_DIALOG_CLASS,
       }).closed$,
     );
     if (!workload) {
@@ -369,6 +376,7 @@ export class ClusterDetailComponent implements OnDestroy {
     const parameters = await firstValueFrom(
       this.dialog.open<Record<string, string> | undefined>(ClusterConfigDialogComponent, {
         context: { parameters: d.parameters ?? {}, catalog },
+        contentClass: EDITOR_DIALOG_CLASS,
       }).closed$,
     );
     if (!parameters) {
@@ -394,6 +402,7 @@ export class ClusterDetailComponent implements OnDestroy {
     const change = await firstValueFrom(
       this.dialog.open<SpecChange | undefined>(ClusterEditDialogComponent, {
         context: { replicas: d.replicas, storageSize: d.storage_size },
+        contentClass: FORM_DIALOG_CLASS,
       }).closed$,
     );
     if (!change) {

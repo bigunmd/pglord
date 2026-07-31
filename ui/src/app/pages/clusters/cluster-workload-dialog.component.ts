@@ -40,8 +40,9 @@ interface KeyValue {
       <h2 hlmDialogTitle>{{ 'workload.editTitle' | transloco }}</h2>
     </div>
 
-    <div class="grid max-h-[26rem] gap-4 overflow-y-auto py-2">
-      <div class="grid gap-1.5">
+    <!-- Viewport-relative so the form uses tall screens instead of a fixed box. -->
+    <div class="-mx-1 grid max-h-[min(60vh,34rem)] gap-7 overflow-y-auto px-1 py-1">
+      <div class="grid gap-2">
         <span hlmLabel>{{ 'workload.antiAffinity' | transloco }}</span>
         <div class="bg-muted grid grid-cols-3 gap-1 rounded-lg p-1" role="tablist">
           @for (mode of modes; track mode) {
@@ -60,35 +61,42 @@ interface KeyValue {
             </button>
           }
         </div>
-        <p class="text-muted-foreground text-xs">
+        <p class="text-muted-foreground min-h-8 text-xs leading-relaxed">
           {{ 'workload.antiAffinityHelp.' + antiAffinity() | transloco }}
         </p>
       </div>
 
-      <div class="grid grid-cols-2 gap-3">
-        @for (f of resourceFields; track f.key) {
-          <div class="grid gap-1.5">
-            <label hlmLabel [for]="'res-' + f.key">{{ 'workload.' + f.key | transloco }}</label>
-            <input
-              hlmInput
-              [id]="'res-' + f.key"
-              [attr.data-testid]="'res-' + f.key"
-              [placeholder]="f.placeholder"
-              [ngModel]="resources()[f.key]"
-              (ngModelChange)="setResource(f.key, $event)"
-            />
-          </div>
-        }
+      <div class="border-border grid gap-3 border-t pt-6">
+        <span hlmLabel>{{ 'workload.resources' | transloco }}</span>
+        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          @for (f of resourceFields; track f.key) {
+            <div class="grid gap-2">
+              <label hlmLabel [for]="'res-' + f.key">{{ 'workload.' + f.key | transloco }}</label>
+              <input
+                hlmInput
+                [id]="'res-' + f.key"
+                [attr.data-testid]="'res-' + f.key"
+                [placeholder]="f.placeholder"
+                [ngModel]="resources()[f.key]"
+                (ngModelChange)="setResource(f.key, $event)"
+              />
+            </div>
+          }
+        </div>
+        <p
+          class="text-xs leading-relaxed"
+          [class.text-destructive]="!resourcesValid()"
+          [class.text-muted-foreground]="resourcesValid()"
+        >
+          {{ 'workload.resourcesHelp' | transloco }}
+        </p>
       </div>
-      <p class="text-xs" [class.text-destructive]="!resourcesValid()" [class.text-muted-foreground]="resourcesValid()">
-        {{ 'workload.resourcesHelp' | transloco }}
-      </p>
 
       @for (group of groups; track group.kind) {
-        <div class="grid gap-1.5">
+        <div class="border-border grid gap-3 border-t pt-6">
           <span hlmLabel>{{ 'workload.' + group.kind | transloco }}</span>
           @for (row of rowsOf(group.kind); track $index) {
-            <div class="flex gap-2">
+            <div class="flex items-center gap-3">
               <input
                 hlmInput
                 class="flex-1"
