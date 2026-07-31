@@ -3,7 +3,9 @@
 
 use std::collections::BTreeMap;
 
-use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
+use k8s_openapi::api::apps::v1::{
+    StatefulSet, StatefulSetPersistentVolumeClaimRetentionPolicy, StatefulSetSpec,
+};
 use k8s_openapi::api::core::v1::{
     Container, ContainerPort, EnvVar, EnvVarSource, HTTPGetAction, ObjectFieldSelector,
     PersistentVolumeClaim, PersistentVolumeClaimSpec, PodSpec, PodTemplateSpec, Probe,
@@ -221,6 +223,14 @@ pub fn render_statefulset(spec: &ClusterSpec, ns: &str, owner: &OwnerRef) -> Sta
         spec: Some(StatefulSetSpec {
             replicas: Some(i32::from(spec.replicas)),
             service_name: Some(headless_service_name(&spec.name)),
+            // PVCs created from volumeClaimTemplates carry no ownerReferences,
+            // so without this they outlive the cluster as orphaned storage.
+            persistent_volume_claim_retention_policy: Some(
+                StatefulSetPersistentVolumeClaimRetentionPolicy {
+                    when_deleted: Some("Delete".to_string()),
+                    when_scaled: Some("Delete".to_string()),
+                },
+            ),
             selector: LabelSelector {
                 match_labels: Some(labels(&spec.name)),
                 ..Default::default()
@@ -358,6 +368,20 @@ mod tests {
             .expect("requests")
             .clone();
         assert_eq!(req["storage"].0, "1Gi");
+    }
+
+    #[test]
+    fn volumes_are_deleted_with_the_cluster() {
+        // Without this policy, deleting a cluster silently leaves its data
+        // volumes (and their cost) behind.
+        let (spec, owner) = demo();
+        let policy = render_statefulset(&spec, "ns", &owner)
+            .spec
+            .expect("spec")
+            .persistent_volume_claim_retention_policy
+            .expect("retention policy");
+        assert_eq!(policy.when_deleted.as_deref(), Some("Delete"));
+        assert_eq!(policy.when_scaled.as_deref(), Some("Delete"));
     }
 
     #[test]

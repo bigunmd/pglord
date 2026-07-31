@@ -82,6 +82,14 @@ for _ in $(seq 1 60); do
   sleep 1
 done
 [ "${gone:-}" = "yes" ] || { echo "FAIL: StatefulSet not garbage-collected"; exit 1; }
-echo "OK children garbage-collected"
+# PVCs have no ownerReferences; they go away via the StatefulSet retention
+# policy. Without this check, orphaned volumes would accumulate unnoticed.
+for _ in $(seq 1 60); do
+  left=$($KUBECTL -n pglord get pvc -o name 2>/dev/null | grep -c 'data-demo-' || true)
+  [ "$left" = "0" ] && break
+  sleep 1
+done
+[ "$left" = "0" ] || { echo "FAIL: $left PVCs left behind after delete"; $KUBECTL -n pglord get pvc; exit 1; }
+echo "OK children and volumes garbage-collected"
 
 echo "cluster e2e passed"
