@@ -15,7 +15,11 @@
       "@spartan-ng/helm/button": ["./src/app/ui/button/src/index.ts"],
       "@spartan-ng/helm/utils": ["./src/app/ui/utils/src/index.ts"],
       "@spartan-ng/helm/card": ["./src/app/ui/card/src/index.ts"],
-      "@spartan-ng/helm/dropdown-menu": ["./src/app/ui/dropdown-menu/src/index.ts"]
+      "@spartan-ng/helm/dropdown-menu": ["./src/app/ui/dropdown-menu/src/index.ts"],
+      "@spartan-ng/helm/table": ["./src/app/ui/table/src/index.ts"],
+      "@spartan-ng/helm/dialog": ["./src/app/ui/dialog/src/index.ts"],
+      "@spartan-ng/helm/input": ["./src/app/ui/input/src/index.ts"],
+      "@spartan-ng/helm/label": ["./src/app/ui/label/src/index.ts"]
     }
   },
   "angularCompilerOptions": {

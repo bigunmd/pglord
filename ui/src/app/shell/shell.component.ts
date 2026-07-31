@@ -1,5 +1,5 @@
 import { Component, inject } from '@angular/core';
-import { RouterOutlet } from '@angular/router';
+import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { TranslocoModule } from '@jsverse/transloco';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { lucideCheck, lucideMonitor, lucideMoon, lucideSun } from '@ng-icons/lucide';
@@ -10,7 +10,15 @@ import { ThemeMode, ThemeService } from '../core/theme/theme.service';
 
 @Component({
   selector: 'pg-shell',
-  imports: [RouterOutlet, TranslocoModule, NgIcon, HlmButtonImports, HlmDropdownMenuImports],
+  imports: [
+    RouterLink,
+    RouterLinkActive,
+    RouterOutlet,
+    TranslocoModule,
+    NgIcon,
+    HlmButtonImports,
+    HlmDropdownMenuImports,
+  ],
   providers: [provideIcons({ lucideCheck, lucideMonitor, lucideMoon, lucideSun })],
   template: `
     <div class="flex min-h-svh flex-col">
@@ -21,6 +29,23 @@ import { ThemeMode, ThemeService } from '../core/theme/theme.service';
         <span class="text-muted-foreground hidden text-sm sm:inline">
           {{ 'app.tagline' | transloco }}
         </span>
+        <nav class="ml-6 flex items-center gap-1 text-sm">
+          <a
+            routerLink="/"
+            routerLinkActive="text-foreground font-medium"
+            [routerLinkActiveOptions]="{ exact: true }"
+            class="text-muted-foreground hover:text-foreground rounded-md px-3 py-1.5 transition-colors"
+          >
+            {{ 'nav.home' | transloco }}
+          </a>
+          <a
+            routerLink="/clusters"
+            routerLinkActive="text-foreground font-medium"
+            class="text-muted-foreground hover:text-foreground rounded-md px-3 py-1.5 transition-colors"
+          >
+            {{ 'nav.clusters' | transloco }}
+          </a>
+        </nav>
         <div class="ml-auto">
           <button hlmBtn variant="ghost" size="icon" [hlmDropdownMenuTrigger]="themeMenu">
             <ng-icon [name]="theme.resolved() === 'dark' ? 'lucideMoon' : 'lucideSun'" size="18" />

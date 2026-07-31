@@ -13,11 +13,34 @@
     "light": "Light",
     "dark": "Dark"
   },
+  "common": {
+    "cancel": "Cancel",
+    "loading": "Loading…"
+  },
   "home": {
     "serverStatus": "Server status",
     "reachable": "Reachable",
     "unreachable": "Unreachable",
     "version": "Server version",
     "checking": "Checking…"
+  },
+  "clusters": {
+    "title": "Clusters",
+    "create": "Create cluster",
+    "createTitle": "Create cluster",
+    "name": "Name",
+    "nameInvalid": "Use lowercase letters, digits and hyphens (max 40 chars).",
+    "replicas": "Instances",
+    "replicasHint": "1 primary plus streaming standbys.",
+    "storage": "Storage per instance",
+    "storageInvalid": "Use a size like 1Gi or 500Mi.",
+    "image": "Image",
+    "instances": "Instances",
+    "readyOf": "{{ready}} of {{total}} instances ready",
+    "delete": "Delete",
+    "deleteTitle": "Delete {{name}}?",
+    "deleteWarning": "The cluster and all of its data volumes will be removed. This cannot be undone.",
+    "emptyTitle": "No clusters yet",
+    "emptyHint": "Create your first HA Postgres cluster to get started."
   }
 }

@@ -66,6 +66,9 @@ agent-e2e: ## Docker e2e: replication + promotion with two agents
 cluster-e2e: ## Minikube e2e: cluster via REST API with streaming replication
 	./scripts/cluster-e2e.sh
 
+failover-e2e: ## Minikube e2e: kill primary -> promote, repoint, rejoin
+	./scripts/failover-e2e.sh
+
 ui-install: ## Install UI dependencies
 	cd ui && npm ci
 
