@@ -135,6 +135,34 @@ async fn healthz_and_readyz_live_outside_api_contract() {
 }
 
 #[tokio::test]
+async fn rotate_credentials_without_kube_answers_503() {
+    let resp = test_app()
+        .oneshot(
+            Request::post("/api/v1/clusters/demo/rotate-credentials")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn rotate_credentials_is_in_the_openapi_contract() {
+    let (_router, api) = pglord_server::app::build(
+        pglord_server::health::Readiness::default(),
+        &pglord_server::config::Config::test_default(),
+        None,
+        Default::default(),
+    );
+    assert!(
+        api.paths
+            .paths
+            .contains_key("/api/v1/clusters/{name}/rotate-credentials")
+    );
+}
+
+#[tokio::test]
 async fn metrics_serves_prometheus_text() {
     let resp = test_app()
         .oneshot(

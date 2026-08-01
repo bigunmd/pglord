@@ -75,13 +75,22 @@ pub fn role_of(in_recovery: Option<bool>) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::role_of;
+    use super::{role_of, roll_order};
 
     #[test]
     fn role_mapping_matches_recovery_state() {
         assert_eq!(role_of(Some(false)), "primary");
         assert_eq!(role_of(Some(true)), "standby");
         assert_eq!(role_of(None), "unknown");
+    }
+
+    #[test]
+    fn roll_order_is_standbys_first_primary_last() {
+        assert_eq!(
+            roll_order("demo", 3, "demo-1"),
+            vec!["demo-0", "demo-2", "demo-1"]
+        );
+        assert_eq!(roll_order("demo", 1, "demo-0"), vec!["demo-0"]);
     }
 }
 
@@ -426,39 +435,52 @@ pub async fn restart_cluster(
 
     let ops = ops.clone();
     tokio::spawn(async move {
-        let mut order: Vec<String> = (0..spec.replicas)
-            .map(|i| format!("{}-{i}", spec.name))
-            .filter(|p| *p != primary)
-            .collect();
-        order.push(primary.clone());
+        let order = roll_order(&spec.name, spec.replicas, &primary);
         tracing::info!(cluster = %spec.name, ?order, "rolling restart started");
-
-        let pods: Api<k8s_openapi::api::core::v1::Pod> = Api::namespaced(ops.kube.clone(), &ops.ns);
-        for pod in order {
-            if let Err(err) = pods.delete(&pod, &Default::default()).await {
-                tracing::warn!(%pod, %err, "restart: pod delete failed");
-                continue;
-            }
-            // Wait for it back and ready before touching the next one, so the
-            // cluster never loses more than one instance at a time.
-            for _ in 0..60u32 {
-                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                let obs = crate::instance_probe::observe_cluster(
-                    &ops.http,
-                    &spec.name,
-                    &ops.ns,
-                    spec.replicas,
-                )
-                .await;
-                if obs.iter().any(|o| o.pod == pod && o.ready) {
-                    break;
-                }
-            }
-            tracing::info!(%pod, "restart: instance back");
-        }
+        roll_pods(&ops, &spec, order).await;
         tracing::info!(cluster = %spec.name, "rolling restart finished");
     });
     Ok(StatusCode::ACCEPTED)
+}
+
+/// Standbys first, primary last: writes stay available for as long as possible.
+pub(crate) fn roll_order(cluster: &str, replicas: u8, primary: &str) -> Vec<String> {
+    let mut order: Vec<String> = (0..replicas)
+        .map(|i| format!("{cluster}-{i}"))
+        .filter(|p| p != primary)
+        .collect();
+    order.push(primary.to_string());
+    order
+}
+
+/// Delete each pod in order, waiting for it to come back ready before the
+/// next, so the cluster never loses more than one instance at a time.
+pub(crate) async fn roll_pods(
+    ops: &ClusterOps,
+    spec: &pglord_core::spec::ClusterSpec,
+    order: Vec<String>,
+) {
+    let pods: Api<k8s_openapi::api::core::v1::Pod> = Api::namespaced(ops.kube.clone(), &ops.ns);
+    for pod in order {
+        if let Err(err) = pods.delete(&pod, &Default::default()).await {
+            tracing::warn!(%pod, %err, "roll: pod delete failed");
+            continue;
+        }
+        for _ in 0..60u32 {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            let obs = crate::instance_probe::observe_cluster(
+                &ops.http,
+                &spec.name,
+                &ops.ns,
+                spec.replicas,
+            )
+            .await;
+            if obs.iter().any(|o| o.pod == pod && o.ready) {
+                break;
+            }
+        }
+        tracing::info!(%pod, "roll: instance back");
+    }
 }
 
 /// Delete a cluster (children are garbage-collected via ownerReferences).

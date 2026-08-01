@@ -13,6 +13,8 @@ export type { PatchCluster$Params as PatchCluster$Params } from './fn/clusters/p
 export { patchCluster as patchCluster } from './fn/clusters/patch-cluster';
 export type { RestartCluster$Params as RestartCluster$Params } from './fn/clusters/restart-cluster';
 export { restartCluster as restartCluster } from './fn/clusters/restart-cluster';
+export type { RotateCredentials$Params as RotateCredentials$Params } from './fn/clusters/rotate-credentials';
+export { rotateCredentials as rotateCredentials } from './fn/clusters/rotate-credentials';
 export type { ListRequiredSecrets$Params as ListRequiredSecrets$Params } from './fn/clusters/list-required-secrets';
 export { listRequiredSecrets as listRequiredSecrets } from './fn/clusters/list-required-secrets';
 export type { Switchover$Params as Switchover$Params } from './fn/clusters/switchover';

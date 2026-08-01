@@ -10,6 +10,7 @@ pub struct Metrics {
     pub reconcile_total: IntCounterVec,
     pub failover_total: IntCounterVec,
     pub backup_runs_total: IntCounterVec,
+    pub rotations_total: IntCounterVec,
     pub instances_ready: IntGaugeVec,
     pub instances: IntGaugeVec,
     pub clusters: IntGauge,
@@ -50,6 +51,12 @@ impl Metrics {
             "Finished backup runs by kind and outcome.",
             &["cluster", "kind", "outcome"],
         );
+        let rotations_total = counter_vec(
+            &registry,
+            "pglord_credential_rotations_total",
+            "Credential rotations by outcome.",
+            &["cluster", "outcome"],
+        );
         let instances_ready = gauge_vec(
             &registry,
             "pglord_cluster_instances_ready",
@@ -70,6 +77,7 @@ impl Metrics {
             reconcile_total,
             failover_total,
             backup_runs_total,
+            rotations_total,
             instances_ready,
             instances,
             clusters,
@@ -99,6 +107,11 @@ impl Metrics {
         }
         for trigger in ["auto", "manual"] {
             let _ = self.failover_total.remove_label_values(&[cluster, trigger]);
+        }
+        for outcome in ["succeeded", "failed"] {
+            let _ = self
+                .rotations_total
+                .remove_label_values(&[cluster, outcome]);
         }
         for kind in ["full", "diff", "incr"] {
             for outcome in ["succeeded", "failed"] {
@@ -130,6 +143,9 @@ mod tests {
             .with_label_values(&["demo", "full", "succeeded"])
             .inc();
         m.instances_ready.with_label_values(&["demo"]).set(3);
+        m.rotations_total
+            .with_label_values(&["demo", "succeeded"])
+            .inc();
         let out = m.render();
         assert!(out.contains("pglord_clusters 2"));
         assert!(out.contains("pglord_reconcile_total{cluster=\"demo\",outcome=\"ok\"} 1"));
@@ -138,6 +154,9 @@ mod tests {
             "pglord_backup_runs_total{cluster=\"demo\",kind=\"full\",outcome=\"succeeded\"} 1"
         ));
         assert!(out.contains("pglord_cluster_instances_ready{cluster=\"demo\"} 3"));
+        assert!(out.contains(
+            "pglord_credential_rotations_total{cluster=\"demo\",outcome=\"succeeded\"} 1"
+        ));
     }
 
     #[test]

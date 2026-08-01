@@ -91,6 +91,7 @@ pub fn build(
         ))
         .routes(routes!(crate::api::restore::restore_cluster))
         .routes(routes!(crate::api::secrets::list_required_secrets))
+        .routes(routes!(crate::api::secrets::rotate_credentials))
         .routes(routes!(crate::api::preflight::get_preflight));
 
     let (api_router, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())

@@ -8,8 +8,12 @@ use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use k8s_openapi::api::core::v1::{ConfigMap, Secret};
-use kube::api::Api;
+use kube::api::{Api, Patch, PatchParams};
 use pglord_core::deps::{RequiredResource, ResourceKind, required_resources};
+use pglord_core::render::{
+    AGENT_HTTP_PORT, REPLICATION_PASSWORD_KEY, SUPERUSER_PASSWORD_KEY, credentials_secret_name,
+    pod_fqdn,
+};
 use serde::Serialize;
 use utoipa::ToSchema;
 
@@ -146,4 +150,113 @@ mod tests {
         assert!(is_blocking(&status(false, true, &["secret-key"])));
         assert!(!is_blocking(&status(false, true, &[])));
     }
+}
+
+/// Rotate the managed credentials: new generated passwords are written to the
+/// Secret, applied on the primary, then every instance is restarted.
+#[utoipa::path(
+    post,
+    path = "/api/v1/clusters/{name}/rotate-credentials",
+    tag = "clusters",
+    params(("name" = String, Path, description = "Cluster name")),
+    responses(
+        (status = 202, description = "Rotation started"),
+        (status = 404, description = "Not found", body = crate::error::ProblemDetails, content_type = "application/problem+json"),
+        (status = 409, description = "Cluster uses a user-supplied credentials Secret", body = crate::error::ProblemDetails, content_type = "application/problem+json"),
+    )
+)]
+pub async fn rotate_credentials(
+    State(state): State<Option<ClusterOps>>,
+    Path(name): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let ops = ops(&state)?;
+    let Some((spec, _owner)) = ops.store.get(&name).await.map_err(ApiError::internal)? else {
+        return Err(ApiError::not_found());
+    };
+    if spec.credentials_secret().is_some() {
+        return Err(ApiError::conflict("custom_credentials_secret").with_detail(
+            "This cluster reads credentials from your own Secret; pglord only rotates the Secret it manages.",
+        ));
+    }
+    let primary = ops
+        .store
+        .primary(&name)
+        .await
+        .map_err(ApiError::internal)?
+        .unwrap_or_else(|| format!("{name}-0"));
+
+    let ops = ops.clone();
+    tokio::spawn(async move {
+        let outcome = match run_rotation(&ops, &spec, &primary).await {
+            Ok(()) => {
+                tracing::info!(cluster = %spec.name, "credentials rotation finished");
+                "succeeded"
+            }
+            Err(err) => {
+                tracing::error!(cluster = %spec.name, %err, "credentials rotation failed; re-POST to converge");
+                "failed"
+            }
+        };
+        ops.metrics
+            .rotations_total
+            .with_label_values(&[spec.name.as_str(), outcome])
+            .inc();
+    });
+    Ok(StatusCode::ACCEPTED)
+}
+
+/// The four idempotent steps. Any failure leaves a state a re-run converges:
+/// the Secret write and the ALTERs are both last-writer-wins, and the roll is
+/// a plain restart.
+async fn run_rotation(
+    ops: &ClusterOps,
+    spec: &pglord_core::spec::ClusterSpec,
+    primary: &str,
+) -> anyhow::Result<()> {
+    let su_pw = crate::reconciler::generate_password();
+    let repl_pw = crate::reconciler::generate_password();
+
+    let secrets: Api<Secret> = Api::namespaced(ops.kube.clone(), &ops.ns);
+    let patch = serde_json::json!({
+        "metadata": { "annotations": {
+            "pglord.dev/rotated-at": chrono::Utc::now().to_rfc3339(),
+        } },
+        "stringData": {
+            SUPERUSER_PASSWORD_KEY: su_pw.clone(),
+            REPLICATION_PASSWORD_KEY: repl_pw.clone(),
+        },
+    });
+    secrets
+        .patch(
+            &credentials_secret_name(&spec.name),
+            &PatchParams::default(),
+            &Patch::Merge(&patch),
+        )
+        .await?;
+    tracing::info!(cluster = %spec.name, "rotation: secret updated");
+
+    let url = format!(
+        "http://{}:{}/roles/apply",
+        pod_fqdn(primary, &spec.name, &ops.ns),
+        AGENT_HTTP_PORT
+    );
+    let resp = ops
+        .http
+        .post(&url)
+        .json(&serde_json::json!({
+            "superuser_password": su_pw,
+            "repl_password": repl_pw,
+        }))
+        .send()
+        .await?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("agent /roles/apply on {primary} answered {status}: {body}");
+    }
+    tracing::info!(cluster = %spec.name, %primary, "rotation: roles altered on primary");
+
+    let order = crate::api::clusters::roll_order(&spec.name, spec.replicas, primary);
+    crate::api::clusters::roll_pods(ops, spec, order).await;
+    Ok(())
 }

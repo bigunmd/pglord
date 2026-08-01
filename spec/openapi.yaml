@@ -277,6 +277,36 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
+  /api/v1/clusters/{name}/rotate-credentials:
+    post:
+      tags:
+      - clusters
+      summary: |-
+        Rotate the managed credentials: new generated passwords are written to the
+        Secret, applied on the primary, then every instance is restarted.
+      operationId: rotate_credentials
+      parameters:
+      - name: name
+        in: path
+        description: Cluster name
+        required: true
+        schema:
+          type: string
+      responses:
+        '202':
+          description: Rotation started
+        '404':
+          description: Not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '409':
+          description: Cluster uses a user-supplied credentials Secret
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
   /api/v1/clusters/{name}/secrets:
     get:
       tags:
