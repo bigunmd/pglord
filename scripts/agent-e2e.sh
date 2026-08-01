@@ -52,6 +52,17 @@ wait_status 18009 "['ready']" "True" 90
 wait_status 18009 "['in_recovery']" "True" 10
 echo "OK standby streaming (lsn: $(curl -s http://127.0.0.1:18009/status | python3 -c "import sys,json; print(json.load(sys.stdin)['lsn'])"))"
 
+echo "==> checking /metrics"
+curl -sf http://127.0.0.1:18008/metrics | grep -q '^pglord_pg_up 1' \
+  || { echo "FAIL primary /metrics missing pglord_pg_up 1"; exit 1; }
+curl -sf http://127.0.0.1:18008/metrics | grep -q '^pglord_instance_primary 1' \
+  || { echo "FAIL primary /metrics missing pglord_instance_primary 1"; exit 1; }
+curl -sf http://127.0.0.1:18009/metrics | grep -q '^pglord_instance_primary 0' \
+  || { echo "FAIL standby /metrics missing pglord_instance_primary 0"; exit 1; }
+curl -sf http://127.0.0.1:18008/metrics | grep -q '^pglord_pg_standby_replay_lag_bytes' \
+  || { echo "FAIL primary /metrics missing standby lag series"; exit 1; }
+echo "OK metrics exported"
+
 echo "==> writing on primary"
 docker exec -e PGPASSWORD="$SU_PW" "$PRIMARY" psql -U postgres -c "CREATE TABLE pglord_e2e(x int); INSERT INTO pglord_e2e VALUES (42);" >/dev/null
 
