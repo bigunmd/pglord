@@ -30,30 +30,34 @@ pub fn archive_conf(cluster: &str, enabled: bool) -> String {
     }
 }
 
-/// Write the archiving file when it differs; returns whether it changed.
-pub fn write_archive_if_changed(pgdata: &Path, rendered: &str) -> std::io::Result<bool> {
-    let path = pgdata.join(ARCHIVE_FILE);
-    if let Ok(existing) = std::fs::read_to_string(&path)
+/// Write `rendered` to `path` unless it already has exactly that content;
+/// returns whether anything was written. Content comparison is what keeps the
+/// agent from signalling postgres on every poll.
+fn write_file_if_changed(path: &Path, rendered: &str) -> std::io::Result<bool> {
+    if let Ok(existing) = std::fs::read_to_string(path)
         && existing == rendered
     {
         return Ok(false);
     }
-    std::fs::write(&path, rendered)?;
+    std::fs::write(path, rendered)?;
     Ok(true)
 }
 
+/// Write the archiving file when it differs; returns whether it changed.
+pub fn write_archive_if_changed(pgdata: &Path, rendered: &str) -> std::io::Result<bool> {
+    write_file_if_changed(&pgdata.join(ARCHIVE_FILE), rendered)
+}
+
 /// Write the rendered parameters, returning whether the content changed.
-/// Comparing content (rather than reloading unconditionally) keeps the agent
-/// from signalling postgres on every poll.
 pub fn write_if_changed(pgdata: &Path, rendered: &str) -> std::io::Result<bool> {
-    let path = pgdata.join(PARAMS_FILE);
-    if let Ok(existing) = std::fs::read_to_string(&path)
-        && existing == rendered
-    {
-        return Ok(false);
-    }
-    std::fs::write(&path, rendered)?;
-    Ok(true)
+    write_file_if_changed(&pgdata.join(PARAMS_FILE), rendered)
+}
+
+/// Write the rendered pg_hba.conf when it differs; returns whether it changed.
+/// Unlike the parameter files this is not an include — the agent owns the
+/// whole file (see pglord_core::hba::render).
+pub fn write_hba_if_changed(pgdata: &Path, rendered: &str) -> std::io::Result<bool> {
+    write_file_if_changed(&pgdata.join("pg_hba.conf"), rendered)
 }
 
 /// Ask postgres to re-read its configuration. Reload-safe settings take effect
@@ -117,6 +121,33 @@ mod tests {
             std::fs::read_to_string(dir.join(PARAMS_FILE)).expect("read"),
             ""
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn hba_write_is_idempotent_and_targets_pg_hba_conf() {
+        let dir = tempdir("hba");
+        let rendered = pglord_core::hba::render(&[], "replicator", true);
+        assert!(write_hba_if_changed(&dir, &rendered).expect("write"));
+        // Unchanged content must not report a change: a report triggers a
+        // reload, and this runs on every 5s poll.
+        assert!(!write_hba_if_changed(&dir, &rendered).expect("write"));
+        assert_eq!(
+            std::fs::read_to_string(dir.join("pg_hba.conf")).expect("read"),
+            rendered
+        );
+        let with_rule = pglord_core::hba::render(
+            &[pglord_core::hba::HbaRule {
+                conn: pglord_core::hba::HbaConn::Host,
+                database: "all".into(),
+                user: "intruder".into(),
+                address: "0.0.0.0/0".into(),
+                method: pglord_core::hba::HbaMethod::Reject,
+            }],
+            "replicator",
+            true,
+        );
+        assert!(write_hba_if_changed(&dir, &with_rule).expect("write"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

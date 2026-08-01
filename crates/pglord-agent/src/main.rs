@@ -45,7 +45,11 @@ async fn main() -> anyhow::Result<()> {
     let cfg = Arc::new(cfg);
     tracing::info!(role = ?cfg.role, %hostname, restored, version = env!("CARGO_PKG_VERSION"), "pglord-agent starting");
 
-    bootstrap::ensure_bootstrapped(&cfg, restore.as_ref()).await?;
+    let hba_rules = cluster_spec
+        .as_ref()
+        .map(|s| s.pg_hba.clone())
+        .unwrap_or_default();
+    bootstrap::ensure_bootstrapped(&cfg, restore.as_ref(), &hba_rules).await?;
     let child = supervisor::spawn_postgres(&cfg)?;
 
     if cfg.role == Role::Primary {

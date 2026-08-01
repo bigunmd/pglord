@@ -143,8 +143,8 @@ pub async fn follow(reader: RecordReader, cfg: std::sync::Arc<Config>, me: Strin
 }
 
 /// Apply everything the spec drives on this instance: user parameters,
-/// archiving, and the backup repository config. Reload-safe settings take
-/// effect at once; the rest surface as pending_restart.
+/// archiving, pg_hba rules, and the backup repository config. Reload-safe
+/// settings take effect at once; the rest surface as pending_restart.
 async fn apply_parameters(reader: &RecordReader, cfg: &Config) {
     let Some(spec) = reader.spec().await else {
         return;
@@ -163,6 +163,20 @@ async fn apply_parameters(reader: &RecordReader, cfg: &Config) {
         Ok(true) => changed = true,
         Ok(false) => {}
         Err(err) => tracing::warn!(%err, "failed to write archive settings"),
+    }
+
+    // pg_hba is reload-safe, so it shares the single reload at the end of the
+    // pass. scram mirrors bootstrap: a configured superuser password is what
+    // switched the managed rules to scram-sha-256.
+    let hba = pglord_core::hba::render(
+        &spec.pg_hba,
+        &cfg.repl_user,
+        !cfg.superuser_password.is_empty(),
+    );
+    match crate::params::write_hba_if_changed(&cfg.pgdata, &hba) {
+        Ok(true) => changed = true,
+        Ok(false) => {}
+        Err(err) => tracing::warn!(%err, "failed to write pg_hba.conf"),
     }
 
     if spec.backup.enabled {

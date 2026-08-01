@@ -38,24 +38,6 @@ pub fn postgresql_conf_extra(port: u16) -> String {
     )
 }
 
-/// Extra pg_hba.conf lines appended after initdb. With a password configured,
-/// network access is scram-only; the trust variant remains ONLY for
-/// credential-less dev runs and is loudly logged.
-pub fn pg_hba_extra(repl_user: &str, scram: bool) -> String {
-    if scram {
-        format!(
-            "\n# --- managed by pglord-agent ---\n\
-             host all all 0.0.0.0/0 scram-sha-256\n\
-             host replication {repl_user} 0.0.0.0/0 scram-sha-256\n"
-        )
-    } else {
-        "\n# --- managed by pglord-agent (INSECURE trust mode: no password configured) ---\n\
-         host all all 0.0.0.0/0 trust\n\
-         host replication all 0.0.0.0/0 trust\n"
-            .to_string()
-    }
-}
-
 fn is_bootstrapped(pgdata: &Path) -> bool {
     pgdata.join("PG_VERSION").exists()
 }
@@ -78,6 +60,7 @@ pub fn restore_pending(pgdata: &Path, restore: Option<&RestoreSpec>) -> bool {
 pub async fn ensure_bootstrapped(
     cfg: &Config,
     restore: Option<&RestoreSpec>,
+    hba_rules: &[pglord_core::hba::HbaRule],
 ) -> anyhow::Result<()> {
     // Only the primary restores. Standbys of a restored cluster stream from it
     // with an ordinary basebackup, exactly like any other cluster's standbys.
@@ -100,7 +83,7 @@ pub async fn ensure_bootstrapped(
         return Ok(());
     }
     match cfg.role {
-        Role::Primary => bootstrap_primary(cfg).await,
+        Role::Primary => bootstrap_primary(cfg, hba_rules).await,
         Role::Standby => bootstrap_standby(cfg).await,
         Role::Auto => bail!("role must be resolved before bootstrap (see rolestrategy)"),
     }
@@ -243,7 +226,10 @@ async fn demote_to_standby(cfg: &Config) -> anyhow::Result<()> {
     bootstrap_standby(cfg).await
 }
 
-async fn bootstrap_primary(cfg: &Config) -> anyhow::Result<()> {
+async fn bootstrap_primary(
+    cfg: &Config,
+    hba_rules: &[pglord_core::hba::HbaRule],
+) -> anyhow::Result<()> {
     tracing::info!(pgdata = %cfg.pgdata.display(), "running initdb");
     let scram = !cfg.superuser_password.is_empty();
     let mut cmd = Command::new("initdb");
@@ -283,10 +269,13 @@ async fn bootstrap_primary(cfg: &Config) -> anyhow::Result<()> {
         &cfg.pgdata.join("postgresql.conf"),
         &postgresql_conf_extra(cfg.port),
     )?;
-    append(
-        &cfg.pgdata.join("pg_hba.conf"),
-        &pg_hba_extra(&cfg.repl_user, scram),
-    )?;
+    // The agent owns the whole file: a pure render of the spec, replacing
+    // whatever initdb generated (same effective prefix — see hba::render).
+    std::fs::write(
+        cfg.pgdata.join("pg_hba.conf"),
+        pglord_core::hba::render(hba_rules, &cfg.repl_user, scram),
+    )
+    .context("write pg_hba.conf")?;
     tracing::info!(scram, "primary bootstrap complete");
     Ok(())
 }
@@ -365,18 +354,12 @@ mod tests {
     }
 
     #[test]
-    fn hba_scram_mode_has_no_trust_lines() {
-        let hba = pg_hba_extra("replicator", true);
-        assert!(hba.contains("host all all 0.0.0.0/0 scram-sha-256"));
-        assert!(hba.contains("host replication replicator 0.0.0.0/0 scram-sha-256"));
-        assert!(!hba.contains("trust"));
-    }
-
-    #[test]
-    fn hba_trust_fallback_kept_for_dev() {
-        let hba = pg_hba_extra("replicator", false);
-        assert!(hba.contains("host replication all 0.0.0.0/0 trust"));
-        assert!(hba.contains("INSECURE"));
+    fn bootstrap_uses_the_core_hba_render() {
+        // The file is a pure function of the spec; bootstrap must not add or
+        // append anything of its own on top of the core render.
+        let out = pglord_core::hba::render(&[], "replicator", true);
+        assert!(out.contains("host replication replicator 0.0.0.0/0 scram-sha-256"));
+        assert!(out.ends_with("host all all 0.0.0.0/0 scram-sha-256\n"));
     }
 
     fn cfg_with(repl_password: &str) -> Config {
