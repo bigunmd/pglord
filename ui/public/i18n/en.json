@@ -118,6 +118,24 @@
     "restartTitle": "Restart {{name}}?",
     "restartWarning": "Instances restart one at a time, standbys first and the primary last. Connections drop briefly as each instance comes back."
   },
+  "hba": {
+    "title": "Client access rules",
+    "edit": "Edit access rules",
+    "editTitle": "Client access rules (pg_hba)",
+    "explainer": "Rules are checked first match wins. pglord always allows replication and local access before your rules and accepts any password-authenticated client after them; add reject rules to tighten access. Changes apply with a reload — no restart.",
+    "conn": "Connection",
+    "database": "Database",
+    "user": "User",
+    "address": "Address",
+    "method": "Method",
+    "add": "Add rule",
+    "remove": "Remove rule",
+    "apply": "Apply rules",
+    "noneSet": "No rules defined — any client with a valid password can connect.",
+    "databasePlaceholder": "all",
+    "userPlaceholder": "all",
+    "addressPlaceholder": "10.0.0.0/8"
+  },
   "preflight": {
     "title": "Cluster permissions",
     "intro": "What pglord is allowed to do in its namespace, as reported by the Kubernetes API server.",

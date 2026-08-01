@@ -11,6 +11,7 @@ import {
   lucideDatabaseBackup,
   lucideServer,
   lucideSettings,
+  lucideShield,
   lucideTriangleAlert,
 } from '@ng-icons/lucide';
 import { BrnDialogRef, injectBrnDialogContext } from '@spartan-ng/brain/dialog';
@@ -53,6 +54,8 @@ import { RestoreRequest } from '../../api/models/restore-request';
 import { restoreCluster } from '../../api/fn/backups/restore-cluster';
 import { ClusterConfigDialogComponent } from './cluster-config-dialog.component';
 import { ClusterEditDialogComponent } from './cluster-edit-dialog.component';
+import { ClusterHbaDialogComponent } from './cluster-hba-dialog.component';
+import { HbaRule } from '../../api/models/hba-rule';
 import { ClusterWorkloadDialogComponent } from './cluster-workload-dialog.component';
 
 const REFRESH_MS = 5000;
@@ -156,6 +159,7 @@ export class RotateCredentialsDialogComponent {
       lucideDatabaseBackup,
       lucideServer,
       lucideSettings,
+      lucideShield,
       lucideTriangleAlert,
     }),
   ],
@@ -628,6 +632,51 @@ export class RotateCredentialsDialogComponent {
         } @else {
           <p class="text-muted-foreground mt-2 text-sm">{{ 'config.usingDefaults' | transloco }}</p>
         }
+
+        <!-- Client access rules -->
+        <div class="mt-6 flex items-center justify-between">
+          <h2 class="font-medium">{{ 'hba.title' | transloco }}</h2>
+          <button
+            hlmBtn
+            variant="outline"
+            size="sm"
+            data-testid="open-hba"
+            [disabled]="busy()"
+            (click)="openHba(d)"
+          >
+            <ng-icon name="lucideShield" size="14" />
+            {{ 'hba.edit' | transloco }}
+          </button>
+        </div>
+
+        @if (d.pg_hba.length) {
+          <div class="border-border mt-2 overflow-x-auto rounded-lg border">
+            <table hlmTable class="w-full">
+              <thead hlmTHead>
+                <tr hlmTr>
+                  <th hlmTh>{{ 'hba.conn' | transloco }}</th>
+                  <th hlmTh>{{ 'hba.database' | transloco }}</th>
+                  <th hlmTh>{{ 'hba.user' | transloco }}</th>
+                  <th hlmTh>{{ 'hba.address' | transloco }}</th>
+                  <th hlmTh>{{ 'hba.method' | transloco }}</th>
+                </tr>
+              </thead>
+              <tbody hlmTBody>
+                @for (r of d.pg_hba; track $index; let i = $index) {
+                  <tr hlmTr [attr.data-testid]="'hba-view-row-' + i">
+                    <td hlmTd class="font-mono text-xs">{{ r.conn }}</td>
+                    <td hlmTd class="font-mono text-xs">{{ r.database }}</td>
+                    <td hlmTd class="font-mono text-xs">{{ r.user }}</td>
+                    <td hlmTd class="font-mono text-xs">{{ r.address }}</td>
+                    <td hlmTd class="font-mono text-xs">{{ r.method }}</td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
+        } @else {
+          <p class="text-muted-foreground mt-2 text-sm">{{ 'hba.noneSet' | transloco }}</p>
+        }
       } @else if (!error()) {
         <p class="text-muted-foreground text-sm">{{ 'common.loading' | transloco }}</p>
       }
@@ -813,6 +862,21 @@ export class ClusterDetailComponent implements OnDestroy {
     }
     await this.run(() =>
       this.api.invoke(patchCluster, { name: this.name(), body: { parameters } }),
+    );
+  }
+
+  async openHba(d: ClusterDetail): Promise<void> {
+    const rules = await firstValueFrom(
+      this.dialog.open<HbaRule[] | undefined>(ClusterHbaDialogComponent, {
+        context: { rules: d.pg_hba ?? [] },
+        contentClass: EDITOR_DIALOG_CLASS,
+      }).closed$,
+    );
+    if (!rules) {
+      return;
+    }
+    await this.run(() =>
+      this.api.invoke(patchCluster, { name: this.name(), body: { pg_hba: rules } }),
     );
   }
 
