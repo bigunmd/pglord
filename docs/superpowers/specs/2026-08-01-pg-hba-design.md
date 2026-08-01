@@ -114,9 +114,9 @@ reads the full spec from the ConfigMap (`reader.spec()`) and has `repl_user` in 
 ## Server and contract
 
 No new endpoint. `pg_hba` rides the existing spec-update path; invalid rules are
-rejected by core validation as the usual RFC 9457 400 with a distinct `SpecError`
-variant per failure (unknown method is unrepresentable — serde rejects it at
-deserialization). After the DTO change: `make openapi ui-client`, commit the
+rejected by core validation as the usual RFC 9457 422 (code `invalid_pg_hba`), with
+a distinct `HbaError` variant per failure (unknown method is unrepresentable — serde
+rejects it at deserialization). After the DTO change: `make openapi ui-client`, commit the
 regenerated spec and client with the code.
 
 ## UI
