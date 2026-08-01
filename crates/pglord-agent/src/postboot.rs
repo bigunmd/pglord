@@ -40,6 +40,34 @@ pub async fn ensure_roles(cfg: &Config, reset_superuser: bool) {
     }
 }
 
+/// Run the cluster's init scripts, once, after the roles exist.
+///
+/// Ordered after role setup on purpose: a script that grants privileges to the
+/// replication role would otherwise fail on a role that does not exist yet.
+pub async fn ensure_initialised(cfg: &Config, spec: &pglord_core::spec::ClusterSpec) {
+    if !crate::initdb::init_pending(&cfg.pgdata) {
+        return;
+    }
+    for _ in 0..60u32 {
+        if status::query_status(cfg).await.ready {
+            break;
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+    match crate::initdb::run_scripts(cfg, spec).await {
+        Ok(()) => {
+            // Marked only on success, so a failed script is retried when the
+            // pod restarts rather than silently skipped forever.
+            if let Err(err) = crate::initdb::mark_initialised(&cfg.pgdata) {
+                tracing::error!(%err, "init scripts ran but the marker could not be written");
+            } else if !spec.init.is_empty() {
+                tracing::info!("init scripts complete");
+            }
+        }
+        Err(err) => tracing::error!(%err, "init scripts failed; will retry on restart"),
+    }
+}
+
 async fn try_ensure(cfg: &Config, reset_superuser: bool) -> anyhow::Result<()> {
     // Role name and password are interpolated into DDL below (Postgres cannot
     // bind them as parameters); enforce the charset invariant explicitly so a

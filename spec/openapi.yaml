@@ -277,6 +277,32 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
+  /api/v1/clusters/{name}/secrets:
+    get:
+      tags:
+      - clusters
+      summary: List the Secrets and ConfigMaps this cluster depends on.
+      operationId: list_required_secrets
+      parameters:
+      - name: name
+        in: path
+        description: Cluster name
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Required Secrets and ConfigMaps
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResourceList'
+        '404':
+          description: Not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
   /api/v1/clusters/{name}/switchover:
     post:
       tags:
@@ -554,14 +580,33 @@ components:
       - parameters
       - workload
       - backup
+      - env
+      - init
       - pending_restart
       - instances
       properties:
         backup:
           $ref: '#/components/schemas/BackupSpec'
           description: Backup repository (secret name only — never its contents).
+        credentials_secret:
+          type:
+          - string
+          - 'null'
+          description: |-
+            Secret the passwords come from when the user supplied their own; null
+            when pglord generates them.
+        env:
+          type: array
+          items:
+            $ref: '#/components/schemas/EnvVarSpec'
+          description: |-
+            Custom environment variables on the instances (secret *references*
+            only — never their values).
         image:
           type: string
+        init:
+          $ref: '#/components/schemas/InitSpec'
+          description: Sources of the one-time initialisation scripts.
         instances:
           type: array
           items:
@@ -610,9 +655,27 @@ components:
           description: |-
             Backup repository. Disabled by default; enabling it also turns on WAL
             archiving, which needs a restart.
+        credentials_secret:
+          type:
+          - string
+          - 'null'
+          description: |-
+            Secret holding the superuser and replication passwords. When set,
+            pglord uses it instead of generating one — so the cluster has a single
+            source of truth for its credentials rather than two.
+        env:
+          type: array
+          items:
+            $ref: '#/components/schemas/EnvVarSpec'
+          description: |-
+            Extra environment variables on the instance containers, for init
+            scripts and anything else in the container to read.
         image:
           type: string
           description: Image containing postgres + pglord-agent (agent is the entrypoint).
+        init:
+          $ref: '#/components/schemas/InitSpec'
+          description: SQL run once, when the data directory is first created.
         name:
           type: string
           description: RFC1123 label; used as the prefix of every derived object name.
@@ -664,6 +727,23 @@ components:
           type: integer
           format: int32
           minimum: 0
+    EnvVarSpec:
+      type: object
+      required:
+      - name
+      properties:
+        name:
+          type: string
+        secret:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/SecretKeyRefSpec'
+            description: Value taken from a Secret at pod start. Mutually exclusive with `value`.
+        value:
+          type:
+          - string
+          - 'null'
+          description: Literal value. Mutually exclusive with `secret`.
     GucInfo:
       type: object
       required:
@@ -688,6 +768,21 @@ components:
           type: string
         summary:
           type: string
+    InitSpec:
+      type: object
+      properties:
+        scripts_config_map:
+          type:
+          - string
+          - 'null'
+          description: ConfigMap whose `.sql` keys are run in filename order.
+        scripts_secret:
+          type:
+          - string
+          - 'null'
+          description: |-
+            Secret whose `.sql` keys are run after the ConfigMap's, in filename
+            order. For init SQL that contains credentials.
     InstanceDto:
       type: object
       required:
@@ -785,6 +880,76 @@ components:
         type:
           type: string
           description: 'URI reference identifying the problem type: `{PROBLEM_BASE_URL}/{code}`.'
+    RequiredResource:
+      type: object
+      required:
+      - name
+      - kind
+      - purpose
+      - keys
+      - managed
+      properties:
+        keys:
+          type: array
+          items:
+            type: string
+          description: Keys that must be present. Empty when any key will do (init scripts).
+        kind:
+          $ref: '#/components/schemas/ResourceKind'
+        managed:
+          type: boolean
+          description: pglord creates and owns this one; the user creates the rest.
+        name:
+          type: string
+        purpose:
+          $ref: '#/components/schemas/ResourcePurpose'
+    ResourceKind:
+      type: string
+      enum:
+      - secret
+      - configmap
+    ResourceList:
+      type: object
+      required:
+      - satisfied
+      - resources
+      properties:
+        resources:
+          type: array
+          items:
+            $ref: '#/components/schemas/ResourceStatus'
+        satisfied:
+          type: boolean
+          description: Nothing the cluster depends on is missing or incomplete.
+    ResourcePurpose:
+      type: string
+      description: |-
+        Why a cluster needs this object. The UI translates these; keeping them
+        machine-readable means the reason survives translation.
+      enum:
+      - credentials
+      - backup_repository
+      - restore_repository
+      - custom_env
+      - init_scripts
+    ResourceStatus:
+      allOf:
+      - $ref: '#/components/schemas/RequiredResource'
+      - type: object
+        required:
+        - exists
+        - missing_keys
+        properties:
+          exists:
+            type: boolean
+            description: The object exists in the namespace.
+          missing_keys:
+            type: array
+            items:
+              type: string
+            description: |-
+              Required keys the object does not have. Empty when it is absent
+              entirely — that is what `exists` is for.
     Resources:
       type: object
       properties:
@@ -863,18 +1028,53 @@ components:
       - succeeded
       - failed
       - unknown
+    SecretKeyRefSpec:
+      type: object
+      required:
+      - name
+      - key
+      properties:
+        key:
+          type: string
+        name:
+          type: string
+          description: Secret in the same namespace. pglord never reads its contents.
     SpecChange:
       type: object
       description: |-
         The fields a running cluster may change. Name and image are deliberately
         absent: renaming would orphan every derived object, and image changes are a
         rolling-upgrade concern with its own (future) workflow.
+
+        `credentials_secret` is absent for a subtler reason. Pointing a running
+        cluster at a different Secret would change the password the agent presents
+        without changing the one stored in `pg_authid`, so every client using the
+        new Secret would be rejected while the cluster looked healthy. Rotating
+        credentials is a real operation and needs its own workflow, not a field
+        edit that silently half-applies.
       properties:
         backup:
           oneOf:
           - type: 'null'
           - $ref: '#/components/schemas/BackupSpec'
             description: Full replacement of the backup block.
+        env:
+          type:
+          - array
+          - 'null'
+          items:
+            $ref: '#/components/schemas/EnvVarSpec'
+          description: |-
+            Full replacement of the custom environment. Changing it rolls the
+            instances, since the pod template changes.
+        init:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/InitSpec'
+            description: |-
+              Full replacement of the init block. Editing this does *not* re-run
+              initialisation: scripts describe how a database is created, and the
+              cluster's data directory already exists.
         parameters:
           type:
           - object

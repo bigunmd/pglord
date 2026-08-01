@@ -1,7 +1,10 @@
 //! Shared pglord domain types. Grows into the cluster spec model (see design doc).
 
 pub mod backup;
+pub mod deps;
+pub mod env;
 pub mod guc;
+pub mod init;
 pub mod render;
 pub mod restore;
 pub mod spec;

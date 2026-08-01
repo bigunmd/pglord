@@ -51,6 +51,14 @@ pub struct ClusterDetail {
     /// Where this cluster's data came from, when it was created by a restore.
     /// Null for clusters that started empty.
     pub restore: Option<pglord_core::restore::RestoreSpec>,
+    /// Secret the passwords come from when the user supplied their own; null
+    /// when pglord generates them.
+    pub credentials_secret: Option<String>,
+    /// Custom environment variables on the instances (secret *references*
+    /// only — never their values).
+    pub env: Vec<pglord_core::env::EnvVarSpec>,
+    /// Sources of the one-time initialisation scripts.
+    pub init: pglord_core::init::InitSpec,
     /// Any instance is waiting on a restart to apply staged settings.
     pub pending_restart: bool,
     pub instances: Vec<InstanceDto>,
@@ -205,6 +213,9 @@ pub async fn get_cluster(
         workload: spec.workload,
         backup: spec.backup,
         restore: spec.restore,
+        credentials_secret: spec.credentials_secret,
+        env: spec.env,
+        init: spec.init,
         pending_restart,
         instances,
     }))

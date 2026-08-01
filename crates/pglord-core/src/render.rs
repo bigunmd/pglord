@@ -7,11 +7,12 @@ use k8s_openapi::api::apps::v1::{
     StatefulSet, StatefulSetPersistentVolumeClaimRetentionPolicy, StatefulSetSpec,
 };
 use k8s_openapi::api::core::v1::{
-    Affinity, Container, ContainerPort, EnvVar, EnvVarSource, HTTPGetAction, LocalObjectReference,
-    ObjectFieldSelector, PersistentVolumeClaim, PersistentVolumeClaimSpec, PodAffinityTerm,
-    PodAntiAffinity, PodSpec, PodTemplateSpec, Probe, ResourceRequirements, SecretKeySelector,
-    Service, ServiceAccount, ServicePort, ServiceSpec, Toleration as K8sToleration, VolumeMount,
-    VolumeResourceRequirements, WeightedPodAffinityTerm,
+    Affinity, ConfigMapVolumeSource, Container, ContainerPort, EnvVar, EnvVarSource, HTTPGetAction,
+    LocalObjectReference, ObjectFieldSelector, PersistentVolumeClaim, PersistentVolumeClaimSpec,
+    PodAffinityTerm, PodAntiAffinity, PodSpec, PodTemplateSpec, Probe, ResourceRequirements,
+    SecretKeySelector, SecretVolumeSource, Service, ServiceAccount, ServicePort, ServiceSpec,
+    Toleration as K8sToleration, Volume, VolumeMount, VolumeResourceRequirements,
+    WeightedPodAffinityTerm,
 };
 use k8s_openapi::api::rbac::v1::{PolicyRule, Role, RoleBinding, RoleRef, Subject};
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
@@ -167,15 +168,23 @@ pub fn credentials_secret_name(cluster: &str) -> String {
     format!("{cluster}-credentials")
 }
 
+/// The Secret this cluster's passwords actually come from: the user's when they
+/// supplied one, otherwise the generated one.
+pub fn credentials_secret_for(spec: &ClusterSpec) -> String {
+    spec.credentials_secret()
+        .map(str::to_string)
+        .unwrap_or_else(|| credentials_secret_name(&spec.name))
+}
+
 pub const SUPERUSER_PASSWORD_KEY: &str = "superuser-password";
 pub const REPLICATION_PASSWORD_KEY: &str = "replication-password";
 
-fn secret_env(name: &str, cluster: &str, key: &str) -> EnvVar {
+fn secret_env(name: &str, spec: &ClusterSpec, key: &str) -> EnvVar {
     EnvVar {
         name: name.to_string(),
         value_from: Some(EnvVarSource {
             secret_key_ref: Some(SecretKeySelector {
-                name: credentials_secret_name(cluster),
+                name: credentials_secret_for(spec),
                 key: key.to_string(),
                 ..Default::default()
             }),
@@ -183,6 +192,87 @@ fn secret_env(name: &str, cluster: &str, key: &str) -> EnvVar {
         }),
         ..Default::default()
     }
+}
+
+/// Read-only mounts for the init script sources.
+///
+/// Not marked optional: a missing ConfigMap leaves the pod unstarted with the
+/// reason in its events, whereas an optional mount would produce a cluster that
+/// came up healthy having silently skipped its own initialisation.
+fn init_script_mounts(spec: &ClusterSpec) -> Vec<VolumeMount> {
+    let mut mounts = Vec::new();
+    if spec.init.config_map().is_some() {
+        mounts.push(VolumeMount {
+            name: crate::init::SCRIPTS_CONFIG_MAP_VOLUME.to_string(),
+            mount_path: crate::init::SCRIPTS_CONFIG_MAP_MOUNT.to_string(),
+            read_only: Some(true),
+            ..Default::default()
+        });
+    }
+    if spec.init.secret().is_some() {
+        mounts.push(VolumeMount {
+            name: crate::init::SCRIPTS_SECRET_VOLUME.to_string(),
+            mount_path: crate::init::SCRIPTS_SECRET_MOUNT.to_string(),
+            read_only: Some(true),
+            ..Default::default()
+        });
+    }
+    mounts
+}
+
+fn init_script_volumes(spec: &ClusterSpec) -> Vec<Volume> {
+    let mut volumes = Vec::new();
+    if let Some(name) = spec.init.config_map() {
+        volumes.push(Volume {
+            name: crate::init::SCRIPTS_CONFIG_MAP_VOLUME.to_string(),
+            config_map: Some(ConfigMapVolumeSource {
+                name: name.to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+    }
+    if let Some(name) = spec.init.secret() {
+        volumes.push(Volume {
+            name: crate::init::SCRIPTS_SECRET_VOLUME.to_string(),
+            secret: Some(SecretVolumeSource {
+                secret_name: Some(name.to_string()),
+                // 0444, not 0400. Kubernetes owns projected secret files as
+                // root, and the container runs as postgres — an owner-only mode
+                // would leave the scripts unreadable by the process that has to
+                // run them. The protection this source provides is that the SQL
+                // never lands in a ConfigMap that any namespace reader can see;
+                // inside the pod it is on a tmpfs only this pod can reach.
+                default_mode: Some(0o444),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+    }
+    volumes
+}
+
+/// The user's own environment variables.
+///
+/// Deliberately *not* optional: a missing key leaves the pod unstarted with a
+/// clear event, which beats a container that comes up with an init script
+/// silently missing the password it was supposed to set.
+fn custom_env(spec: &ClusterSpec) -> Vec<EnvVar> {
+    spec.env
+        .iter()
+        .map(|e| EnvVar {
+            name: e.name.clone(),
+            value: e.value.clone(),
+            value_from: e.secret.as_ref().map(|s| EnvVarSource {
+                secret_key_ref: Some(SecretKeySelector {
+                    name: s.name.clone(),
+                    key: s.key.clone(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+        })
+        .collect()
 }
 
 /// Object-storage credentials from the user's Secret. `optional: true` keeps
@@ -318,17 +408,16 @@ pub fn render_statefulset(spec: &ClusterSpec, ns: &str, owner: &OwnerRef) -> Sta
                 },
                 secret_env(
                     "PGLORD_AGENT_SUPERUSER_PASSWORD",
-                    &spec.name,
+                    spec,
                     SUPERUSER_PASSWORD_KEY,
                 ),
-                secret_env(
-                    "PGLORD_AGENT_REPL_PASSWORD",
-                    &spec.name,
-                    REPLICATION_PASSWORD_KEY,
-                ),
+                secret_env("PGLORD_AGENT_REPL_PASSWORD", spec, REPLICATION_PASSWORD_KEY),
             ]
             .into_iter()
             .chain(backup_env(spec))
+            // Last, so that even if the reserved-name check were ever bypassed
+            // a user variable could not shadow one the agent depends on.
+            .chain(custom_env(spec))
             .collect(),
         ),
         ports: Some(vec![
@@ -346,11 +435,15 @@ pub fn render_statefulset(spec: &ClusterSpec, ns: &str, owner: &OwnerRef) -> Sta
         readiness_probe: Some(http_probe("/readyz")),
         liveness_probe: Some(http_probe("/healthz")),
         resources: resource_requirements(&spec.workload.resources),
-        volume_mounts: Some(vec![VolumeMount {
-            name: "data".to_string(),
-            mount_path: "/var/lib/postgresql/data".to_string(),
-            ..Default::default()
-        }]),
+        volume_mounts: Some(
+            std::iter::once(VolumeMount {
+                name: "data".to_string(),
+                mount_path: "/var/lib/postgresql/data".to_string(),
+                ..Default::default()
+            })
+            .chain(init_script_mounts(spec))
+            .collect(),
+        ),
         ..Default::default()
     };
 
@@ -393,6 +486,10 @@ pub fn render_statefulset(spec: &ClusterSpec, ns: &str, owner: &OwnerRef) -> Sta
                             .map(|name| LocalObjectReference { name: name.clone() })
                             .collect()
                     }),
+                    volumes: {
+                        let volumes = init_script_volumes(spec);
+                        (!volumes.is_empty()).then_some(volumes)
+                    },
                     ..Default::default()
                 }),
             },
@@ -519,6 +616,156 @@ mod tests {
             .expect("requests")
             .clone();
         assert_eq!(req["storage"].0, "1Gi");
+    }
+
+    fn pod_of(spec: &ClusterSpec, owner: &OwnerRef) -> PodSpec {
+        render_statefulset(spec, "ns", owner)
+            .spec
+            .expect("spec")
+            .template
+            .spec
+            .expect("pod")
+    }
+
+    #[test]
+    fn a_supplied_credentials_secret_replaces_the_generated_one() {
+        let (mut spec, owner) = demo();
+        assert_eq!(credentials_secret_for(&spec), "demo-credentials");
+
+        spec.credentials_secret = Some("my-creds".into());
+        assert_eq!(credentials_secret_for(&spec), "my-creds");
+
+        // Both password variables have to follow, or the agent would read the
+        // superuser password from one Secret and replication from another.
+        let env = pod_of(&spec, &owner).containers[0]
+            .env
+            .clone()
+            .expect("env");
+        for var in [
+            "PGLORD_AGENT_SUPERUSER_PASSWORD",
+            "PGLORD_AGENT_REPL_PASSWORD",
+        ] {
+            let sel = env
+                .iter()
+                .find(|e| e.name == var)
+                .unwrap_or_else(|| panic!("{var}"))
+                .value_from
+                .as_ref()
+                .expect("value_from")
+                .secret_key_ref
+                .as_ref()
+                .expect("secret ref");
+            assert_eq!(
+                sel.name, "my-creds",
+                "{var} must follow the supplied secret"
+            );
+        }
+
+        // A blank name is not a name: it must fall back to the generated one
+        // rather than render a secretKeyRef to "".
+        spec.credentials_secret = Some("   ".into());
+        assert_eq!(credentials_secret_for(&spec), "demo-credentials");
+    }
+
+    #[test]
+    fn custom_environment_variables_reach_the_container() {
+        let (mut spec, owner) = demo();
+        spec.env = serde_json::from_value(serde_json::json!([
+            { "name": "APP_USER", "value": "app" },
+            { "name": "APP_PASSWORD", "secret": { "name": "app-creds", "key": "password" } }
+        ]))
+        .expect("env");
+
+        let env = pod_of(&spec, &owner).containers[0]
+            .env
+            .clone()
+            .expect("env");
+        let literal = env.iter().find(|e| e.name == "APP_USER").expect("APP_USER");
+        assert_eq!(literal.value.as_deref(), Some("app"));
+
+        let from_secret = env
+            .iter()
+            .find(|e| e.name == "APP_PASSWORD")
+            .expect("APP_PASSWORD");
+        let sel = from_secret
+            .value_from
+            .as_ref()
+            .expect("value_from")
+            .secret_key_ref
+            .as_ref()
+            .expect("secret ref");
+        assert_eq!(sel.name, "app-creds");
+        assert_eq!(sel.key, "password");
+        // Not optional: a missing key must stop the pod rather than start an
+        // instance whose init script silently has no password.
+        assert_eq!(sel.optional, None);
+
+        // Custom variables come last, so they cannot displace the agent's own.
+        let agent_at = env
+            .iter()
+            .position(|e| e.name == "PGLORD_AGENT_SUPERUSER_PASSWORD")
+            .expect("agent env");
+        let custom_at = env
+            .iter()
+            .position(|e| e.name == "APP_USER")
+            .expect("custom env");
+        assert!(agent_at < custom_at);
+    }
+
+    #[test]
+    fn init_scripts_are_mounted_read_only_from_both_sources() {
+        let (mut spec, owner) = demo();
+        // Nothing configured: no volumes at all, rather than empty ones.
+        assert!(pod_of(&spec, &owner).volumes.is_none());
+
+        spec.init = serde_json::from_value(serde_json::json!({
+            "scripts_config_map": "init-sql",
+            "scripts_secret": "init-secret"
+        }))
+        .expect("init");
+
+        let pod = pod_of(&spec, &owner);
+        let volumes = pod.volumes.expect("volumes");
+        let cm = volumes
+            .iter()
+            .find(|v| v.name == crate::init::SCRIPTS_CONFIG_MAP_VOLUME)
+            .expect("configmap volume");
+        assert_eq!(cm.config_map.as_ref().expect("cm source").name, "init-sql");
+
+        let secret = volumes
+            .iter()
+            .find(|v| v.name == crate::init::SCRIPTS_SECRET_VOLUME)
+            .expect("secret volume");
+        let source = secret.secret.as_ref().expect("secret source");
+        assert_eq!(source.secret_name.as_deref(), Some("init-secret"));
+        // Readable by the container's user. Kubernetes owns projected secret
+        // files as root, so an owner-only mode would hide the scripts from the
+        // postgres process that has to run them.
+        assert_eq!(source.default_mode, Some(0o444));
+
+        let mounts = pod.containers[0]
+            .volume_mounts
+            .clone()
+            .expect("volume mounts");
+        for (volume, path) in [
+            (
+                crate::init::SCRIPTS_CONFIG_MAP_VOLUME,
+                crate::init::SCRIPTS_CONFIG_MAP_MOUNT,
+            ),
+            (
+                crate::init::SCRIPTS_SECRET_VOLUME,
+                crate::init::SCRIPTS_SECRET_MOUNT,
+            ),
+        ] {
+            let mount = mounts
+                .iter()
+                .find(|m| m.name == volume)
+                .unwrap_or_else(|| panic!("{volume} mount"));
+            assert_eq!(mount.mount_path, path);
+            assert_eq!(mount.read_only, Some(true));
+        }
+        // The data volume is still there; init mounts are additions.
+        assert!(mounts.iter().any(|m| m.name == "data"));
     }
 
     #[test]

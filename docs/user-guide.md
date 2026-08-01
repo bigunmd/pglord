@@ -318,6 +318,68 @@ instance restarts.
 
 Changing the cluster name or image after creation is not supported.
 
+### Secrets, environment and initialisation
+
+**Secrets and initialisation** on the cluster page lists every Secret and
+ConfigMap the cluster depends on, the keys each must contain, and whether it is
+actually there. Anything marked *Created by pglord* you can ignore; anything
+marked *Missing* you have to create, and instances will not start until you do.
+This is the fastest way to find out why a pod is stuck in
+`CreateContainerConfigError` — the reason is otherwise buried in pod events.
+
+**Use your own credentials Secret.** By default pglord generates
+`<cluster>-credentials`. To supply your own instead, create a Secret with keys
+`superuser-password` and `replication-password` and name it when you create the
+cluster:
+
+```bash
+kubectl -n pglord create secret generic orders-creds \
+  --from-literal=superuser-password='...' \
+  --from-literal=replication-password='...'
+```
+
+Passwords may contain letters, digits, `-` and `_`. This is **fixed once the
+cluster exists**: repointing a running cluster at a different Secret would
+change the password it presents without changing the one stored in the
+database, locking out every client while the cluster still looked healthy.
+Rotating credentials is a separate operation and is not supported yet.
+
+**Custom environment variables** are set on every instance, either as literal
+values or read from a Secret. Names pglord uses itself are refused —
+`PGLORD_AGENT_*`, `PGBACKREST_*`, and libpq's `PGDATA`, `PGHOST`, `PGUSER` and
+friends. That is not tidiness: `PGLORD_AGENT_ROLE` on every instance would
+declare them all primaries, and `PGDATA` would point postgres at a different
+directory.
+
+**Initialisation scripts** run once, on the primary, when the data directory is
+first created. Put `.sql` files in a ConfigMap and name it on the cluster; they
+run in filename order, so name them `01-…`, `02-…`. Use a Secret instead (or as
+well) for SQL containing passwords — a ConfigMap is readable by anyone with
+namespace read access. Secret scripts run after ConfigMap ones.
+
+Custom environment variables are available to scripts as psql variables, which
+is how a script uses a password without it ever being written down:
+
+```sql
+-- 01-app.sql, with APP_PASSWORD set from a Secret
+CREATE ROLE app LOGIN PASSWORD :'APP_PASSWORD';
+CREATE DATABASE orders OWNER app;
+```
+
+```bash
+kubectl -n pglord create configmap orders-init --from-file=01-app.sql
+```
+
+Three things worth knowing:
+
+- Scripts run **only at first creation**. Adding them to an existing cluster
+  does nothing — they describe how a database is created, not how it is
+  migrated. Use a migration tool for changes to a live database.
+- A **restored cluster never runs them**: its data already exists.
+- A failing script stops the run and is logged; it is retried when the instance
+  restarts, so nothing is silently half-applied. Write them to be repeatable
+  (`CREATE ... IF NOT EXISTS`) if you want a retry to succeed.
+
 ## 7. Delete a cluster
 
 **Clusters → trash icon → Delete.** This removes the instances, their persistent
@@ -345,6 +407,8 @@ a dump is still the surer option when you want a single file in your own hands.
 | An instance shows role "Unknown" | Its agent is unreachable. Check `kubectl -n pglord logs <name>-<n>`. |
 | Cluster list shows "No Kubernetes environment" | The server has no cluster access — usually a missing ServiceAccount on the Deployment. |
 | A standby never becomes ready | It is still cloning, or cannot reach the primary. Check its logs for `pg_basebackup`. |
+| Pods stuck in `CreateContainerConfigError` or `ContainerCreating` | A Secret or ConfigMap the cluster references is missing, or lacks a key. Check *Secrets and initialisation* on the cluster page. |
+| Init scripts did not run | They run only when a cluster is first created, never on an existing or restored one. Check `kubectl -n pglord logs <name>-0` for `init script` lines. |
 
 ## Current limitations
 
@@ -357,3 +421,7 @@ a dump is still the surer option when you want a single file in your own hands.
 - Cluster name and image cannot be changed after creation (instances, storage
   and PostgreSQL settings can — see Day-2 operations).
 - `pg_hba.conf` rules are not editable yet.
+- The credentials Secret is fixed once a cluster exists; rotating passwords is
+  not supported yet.
+- Initialisation scripts are SQL only, and run only when a cluster is first
+  created.

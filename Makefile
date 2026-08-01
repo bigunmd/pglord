@@ -88,6 +88,9 @@ backup-e2e: ## Minikube e2e: back up to MinIO and verify objects land
 restore-e2e: ## Minikube e2e: restore into a new cluster, and to a point in time
 	./scripts/restore-e2e.sh
 
+secrets-e2e: ## Minikube e2e: own credentials secret, custom env and init scripts
+	./scripts/secrets-e2e.sh
+
 ui-install: ## Install UI dependencies
 	cd ui && npm ci
 

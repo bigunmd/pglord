@@ -162,6 +162,10 @@ async fn bootstrap_restore(cfg: &Config, r: &RestoreSpec) -> anyhow::Result<()> 
 
     std::fs::write(cfg.pgdata.join(RESTORE_MARKER), "")
         .context("write restore completion marker")?;
+    // Restored data is already an initialised database. Marking the init phase
+    // done keeps init scripts — which create schemas and roles — from running
+    // against tables that already hold the data being recovered.
+    crate::initdb::mark_initialised(&cfg.pgdata).context("mark restored data as initialised")?;
     tracing::info!("restore complete; postgres will replay WAL and promote");
     Ok(())
 }

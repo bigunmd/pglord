@@ -4,6 +4,7 @@ pub mod backup;
 pub mod bootstrap;
 pub mod config;
 pub mod http;
+pub mod initdb;
 pub mod params;
 pub mod postboot;
 pub mod record;

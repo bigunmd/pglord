@@ -39,6 +39,18 @@ pub struct ClusterSpec {
     /// time PGDATA is created and has no effect on a running cluster.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub restore: Option<crate::restore::RestoreSpec>,
+    /// Secret holding the superuser and replication passwords. When set,
+    /// pglord uses it instead of generating one — so the cluster has a single
+    /// source of truth for its credentials rather than two.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credentials_secret: Option<String>,
+    /// Extra environment variables on the instance containers, for init
+    /// scripts and anything else in the container to read.
+    #[serde(default)]
+    pub env: Vec<crate::env::EnvVarSpec>,
+    /// SQL run once, when the data directory is first created.
+    #[serde(default)]
+    pub init: crate::init::InitSpec,
 }
 
 fn default_image() -> String {
@@ -73,11 +85,24 @@ pub enum SpecError {
     InvalidBackup(#[from] crate::backup::BackupError),
     #[error("{0}")]
     InvalidRestore(#[from] crate::restore::RestoreError),
+    #[error("{0}")]
+    InvalidEnv(#[from] crate::env::EnvError),
+    #[error("{0}")]
+    InvalidInit(#[from] crate::init::InitError),
+    #[error("invalid credentials secret name '{0}': must be a lowercase RFC1123 name")]
+    InvalidCredentialsSecret(String),
 }
 
 /// The fields a running cluster may change. Name and image are deliberately
 /// absent: renaming would orphan every derived object, and image changes are a
 /// rolling-upgrade concern with its own (future) workflow.
+///
+/// `credentials_secret` is absent for a subtler reason. Pointing a running
+/// cluster at a different Secret would change the password the agent presents
+/// without changing the one stored in `pg_authid`, so every client using the
+/// new Secret would be rejected while the cluster looked healthy. Rotating
+/// credentials is a real operation and needs its own workflow, not a field
+/// edit that silently half-applies.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SpecChange {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -95,6 +120,15 @@ pub struct SpecChange {
     /// Full replacement of the backup block.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backup: Option<crate::backup::BackupSpec>,
+    /// Full replacement of the custom environment. Changing it rolls the
+    /// instances, since the pod template changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<Vec<crate::env::EnvVarSpec>>,
+    /// Full replacement of the init block. Editing this does *not* re-run
+    /// initialisation: scripts describe how a database is created, and the
+    /// cluster's data directory already exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub init: Option<crate::init::InitSpec>,
 }
 
 /// Size in bytes for comparison; None when the quantity is malformed.
@@ -144,6 +178,12 @@ impl ClusterSpec {
         if let Some(backup) = &change.backup {
             next.backup = backup.clone();
         }
+        if let Some(env) = &change.env {
+            next.env = env.clone();
+        }
+        if let Some(init) = &change.init {
+            next.init = init.clone();
+        }
         next.validate()?;
         Ok(next)
     }
@@ -175,7 +215,23 @@ impl ClusterSpec {
         if let Some(restore) = &self.restore {
             crate::restore::validate(restore)?;
         }
+        if let Some(secret) = self.credentials_secret()
+            && !is_rfc1123_label(secret)
+        {
+            return Err(SpecError::InvalidCredentialsSecret(secret.to_string()));
+        }
+        crate::env::validate(&self.env)?;
+        crate::init::validate(&self.init)?;
         Ok(())
+    }
+
+    /// The user-supplied credentials Secret, ignoring blanks a form might send.
+    /// `None` means pglord generates and owns the cluster's credentials.
+    pub fn credentials_secret(&self) -> Option<&str> {
+        self.credentials_secret
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
     }
 }
 
@@ -366,6 +422,63 @@ mod tests {
             })
             .expect("change");
         assert_eq!(scaled.parameters, s.parameters);
+    }
+
+    #[test]
+    fn environment_and_init_can_be_replaced_wholesale() {
+        let mut s = spec("demo");
+        s.env = serde_json::from_value(serde_json::json!([
+            { "name": "A", "value": "1" },
+            { "name": "B", "value": "2" }
+        ]))
+        .expect("env");
+        let next = s
+            .apply_change(&SpecChange {
+                env: Some(
+                    serde_json::from_value(serde_json::json!([{ "name": "A", "value": "9" }]))
+                        .expect("env"),
+                ),
+                init: Some(
+                    serde_json::from_value(serde_json::json!({ "scripts_config_map": "init-sql" }))
+                        .expect("init"),
+                ),
+                ..Default::default()
+            })
+            .expect("change");
+        // Absent from the new list means removed, as with parameters.
+        assert_eq!(next.env.len(), 1);
+        assert_eq!(next.env[0].value.as_deref(), Some("9"));
+        assert_eq!(next.init.config_map(), Some("init-sql"));
+
+        // A reserved name is refused on edit exactly as on create.
+        assert!(matches!(
+            s.apply_change(&SpecChange {
+                env: Some(
+                    serde_json::from_value(
+                        serde_json::json!([{ "name": "PGLORD_AGENT_ROLE", "value": "primary" }])
+                    )
+                    .expect("env")
+                ),
+                ..Default::default()
+            }),
+            Err(SpecError::InvalidEnv(_))
+        ));
+    }
+
+    #[test]
+    fn credentials_cannot_be_repointed_on_a_running_cluster() {
+        // Not in SpecChange at all: changing the Secret would change the
+        // password the agent presents without changing pg_authid, locking out
+        // every client that reads the new Secret.
+        let mut s = spec("demo");
+        s.credentials_secret = Some("mine".into());
+        let next = s
+            .apply_change(&SpecChange {
+                replicas: Some(2),
+                ..Default::default()
+            })
+            .expect("change");
+        assert_eq!(next.credentials_secret(), Some("mine"));
     }
 
     #[test]

@@ -42,6 +42,12 @@ import { listBackups } from '../../api/fn/backups/list-backups';
 import { createBackup } from '../../api/fn/backups/create-backup';
 import { ClusterBackupDialogComponent } from './cluster-backup-dialog.component';
 import { ClusterRestoreDialogComponent } from './cluster-restore-dialog.component';
+import {
+  ClusterEnvDialogComponent,
+  EnvDialogResult,
+} from './cluster-env-dialog.component';
+import { ResourceList } from '../../api/models/resource-list';
+import { listRequiredSecrets } from '../../api/fn/clusters/list-required-secrets';
 import { RestoreRequest } from '../../api/models/restore-request';
 import { restoreCluster } from '../../api/fn/backups/restore-cluster';
 import { ClusterConfigDialogComponent } from './cluster-config-dialog.component';
@@ -455,6 +461,76 @@ export class RestartDialogComponent {
           }
         }
 
+        <!-- Secrets and initialisation -->
+        <div class="mt-6 flex items-center justify-between">
+          <h2 class="font-medium">{{ 'secrets.title' | transloco }}</h2>
+          <button
+            hlmBtn
+            variant="outline"
+            size="sm"
+            data-testid="open-env"
+            [disabled]="busy()"
+            (click)="openEnv(d)"
+          >
+            {{ 'secrets.edit' | transloco }}
+          </button>
+        </div>
+        @if (secrets(); as s) {
+          @if (!s.satisfied) {
+            <p class="text-destructive mt-2 text-sm" role="alert" data-testid="secrets-unsatisfied">
+              {{ 'secrets.unsatisfied' | transloco }}
+            </p>
+          }
+          <div class="border-border mt-2 overflow-x-auto rounded-lg border">
+            <table hlmTable class="w-full">
+              <thead hlmTHead>
+                <tr hlmTr>
+                  <th hlmTh>{{ 'secrets.object' | transloco }}</th>
+                  <th hlmTh>{{ 'secrets.purpose' | transloco }}</th>
+                  <th hlmTh>{{ 'secrets.keys' | transloco }}</th>
+                  <th hlmTh>{{ 'secrets.state' | transloco }}</th>
+                </tr>
+              </thead>
+              <tbody hlmTBody>
+                @for (r of s.resources; track r.name + r.kind) {
+                  <tr hlmTr [attr.data-testid]="'secret-' + r.name">
+                    <td hlmTd>
+                      <span class="font-mono text-xs">{{ r.name }}</span>
+                      <span class="text-muted-foreground ml-2 text-xs">{{ r.kind }}</span>
+                    </td>
+                    <td hlmTd class="text-sm">
+                      {{ 'secrets.purposes.' + r.purpose | transloco }}
+                    </td>
+                    <td hlmTd class="text-muted-foreground font-mono text-xs">
+                      {{ r.keys.length ? r.keys.join(', ') : '—' }}
+                    </td>
+                    <td hlmTd class="text-xs">
+                      @if (r.managed) {
+                        <span class="text-muted-foreground">
+                          {{ 'secrets.states.managed' | transloco }}
+                        </span>
+                      } @else if (!r.exists) {
+                        <span class="text-destructive font-medium">
+                          {{ 'secrets.states.missing' | transloco }}
+                        </span>
+                      } @else if (r.missing_keys.length) {
+                        <span class="text-destructive font-medium">
+                          {{ 'secrets.states.missingKeys' | transloco }}
+                          <span class="font-mono">{{ r.missing_keys.join(', ') }}</span>
+                        </span>
+                      } @else {
+                        <span class="text-muted-foreground">
+                          {{ 'secrets.states.present' | transloco }}
+                        </span>
+                      }
+                    </td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
+        }
+
         <!-- Configuration -->
         <div class="mt-6 flex items-center justify-between">
           <h2 class="font-medium">{{ 'config.title' | transloco }}</h2>
@@ -529,7 +605,33 @@ export class ClusterDetailComponent implements OnDestroy {
 
   protected readonly detail = signal<ClusterDetail | null>(null);
   protected readonly backups = signal<BackupList | null>(null);
+  protected readonly secrets = signal<ResourceList | null>(null);
   protected readonly error = signal<string | null>(null);
+
+  async openEnv(d: ClusterDetail): Promise<void> {
+    const result = await firstValueFrom(
+      this.dialog.open<EnvDialogResult | undefined>(ClusterEnvDialogComponent, {
+        context: {
+          credentialsSecret: d.credentials_secret,
+          env: d.env ?? [],
+          init: d.init ?? {},
+          existing: true,
+          generatedName: `${d.name}-credentials`,
+        },
+        contentClass: EDITOR_DIALOG_CLASS,
+      }).closed$,
+    );
+    if (!result) {
+      return;
+    }
+    // credentials_secret is fixed once a cluster exists, so it is not sent.
+    await this.run(() =>
+      this.api.invoke(patchCluster, {
+        name: this.name(),
+        body: { env: result.env, init: result.init },
+      }),
+    );
+  }
 
   protected formatSize(bytes: number): string {
     if (!bytes) {
@@ -754,6 +856,13 @@ export class ClusterDetailComponent implements OnDestroy {
       this.backups.set(await this.api.invoke(listBackups, { name: this.name() }));
     } catch {
       this.backups.set(null);
+    }
+    // Same reasoning: this reads other objects in the namespace, and a
+    // permission gap there must not blank the whole page.
+    try {
+      this.secrets.set(await this.api.invoke(listRequiredSecrets, { name: this.name() }));
+    } catch {
+      this.secrets.set(null);
     }
   }
 }

@@ -51,6 +51,16 @@ pub fn restored_spec(source: &ClusterSpec, req: &RestoreRequest) -> ClusterSpec 
         storage_size: source.storage_size.clone(),
         parameters: source.parameters.clone(),
         workload: source.workload.clone(),
+        // Carried over: whatever ran against the source's data expects these.
+        env: source.env.clone(),
+        // Not carried over. Init scripts run when a data directory is created
+        // empty; this one arrives full. Copying the reference would also make
+        // the new cluster unschedulable if the source's script ConfigMap has
+        // since been deleted, for no benefit.
+        init: Default::default(),
+        // A restored cluster generates its own credentials. Sharing the
+        // source's Secret would mean rotating one silently rotates the other.
+        credentials_secret: None,
         // Backups OFF. Inheriting the source's repository would point a second
         // cluster at the source's stanza; the two have different system
         // identifiers, so pgBackRest rejects it and the restored cluster would

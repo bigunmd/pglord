@@ -177,6 +177,14 @@ async fn ensure_credentials(
     spec: &ClusterSpec,
     owner: &OwnerRef,
 ) -> anyhow::Result<()> {
+    // The user pointed this cluster at their own Secret: it is theirs to
+    // create, own and rotate. Generating anything here would give the cluster
+    // two sources of truth for its password, and deleting the cluster would
+    // take a Secret we never made.
+    if let Some(supplied) = spec.credentials_secret() {
+        tracing::debug!(cluster = %spec.name, secret = %supplied, "using supplied credentials secret");
+        return Ok(());
+    }
     let secrets: Api<Secret> = Api::namespaced(client.clone(), ns);
     let name = credentials_secret_name(&spec.name);
     if secrets.get_opt(&name).await?.is_some() {

@@ -6,4 +6,5 @@ pub mod gucs;
 pub mod ping;
 pub mod preflight;
 pub mod restore;
+pub mod secrets;
 pub mod version;

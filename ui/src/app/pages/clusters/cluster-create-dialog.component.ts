@@ -8,6 +8,7 @@ import { HlmInput } from '@spartan-ng/helm/input';
 import { HlmLabel } from '@spartan-ng/helm/label';
 
 import { ClusterSpec } from '../../api/models/cluster-spec';
+import { EnvEditorComponent, EnvRow, rowsToSpec, rowsValid } from './env-editor.component';
 
 /** Mirrors the server's RFC1123 rule (crates/pglord-core/src/spec.rs). */
 const NAME_RE = /^[a-z0-9]([-a-z0-9]{0,38}[a-z0-9])?$/;
@@ -26,6 +27,7 @@ const REPLICA_CHOICES = [1, 2, 3, 4, 5] as const;
     HlmDialogTitle,
     HlmInput,
     HlmLabel,
+    EnvEditorComponent,
   ],
   template: `
     <div hlmDialogHeader>
@@ -100,6 +102,78 @@ const REPLICA_CHOICES = [1, 2, 3, 4, 5] as const;
           placeholder="pglord-agent:dev"
         />
       </div>
+
+      <!-- Collapsed by default: most clusters need none of this, but init
+           scripts and their environment can only be set here, since they run
+           when the data directory is first created. -->
+      <div class="border-border border-t pt-4">
+        <button
+          hlmBtn
+          variant="ghost"
+          size="sm"
+          class="-ml-2"
+          data-testid="toggle-advanced"
+          [attr.aria-expanded]="advanced()"
+          (click)="advanced.set(!advanced())"
+        >
+          {{ (advanced() ? 'clusters.hideAdvanced' : 'clusters.showAdvanced') | transloco }}
+        </button>
+      </div>
+
+      @if (advanced()) {
+        <div class="grid gap-6">
+          <div class="grid gap-1.5">
+            <label hlmLabel for="pg-cluster-creds">
+              {{ 'secrets.credentialsSecret' | transloco }}
+            </label>
+            <input
+              hlmInput
+              id="pg-cluster-creds"
+              data-testid="create-credentials-secret"
+              [placeholder]="(name() || 'orders-db') + '-credentials'"
+              [ngModel]="credentialsSecret()"
+              (ngModelChange)="credentialsSecret.set($event)"
+            />
+            <p class="text-muted-foreground text-xs leading-relaxed">
+              {{ 'secrets.credentialsSecretHelp' | transloco }}
+            </p>
+          </div>
+
+          <pg-env-editor [(rows)]="rows" />
+
+          <div class="grid gap-1.5">
+            <label hlmLabel for="pg-cluster-init-cm">
+              {{ 'secrets.initConfigMap' | transloco }}
+            </label>
+            <input
+              hlmInput
+              id="pg-cluster-init-cm"
+              data-testid="create-init-configmap"
+              [ngModel]="initConfigMap()"
+              (ngModelChange)="initConfigMap.set($event)"
+            />
+            <p class="text-muted-foreground text-xs leading-relaxed">
+              {{ 'secrets.initHelp' | transloco }}
+            </p>
+          </div>
+
+          <div class="grid gap-1.5">
+            <label hlmLabel for="pg-cluster-init-secret">
+              {{ 'secrets.initSecret' | transloco }}
+            </label>
+            <input
+              hlmInput
+              id="pg-cluster-init-secret"
+              data-testid="create-init-secret"
+              [ngModel]="initSecret()"
+              (ngModelChange)="initSecret.set($event)"
+            />
+            <p class="text-muted-foreground text-xs leading-relaxed">
+              {{ 'secrets.initSecretHelp' | transloco }}
+            </p>
+          </div>
+        </div>
+      }
     </div>
     <div hlmDialogFooter>
       <button hlmBtn variant="ghost" (click)="ref.close(undefined)">
@@ -120,18 +194,35 @@ export class ClusterCreateDialogComponent {
   protected readonly storage = signal('1Gi');
   protected readonly image = signal('pglord-agent:dev');
 
+  protected readonly advanced = signal(false);
+  protected readonly credentialsSecret = signal('');
+  protected readonly initConfigMap = signal('');
+  protected readonly initSecret = signal('');
+  protected readonly rows = signal<EnvRow[]>([]);
+
   protected readonly nameValid = computed(() => NAME_RE.test(this.name()));
   protected readonly storageValid = computed(() => STORAGE_RE.test(this.storage()));
   protected readonly valid = computed(
-    () => this.nameValid() && this.storageValid() && this.image().trim().length > 0,
+    () =>
+      this.nameValid() &&
+      this.storageValid() &&
+      this.image().trim().length > 0 &&
+      rowsValid(this.rows()),
   );
 
   submit(): void {
+    const trimmed = (s: string) => (s.trim() ? s.trim() : undefined);
     this.ref.close({
       name: this.name(),
       replicas: this.replicas(),
       storage_size: this.storage(),
       image: this.image().trim(),
+      credentials_secret: trimmed(this.credentialsSecret()),
+      env: rowsToSpec(this.rows()),
+      init: {
+        scripts_config_map: trimmed(this.initConfigMap()),
+        scripts_secret: trimmed(this.initSecret()),
+      },
     });
   }
 }

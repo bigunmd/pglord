@@ -141,6 +141,52 @@
     "loading": "Loading…",
     "actions": "Actions"
   },
+  "secrets": {
+    "title": "Secrets and initialisation",
+    "edit": "Edit",
+    "editTitle": "Secrets, environment and initialisation",
+    "object": "Object",
+    "purpose": "Used for",
+    "keys": "Required keys",
+    "state": "State",
+    "unsatisfied": "Something this cluster depends on is missing. Instances will not start until it exists.",
+    "purposes": {
+      "credentials": "Superuser and replication passwords",
+      "backup_repository": "Backup object storage",
+      "restore_repository": "Object storage this cluster was restored from",
+      "custom_env": "Custom environment variable",
+      "init_scripts": "Initialisation scripts"
+    },
+    "states": {
+      "managed": "Created by pglord",
+      "present": "Present",
+      "missing": "Missing — create it",
+      "missingKeys": "Missing keys:"
+    },
+    "credentialsSecret": "Credentials secret",
+    "credentialsSecretHelp": "Leave empty and pglord generates one. To use your own, create a Secret with keys superuser-password and replication-password first.",
+    "credentialsSecretFixed": "Fixed after creation. Repointing a running cluster would change the password it presents without changing the one stored in the database, locking out every client.",
+    "env": "Environment variables",
+    "envHelp": "Set on every instance. Init scripts can read them as psql variables, for example :'APP_PASSWORD'.",
+    "envName": "NAME",
+    "envValue": "Value",
+    "envFromSecret": "From a secret",
+    "envSecretName": "Secret name",
+    "envSecretKey": "Key",
+    "init": "Initialisation scripts",
+    "initHelp": "SQL run once, on the primary, when the data directory is first created. Files ending in .sql run in filename order, so name them 01-…, 02-….",
+    "initConfigMap": "Scripts ConfigMap",
+    "initSecret": "Scripts Secret (optional)",
+    "initSecretHelp": "For init SQL containing passwords. Runs after the ConfigMap's scripts. A ConfigMap is readable by anyone with namespace access; a Secret is not.",
+    "initOnceNote": "Scripts run only when a cluster is first created. Adding them to an existing cluster has no effect, and a restored cluster never runs them — its data already exists.",
+    "save": "Save",
+    "errors": {
+      "name": "Use letters, digits and underscores, not starting with a digit.",
+      "reserved": "{{name}} is set by pglord and cannot be overridden.",
+      "duplicate": "{{name}} is defined more than once.",
+      "incompleteSecret": "A secret reference needs both a secret name and a key."
+    }
+  },
   "restore": {
     "action": "Restore",
     "title": "Restore into a new cluster",
@@ -186,7 +232,9 @@
     "deleteTitle": "Delete {{name}}?",
     "deleteWarning": "The cluster and all of its data volumes will be removed. This cannot be undone.",
     "emptyTitle": "No clusters yet",
-    "emptyHint": "Create your first HA Postgres cluster to get started."
+    "emptyHint": "Create your first HA Postgres cluster to get started.",
+    "showAdvanced": "Secrets, environment and init scripts",
+    "hideAdvanced": "Hide secrets, environment and init scripts"
   },
   "clusterDetail": {
     "back": "Clusters",

@@ -33,11 +33,13 @@ async fn main() -> anyhow::Result<()> {
         None => rolestrategy::resolve_role(cfg.role, &hostname)?,
     };
     // Read once, before bootstrap: a cluster created by a restore has to know
-    // where its data comes from before it has any.
-    let restore = match &reader {
-        Some(r) => r.spec().await.and_then(|s| s.restore),
+    // where its data comes from before it has any, and the init scripts are
+    // part of the same spec.
+    let cluster_spec = match &reader {
+        Some(r) => r.spec().await,
         None => None,
     };
+    let restore = cluster_spec.as_ref().and_then(|s| s.restore.clone());
     let restored = restore.is_some();
 
     let cfg = Arc::new(cfg);
@@ -48,9 +50,17 @@ async fn main() -> anyhow::Result<()> {
 
     if cfg.role == Role::Primary {
         let cfg_pb = cfg.clone();
+        let spec_pb = cluster_spec.clone();
         // Restored data carries the SOURCE cluster's roles, so this cluster's
         // own generated password would not open it. Reset the superuser too.
-        tokio::spawn(async move { pglord_agent::postboot::ensure_roles(&cfg_pb, restored).await });
+        tokio::spawn(async move {
+            pglord_agent::postboot::ensure_roles(&cfg_pb, restored).await;
+            // Initialisation follows role setup, and only for a cluster that
+            // started empty: restored data is already someone's database.
+            if let Some(spec) = spec_pb {
+                pglord_agent::postboot::ensure_initialised(&cfg_pb, &spec).await;
+            }
+        });
     }
     if let Some(reader) = reader {
         tokio::spawn(record::follow(reader, cfg.clone(), hostname.clone()));
