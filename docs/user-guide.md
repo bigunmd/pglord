@@ -445,6 +445,54 @@ a dump is still the surer option when you want a single file in your own hands.
 | Pods stuck in `CreateContainerConfigError` or `ContainerCreating` | A Secret or ConfigMap the cluster references is missing, or lacks a key. Check *Secrets and initialisation* on the cluster page. |
 | Init scripts did not run | They run only when a cluster is first created, never on an existing or restored one. Check `kubectl -n pglord logs <name>-0` for `init script` lines. |
 
+## 9. Monitoring
+
+pglord exposes Prometheus metrics in two places, and both are on by default —
+there is nothing to enable.
+
+**Every postgres instance** serves metrics on its agent port,
+`:8008/metrics`. The set is deliberately small: enough to alert on the things
+that page you, without the hundreds of series a full exporter ships.
+
+| Metric | Meaning |
+|---|---|
+| `pglord_pg_up` | 1 if the agent could query postgres. This is the one to alert on. |
+| `pglord_instance_primary` | 1 on the primary, 0 on a standby. A cluster whose sum is not exactly 1 has a problem. |
+| `pglord_pg_wal_lsn_bytes` | WAL position as a number — write position on the primary, replay position on a standby. Subtract a standby's value from the primary's to graph lag in bytes. |
+| `pglord_pg_replication_lag_seconds` | Standby only: seconds since the last replayed transaction. |
+| `pglord_pg_standby_replay_lag_bytes{standby}` | Primary only: replay lag per connected standby. |
+| `pglord_pg_connections{state}` / `pglord_pg_max_connections` | Backends by state, and the ceiling they run into. |
+| `pglord_pg_database_size_bytes{database}` | Size per database. |
+| `pglord_pg_pending_restart` | 1 if settings are staged that only a restart will apply. |
+
+The endpoint always answers 200: when postgres is down the scrape still works
+and reports `pglord_pg_up 0`, which is exactly when you want the data point.
+
+**The pglord server** serves control-plane metrics on `:8080/metrics`:
+
+| Metric | Meaning |
+|---|---|
+| `pglord_clusters` | Number of cluster specs. |
+| `pglord_reconcile_total{cluster, outcome}` | Reconcile passes; a growing `outcome="error"` rate means a cluster cannot be applied. |
+| `pglord_failover_total{cluster, trigger}` | Primary record changes — `auto` for orchestrator failovers, `manual` for switchovers. |
+| `pglord_backup_runs_total{cluster, kind, outcome}` | Finished backup runs; alert on `outcome="failed"`. |
+| `pglord_cluster_instances_ready{cluster}` / `pglord_cluster_instances{cluster}` | Ready instances versus how many the spec asks for. |
+
+Instance identity is deliberately not baked into the metrics: the pod,
+namespace and cluster labels come from your Prometheus discovery, so relabeling
+works the way it does for every other workload.
+
+**Discovery.** Instance pods and the server pod carry the conventional
+annotations (`prometheus.io/scrape: "true"`, `prometheus.io/port`,
+`prometheus.io/path`), so annotation-based scrape configs pick them up with no
+extra setup. To opt a cluster out, set `prometheus.io/scrape: "false"` in its
+workload annotations — a user annotation always wins over the default. If you
+run prometheus-operator, the Helm chart can create the objects for you:
+`metrics.podMonitor.enabled=true` scrapes every pglord-managed postgres pod and
+`metrics.serviceMonitor.enabled=true` scrapes the server. Both are off by
+default because they require the monitoring.coreos.com CRDs; the raw
+`deploy/k8s/` manifests ship annotations only.
+
 ## Current limitations
 
 - No authentication in front of the UI — put it behind your ingress auth.

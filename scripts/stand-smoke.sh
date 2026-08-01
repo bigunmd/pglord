@@ -15,4 +15,7 @@ for path in healthz readyz api/v1/ping; do
   }
   echo "OK /$path"
 done
+curl -sf http://127.0.0.1:18080/metrics | grep -q '^pglord_clusters' \
+  || { echo "FAIL /metrics missing pglord_clusters"; exit 1; }
+echo "OK /metrics"
 echo "stand smoke passed"
