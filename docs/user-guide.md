@@ -377,7 +377,33 @@ Passwords may contain letters, digits, `-` and `_`. This is **fixed once the
 cluster exists**: repointing a running cluster at a different Secret would
 change the password it presents without changing the one stored in the
 database, locking out every client while the cluster still looked healthy.
-Rotating credentials is a separate operation and is not supported yet.
+Rotating the managed passwords is supported — see below.
+
+### Rotating credentials
+
+For clusters whose credentials pglord generated (no user-supplied Secret),
+**Rotate passwords** on the cluster page — or
+`POST /api/v1/clusters/<name>/rotate-credentials` — replaces both the
+superuser and replication passwords in one operation: new values are written
+to the `<name>-credentials` Secret, applied on the primary, and every
+instance is restarted one at a time, standbys first. The Secret's
+`pglord.dev/rotated-at` annotation records when this last happened.
+
+Connected clients keep working until they reconnect; after that they must
+present the new password from the Secret, so update anything that caches it.
+Clusters that reference your own Secret are refused (`409
+custom_credentials_secret`): pglord does not write to Secrets it does not
+own.
+
+The new passwords travel from the server to the primary's agent over
+unauthenticated in-cluster HTTP — the same channel the failover promote call
+uses. If that is not acceptable in your environment, treat rotation (and
+pglord's control plane generally) as trusted-namespace-only.
+
+If a rotation fails partway (the run counter
+`pglord_credential_rotations_total{outcome="failed"}` ticks and the log says
+so), simply POST it again: every step is idempotent and a re-run converges
+the cluster.
 
 **Custom environment variables** are set on every instance, either as literal
 values or read from a Secret. Names pglord uses itself are refused —
@@ -504,7 +530,7 @@ default because they require the monitoring.coreos.com CRDs; the raw
 - Cluster name and image cannot be changed after creation (instances, storage
   and PostgreSQL settings can — see Day-2 operations).
 - `pg_hba.conf` rules are not editable yet.
-- The credentials Secret is fixed once a cluster exists; rotating passwords is
-  not supported yet.
+- The credentials Secret reference is fixed once a cluster exists (the managed
+  passwords themselves can be rotated — see Rotating credentials).
 - Initialisation scripts are SQL only, and run only when a cluster is first
   created.

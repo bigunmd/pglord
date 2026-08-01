@@ -16,7 +16,7 @@ APP_PW=apppw$$
 
 kill_pf() { pkill -f "kubectl.*port-forward.*pglord-server" 2>/dev/null || true; }
 cleanup() {
-  for c in sec miss; do
+  for c in sec miss rot; do
     curl -s -X DELETE "$API/api/v1/clusters/$c" >/dev/null 2>&1 || true
   done
   $KUBECTL -n pglord delete secret sec-own-creds app-creds sec-init-secret --ignore-not-found >/dev/null 2>&1 || true
@@ -211,6 +211,61 @@ rows=$(psql_on sec-0 "SELECT count(*) FROM init_marker")
 # A second run would also have failed outright on the duplicate CREATE ROLE.
 [ "$rows" = "3" ] || { echo "FAIL: init_marker has $rows rows after restart, expected 3"; exit 1; }
 echo "OK init scripts ran once, not again"
+
+echo "==> rotation refuses a cluster with a user-supplied secret"
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API/api/v1/clusters/sec/rotate-credentials")
+[ "$code" = "409" ] || { echo "FAIL: rotate on custom-secret cluster -> $code, expected 409"; exit 1; }
+echo "OK custom-secret cluster refused"
+
+echo "==> rotating a managed cluster"
+curl -s -X POST "$API/api/v1/clusters" -H 'content-type: application/json' \
+  -d "{\"name\":\"rot\",\"replicas\":2,\"image\":\"$AGENT_IMAGE\"}" >/dev/null
+for _ in $(seq 1 90); do
+  [ "$(field rot '' "['ready_replicas']")" = "2" ] && break
+  sleep 2
+done
+[ "$(field rot '' "['ready_replicas']")" = "2" ] || { echo "FAIL: rot never became ready"; exit 1; }
+old_pw=$($KUBECTL -n pglord get secret rot-credentials -o jsonpath='{.data.superuser-password}' | base64 -d)
+old_uid0=$($KUBECTL -n pglord get pod rot-0 -o jsonpath='{.metadata.uid}')
+old_uid1=$($KUBECTL -n pglord get pod rot-1 -o jsonpath='{.metadata.uid}')
+curl -s -o /dev/null -X POST "$API/api/v1/clusters/rot/rotate-credentials"
+# Rotation rolls both pods; wait for the secret to change, then for readiness.
+for _ in $(seq 1 90); do
+  new_pw=$($KUBECTL -n pglord get secret rot-credentials -o jsonpath='{.data.superuser-password}' | base64 -d)
+  [ "$new_pw" != "$old_pw" ] && break
+  sleep 2
+done
+[ "$new_pw" != "$old_pw" ] || { echo "FAIL: secret password never changed"; exit 1; }
+rotated_at=$($KUBECTL -n pglord get secret rot-credentials -o jsonpath='{.metadata.annotations.pglord\.dev/rotated-at}')
+[ -n "$rotated_at" ] || { echo "FAIL: rotated-at annotation missing"; exit 1; }
+# "ready_replicas=2 at some instant" is NOT "roll finished": both pods are
+# briefly ready between the standby's return and the primary's deletion. The
+# roll deletes each pod exactly once, so completion = both pods are NEW
+# (UIDs changed) and the cluster is ready.
+rolled() {
+  uid0=$($KUBECTL -n pglord get pod rot-0 -o jsonpath='{.metadata.uid}' 2>/dev/null || echo "")
+  uid1=$($KUBECTL -n pglord get pod rot-1 -o jsonpath='{.metadata.uid}' 2>/dev/null || echo "")
+  [ -n "$uid0" ] && [ -n "$uid1" ] \
+    && [ "$uid0" != "$old_uid0" ] && [ "$uid1" != "$old_uid1" ] \
+    && [ "$(field rot '' "['ready_replicas']")" = "2" ]
+}
+for _ in $(seq 1 120); do
+  rolled && break
+  sleep 2
+done
+rolled || { echo "FAIL: rot not rolled+ready after rotation"; exit 1; }
+# TCP auth uses scram: the new password must work, the old must not.
+ok=$($KUBECTL -n pglord exec rot-0 -- env PGPASSWORD="$new_pw" psql -h rot-rw -U postgres -tAc "SELECT 1" 2>/dev/null || echo "")
+[ "$ok" = "1" ] || { echo "FAIL: new password rejected"; exit 1; }
+bad=$($KUBECTL -n pglord exec rot-0 -- env PGPASSWORD="$old_pw" psql -h rot-rw -U postgres -tAc "SELECT 1" 2>/dev/null || echo "")
+[ "$bad" != "1" ] || { echo "FAIL: old password still accepted"; exit 1; }
+# The standby must still be streaming after the roll (conninfo refreshed).
+# The primary may be either pod after the roll; check both.
+streaming=$(psql_on rot-0 "SELECT count(*) FROM pg_stat_replication")
+[ "$streaming" = "1" ] || streaming=$(psql_on rot-1 "SELECT count(*) FROM pg_stat_replication")
+[ "$streaming" = "1" ] || { echo "FAIL: standby not streaming after rotation (got '$streaming')"; exit 1; }
+echo "OK rotation: new password works, old rejected, standby streaming"
+curl -s -X DELETE "$API/api/v1/clusters/rot" >/dev/null
 
 echo "==> cleanup"
 curl -s -X DELETE "$API/api/v1/clusters/sec" >/dev/null
