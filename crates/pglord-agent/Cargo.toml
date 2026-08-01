@@ -27,3 +27,4 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
 figment = { version = "0.10", features = ["test"] }
+tower = { version = "0.5", features = ["util"] }

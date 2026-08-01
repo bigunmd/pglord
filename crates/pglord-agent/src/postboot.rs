@@ -68,23 +68,14 @@ pub async fn ensure_initialised(cfg: &Config, spec: &pglord_core::spec::ClusterS
     }
 }
 
-async fn try_ensure(cfg: &Config, reset_superuser: bool) -> anyhow::Result<()> {
-    // Role name and password are interpolated into DDL below (Postgres cannot
-    // bind them as parameters); enforce the charset invariant explicitly so a
-    // misconfigured env var cannot smuggle SQL.
-    if cfg.repl_user.is_empty()
-        || !cfg
-            .repl_user
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_')
-    {
-        anyhow::bail!("repl_user must be non-empty alphanumeric/underscore");
-    }
-    // Charset must exclude '$' so the $pglord$ dollar-quote below cannot be
-    // terminated from inside the password.
-    if !is_safe_password(&cfg.repl_password) {
-        anyhow::bail!("repl_password may only contain [A-Za-z0-9_-]");
-    }
+/// Local superuser connection over the socket (peer auth — works even when
+/// the env password is stale, which is the whole point during rotation).
+async fn connect_local(
+    cfg: &Config,
+) -> anyhow::Result<(
+    tokio_postgres::Client,
+    tokio::task::JoinHandle<Result<(), tokio_postgres::Error>>,
+)> {
     let conn_str = format!(
         "host={} port={} user={} password={} dbname=postgres connect_timeout=5",
         cfg.socket_dir.display(),
@@ -93,51 +84,91 @@ async fn try_ensure(cfg: &Config, reset_superuser: bool) -> anyhow::Result<()> {
         cfg.superuser_password,
     );
     let (client, connection) = tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await?;
-    let conn_task = tokio::spawn(connection);
+    Ok((client, tokio::spawn(connection)))
+}
 
+/// CREATE or ALTER the replication role with the given password.
+///
+/// Role name and password are interpolated into DDL (Postgres cannot bind
+/// them as parameters); the charset invariants are enforced explicitly so a
+/// misconfigured value cannot smuggle SQL, and the password is dollar-quoted
+/// with a tag its alphabet cannot contain.
+async fn ensure_repl_role(
+    client: &tokio_postgres::Client,
+    repl_user: &str,
+    repl_password: &str,
+) -> anyhow::Result<()> {
+    if repl_user.is_empty()
+        || !repl_user
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_')
+    {
+        anyhow::bail!("repl_user must be non-empty alphanumeric/underscore");
+    }
+    if !is_safe_password(repl_password) {
+        anyhow::bail!("repl_password may only contain [A-Za-z0-9_-]");
+    }
     let exists: bool = client
         .query_one(
             "SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname = $1)",
-            &[&cfg.repl_user],
+            &[&repl_user],
         )
         .await?
         .get(0);
-    // Role names/passwords cannot be bound parameters; the role name comes
-    // from our own config and the password is quoted via dollar-quoting with
-    // a tag that cannot appear in the generated alphanumeric password.
-    let sql = if exists {
-        format!(
-            "ALTER ROLE \"{}\" WITH REPLICATION LOGIN PASSWORD $pglord${}$pglord$",
-            cfg.repl_user, cfg.repl_password
-        )
-    } else {
-        format!(
-            "CREATE ROLE \"{}\" WITH REPLICATION LOGIN PASSWORD $pglord${}$pglord$",
-            cfg.repl_user, cfg.repl_password
-        )
-    };
-    client.batch_execute(&sql).await?;
+    let verb = if exists { "ALTER" } else { "CREATE" };
+    client
+        .batch_execute(&format!(
+            "{verb} ROLE \"{repl_user}\" WITH REPLICATION LOGIN PASSWORD $pglord${repl_password}$pglord$"
+        ))
+        .await?;
+    Ok(())
+}
 
+/// ALTER the superuser's password. Same interpolation invariants as above.
+async fn alter_superuser(
+    client: &tokio_postgres::Client,
+    superuser: &str,
+    superuser_password: &str,
+) -> anyhow::Result<()> {
+    if !is_safe_password(superuser_password) {
+        anyhow::bail!("superuser_password may only contain [A-Za-z0-9_-]");
+    }
+    if !superuser
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_')
+    {
+        anyhow::bail!("superuser must be alphanumeric/underscore");
+    }
+    client
+        .batch_execute(&format!(
+            "ALTER ROLE \"{superuser}\" WITH PASSWORD $pglord${superuser_password}$pglord$"
+        ))
+        .await?;
+    Ok(())
+}
+
+/// Apply NEW passwords to both roles in one connection. Used by the rotation
+/// endpoint; postboot's own startup path keeps applying the env passwords.
+pub async fn apply_passwords(
+    cfg: &Config,
+    superuser_password: &str,
+    repl_password: &str,
+) -> anyhow::Result<()> {
+    let (client, conn_task) = connect_local(cfg).await?;
+    ensure_repl_role(&client, &cfg.repl_user, repl_password).await?;
+    alter_superuser(&client, &cfg.superuser, superuser_password).await?;
+    drop(client);
+    conn_task.abort();
+    Ok(())
+}
+
+async fn try_ensure(cfg: &Config, reset_superuser: bool) -> anyhow::Result<()> {
+    let (client, conn_task) = connect_local(cfg).await?;
+    ensure_repl_role(&client, &cfg.repl_user, &cfg.repl_password).await?;
     if reset_superuser {
-        if !is_safe_password(&cfg.superuser_password) {
-            anyhow::bail!("superuser_password may only contain [A-Za-z0-9_-]");
-        }
-        if !cfg
-            .superuser
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_')
-        {
-            anyhow::bail!("superuser must be alphanumeric/underscore");
-        }
-        client
-            .batch_execute(&format!(
-                "ALTER ROLE \"{}\" WITH PASSWORD $pglord${}$pglord$",
-                cfg.superuser, cfg.superuser_password
-            ))
-            .await?;
+        alter_superuser(&client, &cfg.superuser, &cfg.superuser_password).await?;
         tracing::info!(role = %cfg.superuser, "superuser password reset to this cluster's own");
     }
-
     drop(client);
     conn_task.abort();
     Ok(())
