@@ -91,6 +91,18 @@ fn pod_labels(spec: &ClusterSpec) -> BTreeMap<String, String> {
     merged
 }
 
+/// Scrape defaults first, then user annotations on top: a user-supplied
+/// prometheus.io/* key wins, which is the per-cluster opt-out.
+fn pod_annotations(spec: &ClusterSpec) -> BTreeMap<String, String> {
+    let mut ann = BTreeMap::from([
+        ("prometheus.io/scrape".to_string(), "true".to_string()),
+        ("prometheus.io/port".to_string(), AGENT_HTTP_PORT.to_string()),
+        ("prometheus.io/path".to_string(), "/metrics".to_string()),
+    ]);
+    ann.extend(spec.workload.annotations.clone());
+    ann
+}
+
 fn tolerations(w: &WorkloadSpec) -> Option<Vec<K8sToleration>> {
     if w.tolerations.is_empty() {
         return None;
@@ -467,8 +479,7 @@ pub fn render_statefulset(spec: &ClusterSpec, ns: &str, owner: &OwnerRef) -> Sta
             template: PodTemplateSpec {
                 metadata: Some(ObjectMeta {
                     labels: Some(pod_labels(spec)),
-                    annotations: (!spec.workload.annotations.is_empty())
-                        .then(|| spec.workload.annotations.clone()),
+                    annotations: Some(pod_annotations(spec)),
                     ..Default::default()
                 }),
                 spec: Some(PodSpec {
@@ -951,6 +962,29 @@ mod tests {
         // The selector is immutable in Kubernetes and must stay exactly ours.
         let selector = sts.selector.match_labels.expect("selector");
         assert_eq!(selector, labels("demo"));
+    }
+
+    #[test]
+    fn scrape_annotations_are_rendered_by_default() {
+        let (spec, owner) = demo();
+        let sts = render_statefulset(&spec, "ns", &owner).spec.expect("spec");
+        let meta = sts.template.metadata.expect("pod metadata");
+        let ann = meta.annotations.expect("annotations");
+        assert_eq!(ann["prometheus.io/scrape"], "true");
+        assert_eq!(ann["prometheus.io/port"], "8008");
+        assert_eq!(ann["prometheus.io/path"], "/metrics");
+    }
+
+    #[test]
+    fn a_user_annotation_overrides_the_scrape_default() {
+        let (mut spec, owner) = demo();
+        spec.workload.annotations =
+            BTreeMap::from([("prometheus.io/scrape".to_string(), "false".to_string())]);
+        let sts = render_statefulset(&spec, "ns", &owner).spec.expect("spec");
+        let meta = sts.template.metadata.expect("pod metadata");
+        let ann = meta.annotations.expect("annotations");
+        assert_eq!(ann["prometheus.io/scrape"], "false");
+        assert_eq!(ann["prometheus.io/port"], "8008");
     }
 
     #[test]
