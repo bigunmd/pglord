@@ -90,6 +90,12 @@ pub async fn ensure_bootstrapped(
             tracing::warn!("ex-primary PGDATA with standby role: rewinding to new primary");
             return demote_to_standby(cfg).await;
         }
+        if cfg.role == Role::Standby {
+            let me = std::env::var("HOSTNAME").unwrap_or_default();
+            refresh_conninfo(&cfg.pgdata, &primary_conninfo(cfg, &me))
+                .context("refresh primary_conninfo")?;
+            tracing::info!("primary_conninfo refreshed from environment");
+        }
         tracing::info!(pgdata = %cfg.pgdata.display(), "PGDATA already bootstrapped");
         return Ok(());
     }
@@ -187,6 +193,23 @@ pub fn primary_conninfo(cfg: &Config, application_name: &str) -> String {
         "primary_conninfo = 'host={} port={} user={user} password={password} application_name={application_name}'\n",
         cfg.primary_host, cfg.primary_port,
     )
+}
+
+/// Replace every primary_conninfo line in postgresql.auto.conf with `line`.
+/// The password inside primary_conninfo is persisted at bootstrap; without
+/// this refresh a standby restarted after a credentials rotation would keep
+/// streaming with the old password forever.
+pub fn refresh_conninfo(pgdata: &Path, line: &str) -> anyhow::Result<()> {
+    let path = pgdata.join("postgresql.auto.conf");
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let mut kept: String = existing
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("primary_conninfo"))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    kept.push_str(line);
+    std::fs::write(&path, kept).context("write postgresql.auto.conf")?;
+    Ok(())
 }
 
 /// pg_rewind against the current primary; fall back to a fresh basebackup if
@@ -382,6 +405,48 @@ mod tests {
         let conninfo = primary_conninfo(&cfg_with(""), "demo-0");
         assert!(conninfo.contains("user=postgres"));
         assert!(conninfo.contains("password=supersecret"));
+    }
+
+    #[test]
+    fn refresh_conninfo_replaces_stale_lines_and_keeps_the_rest() {
+        let dir = std::env::temp_dir().join("pglord-agent-test-conninfo");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        std::fs::write(
+            dir.join("postgresql.auto.conf"),
+            "shared_buffers = '128MB'\n\
+             primary_conninfo = 'host=old user=replicator password=OLD application_name=demo-1'\n\
+             primary_conninfo = 'host=older user=replicator password=OLDER application_name=demo-1'\n",
+        )
+        .expect("seed");
+        let fresh =
+            "primary_conninfo = 'host=new user=replicator password=NEW application_name=demo-1'\n";
+        refresh_conninfo(&dir, fresh).expect("refresh");
+        let got = std::fs::read_to_string(dir.join("postgresql.auto.conf")).expect("read");
+        assert!(got.contains("shared_buffers = '128MB'"));
+        assert!(got.contains("password=NEW"));
+        assert!(!got.contains("OLD"));
+        assert_eq!(got.matches("primary_conninfo").count(), 1);
+        // Idempotent: refreshing again changes nothing.
+        refresh_conninfo(&dir, fresh).expect("refresh again");
+        assert_eq!(
+            got,
+            std::fs::read_to_string(dir.join("postgresql.auto.conf")).expect("reread")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn refresh_conninfo_creates_the_file_when_missing() {
+        let dir = std::env::temp_dir().join("pglord-agent-test-conninfo-new");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let fresh =
+            "primary_conninfo = 'host=new user=replicator password=NEW application_name=demo-1'\n";
+        refresh_conninfo(&dir, fresh).expect("refresh");
+        let got = std::fs::read_to_string(dir.join("postgresql.auto.conf")).expect("read");
+        assert_eq!(got, fresh);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
