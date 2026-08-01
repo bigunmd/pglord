@@ -27,6 +27,11 @@ pub struct ClusterSpec {
     /// GUC catalog are accepted; pglord-managed settings are rejected.
     #[serde(default)]
     pub parameters: BTreeMap<String, String>,
+    /// Client access rules (pg_hba.conf) inserted between pglord's managed
+    /// prefix and its scram catch-all. First match wins; use `reject` rules
+    /// to tighten access. Applied with a reload — no restart.
+    #[serde(default)]
+    pub pg_hba: Vec<crate::hba::HbaRule>,
     /// Scheduling, resources and Kubernetes metadata for the instances.
     #[serde(default)]
     pub workload: crate::workload::WorkloadSpec,
@@ -80,6 +85,8 @@ pub enum SpecError {
     #[error("invalid value for '{name}': {reason}")]
     InvalidParameterValue { name: String, reason: String },
     #[error("{0}")]
+    InvalidHba(#[from] crate::hba::HbaError),
+    #[error("{0}")]
     InvalidWorkload(#[from] crate::workload::WorkloadError),
     #[error("{0}")]
     InvalidBackup(#[from] crate::backup::BackupError),
@@ -113,6 +120,10 @@ pub struct SpecChange {
     /// removed, which is how the UI clears a setting back to its default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parameters: Option<BTreeMap<String, String>>,
+    /// Full replacement of the pg_hba rule list: absent leaves it untouched,
+    /// an empty list removes every user rule.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pg_hba: Option<Vec<crate::hba::HbaRule>>,
     /// Full replacement of the workload block. StorageClass must match the
     /// current one (volume claim templates are immutable).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -171,6 +182,9 @@ impl ClusterSpec {
         if let Some(parameters) = &change.parameters {
             next.parameters = parameters.clone();
         }
+        if let Some(pg_hba) = &change.pg_hba {
+            next.pg_hba = pg_hba.clone();
+        }
         if let Some(workload) = &change.workload {
             crate::workload::check_storage_class_change(&self.workload, workload)?;
             next.workload = workload.clone();
@@ -210,6 +224,7 @@ impl ClusterSpec {
                 reason,
             })?;
         }
+        crate::hba::validate_rules(&self.pg_hba)?;
         crate::workload::validate(&self.workload)?;
         crate::backup::validate(&self.backup)?;
         if let Some(restore) = &self.restore {
@@ -544,5 +559,63 @@ mod tests {
                 "expected rejection for {bad:?}"
             );
         }
+    }
+
+    #[test]
+    fn pg_hba_rules_are_validated() {
+        let mut s = spec("demo");
+        s.pg_hba = serde_json::from_value(serde_json::json!([
+            { "conn": "host", "database": "app", "user": "app_rw",
+              "address": "10.0.0.0/8", "method": "scram-sha-256" }
+        ]))
+        .expect("rules");
+        assert!(s.validate().is_ok());
+
+        s.pg_hba = serde_json::from_value(serde_json::json!([
+            { "conn": "host", "database": "all", "user": "all",
+              "address": "example.com", "method": "reject" }
+        ]))
+        .expect("rules");
+        assert!(matches!(s.validate(), Err(SpecError::InvalidHba(_))));
+    }
+
+    #[test]
+    fn change_replaces_pg_hba_wholesale() {
+        let s = spec("demo");
+        let rules: Vec<crate::hba::HbaRule> = serde_json::from_value(serde_json::json!([
+            { "conn": "host", "database": "all", "user": "intruder",
+              "address": "0.0.0.0/0", "method": "reject" }
+        ]))
+        .expect("rules");
+        let next = s
+            .apply_change(&SpecChange {
+                pg_hba: Some(rules.clone()),
+                ..Default::default()
+            })
+            .expect("apply");
+        assert_eq!(next.pg_hba, rules);
+
+        // Absent leaves rules untouched; empty list clears them.
+        let untouched = next
+            .apply_change(&SpecChange {
+                replicas: Some(2),
+                ..Default::default()
+            })
+            .expect("apply");
+        assert_eq!(untouched.pg_hba, rules);
+        let cleared = next
+            .apply_change(&SpecChange {
+                pg_hba: Some(vec![]),
+                ..Default::default()
+            })
+            .expect("apply");
+        assert!(cleared.pg_hba.is_empty());
+    }
+
+    #[test]
+    fn specs_without_pg_hba_deserialize_with_no_rules() {
+        // Every spec ConfigMap written before this feature lacks the field.
+        let s = spec("demo");
+        assert!(s.pg_hba.is_empty());
     }
 }

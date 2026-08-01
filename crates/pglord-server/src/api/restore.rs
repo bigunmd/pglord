@@ -50,6 +50,9 @@ pub fn restored_spec(source: &ClusterSpec, req: &RestoreRequest) -> ClusterSpec 
         image: source.image.clone(),
         storage_size: source.storage_size.clone(),
         parameters: source.parameters.clone(),
+        // Same data, same audience: the rules that guarded the source guard
+        // its restored copy.
+        pg_hba: source.pg_hba.clone(),
         workload: source.workload.clone(),
         // Carried over: whatever ran against the source's data expects these.
         env: source.env.clone(),
