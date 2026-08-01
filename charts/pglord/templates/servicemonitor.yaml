@@ -1,0 +1,16 @@
+{{- if .Values.metrics.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "pglord.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pglord.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "pglord.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: http
+      path: /metrics
+{{- end }}

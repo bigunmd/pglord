@@ -48,6 +48,16 @@ ingress:
           pathType: Prefix
   tls: []
 
+metrics:
+  # Prometheus-operator resources. Both need the monitoring.coreos.com CRDs
+  # installed; annotation-based scraping works without either.
+  podMonitor:
+    # Scrape every pglord-managed postgres pod on the agent port.
+    enabled: false
+  serviceMonitor:
+    # Scrape the pglord server itself.
+    enabled: false
+
 config:
   # tracing-subscriber directive, e.g. "info" or "pglord_server=debug,info".
   logLevel: info

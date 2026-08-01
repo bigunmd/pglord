@@ -1,0 +1,16 @@
+{{- if .Values.metrics.podMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ include "pglord.fullname" . }}-instances
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pglord.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/managed-by: pglord
+  podMetricsEndpoints:
+    - port: agent
+      path: /metrics
+{{- end }}
