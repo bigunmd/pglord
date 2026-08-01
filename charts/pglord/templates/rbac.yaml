@@ -1,0 +1,47 @@
+{{- if .Values.rbac.create }}
+# Namespaced only: pglord standalone never needs cluster-admin, and this Role is
+# the whole of what it can do. The Permissions page in the UI reports these back
+# from the API server, so a trimmed Role shows up there rather than as a
+# mysterious failure.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "pglord.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pglord.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [configmaps, secrets, services, pods, serviceaccounts]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims]
+    verbs: [get, list, watch, patch, delete]
+  - apiGroups: [apps]
+    resources: [statefulsets]
+    verbs: [get, list, watch, create, update, patch, delete]
+  # The reconciler provisions a least-privilege Role/Binding per cluster so each
+  # instance agent can read its own spec ConfigMap, and nothing else.
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [roles, rolebindings]
+    verbs: [get, list, watch, create, update, patch, delete]
+# The permission preflight needs no rule here: SelfSubjectAccessReview is
+# cluster-scoped, and default Kubernetes RBAC already lets every authenticated
+# identity create one. A namespaced Role granting it would have no effect.
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "pglord.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pglord.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "pglord.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "pglord.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

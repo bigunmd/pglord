@@ -1,0 +1,35 @@
+pglord {{ .Chart.AppVersion }} is installed in namespace {{ .Release.Namespace }}.
+
+Reach the UI:
+{{- if .Values.ingress.enabled }}
+{{- range $host := .Values.ingress.hosts }}
+  {{- range .paths }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ $host.host }}{{ .path }}
+  {{- end }}
+{{- end }}
+{{- else }}
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "pglord.fullname" . }} 8080:{{ .Values.service.port }}
+
+  then open http://localhost:8080
+{{- end }}
+
+Before creating a cluster, open the Permissions page. It asks the API server
+what pglord is actually allowed to do here, so a missing rule shows up as a
+denied row rather than as a cluster that never starts.
+
+{{- if eq .Values.agentImage "pglord-agent:dev" }}
+
+WARNING: agentImage is still "pglord-agent:dev". That image exists only on a
+local development machine, so every cluster you create will sit in
+ImagePullBackOff. Set it to an image your cluster can pull:
+
+  helm upgrade {{ .Release.Name }} pglord/pglord --reuse-values \
+    --set agentImage=<registry>/pglord-agent:{{ .Chart.AppVersion }}
+{{- end }}
+
+pglord has no authentication in front of it. Anyone who can reach the Service
+can create and delete clusters, and deleting a cluster removes its data
+volumes. Keep it behind your ingress authentication, or reach it only by
+port-forward, until that changes.
+
+Docs: https://github.com/bigunmd/pglord/blob/main/docs/user-guide.md

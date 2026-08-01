@@ -22,6 +22,15 @@ pub struct Config {
     /// Comma-separated exact origins allowed by CORS. Empty = no CORS layer.
     #[serde(default = "default_empty")]
     pub cors_allowed_origins: String,
+    /// Image used for Postgres instances when a cluster does not name one.
+    /// The built-in default only exists on a development machine, so a real
+    /// deployment has to set this or every cluster lands in ImagePullBackOff.
+    #[serde(default = "default_agent_image")]
+    pub default_agent_image: String,
+}
+
+fn default_agent_image() -> String {
+    "pglord-agent:dev".into()
 }
 
 fn default_http_addr() -> SocketAddr {
@@ -66,6 +75,7 @@ impl Config {
             log_level: "info".into(),
             shutdown_timeout_secs: 1,
             cors_allowed_origins: String::new(),
+            default_agent_image: default_agent_image(),
         }
     }
 }
@@ -96,6 +106,28 @@ mod tests {
             let cfg = Config::load().expect("env override must load");
             assert_eq!(cfg.http_addr.to_string(), "127.0.0.1:9999");
             assert_eq!(cfg.cors_origins().len(), 2);
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn the_default_agent_image_comes_from_the_environment() {
+        // This is what the Helm chart's `agentImage` sets. Without it every
+        // cluster created on a real deployment lands in ImagePullBackOff,
+        // because the compile-time default only exists on a dev machine.
+        figment::Jail::expect_with(|_jail| {
+            assert_eq!(
+                Config::load().expect("defaults").default_agent_image,
+                "pglord-agent:dev"
+            );
+            Ok(())
+        });
+        figment::Jail::expect_with(|jail| {
+            jail.set_env("PGLORD_DEFAULT_AGENT_IMAGE", "reg.example.com/agent:1.2.3");
+            assert_eq!(
+                Config::load().expect("env").default_agent_image,
+                "reg.example.com/agent:1.2.3"
+            );
             Ok(())
         });
     }

@@ -161,6 +161,40 @@ pub async fn delete_orphan_pvcs(
     }
 }
 
+/// Storage requested by a live StatefulSet's volume claim template.
+pub fn sts_storage_request(sts: &StatefulSet) -> Option<String> {
+    sts.spec
+        .as_ref()?
+        .volume_claim_templates
+        .as_ref()?
+        .first()?
+        .spec
+        .as_ref()?
+        .resources
+        .as_ref()?
+        .requests
+        .as_ref()?
+        .get("storage")
+        .map(|q| q.0.clone())
+}
+
+/// Whether the StatefulSet has to be recreated rather than patched.
+///
+/// `volumeClaimTemplates` are immutable: the apiserver rejects the whole update
+/// when they change, so after storage grows *every* later reconcile fails with
+/// it — scaling included, silently, since the reconciler only logs a warning.
+/// Unparseable quantities answer "no": recreating on a value we do not
+/// understand risks more than leaving it alone.
+pub fn needs_recreate(existing: Option<&str>, desired: &str) -> bool {
+    match (
+        existing.and_then(pglord_core::spec::quantity_bytes),
+        pglord_core::spec::quantity_bytes(desired),
+    ) {
+        (Some(live), Some(want)) => live != want,
+        _ => false,
+    }
+}
+
 pub fn generate_password() -> String {
     rand::rng()
         .sample_iter(rand::distr::Alphanumeric)
@@ -243,6 +277,38 @@ pub async fn apply_cluster(
     let (sts, headless, rw) = desired_objects(spec, ns, owner, primary_pod);
 
     let sts_api: Api<StatefulSet> = Api::namespaced(client.clone(), ns);
+    let live = sts_api.get_opt(&spec.name).await?;
+    if let Some(live) = &live
+        && needs_recreate(sts_storage_request(live).as_deref(), &spec.storage_size)
+    {
+        // Orphan deletion: the apiserver strips ownerReferences from the pods
+        // and claims before removing the StatefulSet, so nothing restarts and
+        // no data volume is collected. The recreated StatefulSet adopts them
+        // back by selector. Without this, the cluster is stuck the moment its
+        // storage grows.
+        tracing::warn!(
+            cluster = %spec.name,
+            from = sts_storage_request(live).unwrap_or_default(),
+            to = %spec.storage_size,
+            "claim template changed; recreating StatefulSet (pods and volumes are kept)"
+        );
+        sts_api
+            .delete(
+                &spec.name,
+                &kube::api::DeleteParams {
+                    propagation_policy: Some(kube::api::PropagationPolicy::Orphan),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        // Recreating before the delete completes fails with AlreadyExists.
+        for _ in 0..50u32 {
+            if sts_api.get_opt(&spec.name).await?.is_none() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    }
     sts_api.patch(&spec.name, &pp, &Patch::Apply(&sts)).await?;
 
     let svc_api: Api<Service> = Api::namespaced(client.clone(), ns);
@@ -256,6 +322,44 @@ pub async fn apply_cluster(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_changed_claim_template_forces_a_recreate() {
+        // volumeClaimTemplates are immutable. Patching a StatefulSet whose
+        // template changed is rejected outright, and because the reconciler
+        // applies everything in one call, that rejection also swallows the
+        // replicas change -- scaling stops working the moment storage grows.
+        assert!(needs_recreate(Some("1Gi"), "2Gi"));
+        assert!(needs_recreate(Some("2Gi"), "1Gi"));
+
+        // The same size written differently is not a change; recreating on it
+        // would churn the StatefulSet on every reconcile.
+        assert!(!needs_recreate(Some("1Gi"), "1024Mi"));
+        assert!(!needs_recreate(Some("1Gi"), "1Gi"));
+
+        // Nothing to compare against, or a quantity we cannot parse: leave it
+        // alone rather than recreate on a guess.
+        assert!(!needs_recreate(None, "1Gi"));
+        assert!(!needs_recreate(Some("banana"), "1Gi"));
+        assert!(!needs_recreate(Some("1Gi"), "banana"));
+    }
+
+    #[test]
+    fn storage_request_is_read_back_from_the_claim_template() {
+        let spec: ClusterSpec =
+            serde_json::from_value(serde_json::json!({ "name": "demo", "storage_size": "5Gi" }))
+                .expect("spec");
+        let owner = OwnerRef {
+            api_version: "v1".into(),
+            kind: "ConfigMap".into(),
+            name: "demo-spec".into(),
+            uid: "u".into(),
+        };
+        let sts = pglord_core::render::render_statefulset(&spec, "ns", &owner);
+        assert_eq!(sts_storage_request(&sts).as_deref(), Some("5Gi"));
+        // A StatefulSet with no template at all must not panic or claim 0.
+        assert_eq!(sts_storage_request(&StatefulSet::default()), None);
+    }
 
     #[test]
     fn pvc_names_match_statefulset_convention() {

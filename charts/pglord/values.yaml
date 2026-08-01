@@ -1,0 +1,100 @@
+# Default values for pglord.
+# pglord runs namespaced: it manages Postgres clusters in its own namespace and
+# never needs cluster-wide permissions.
+
+image:
+  repository: pglord-server
+  tag: "" # defaults to the chart's appVersion
+  pullPolicy: IfNotPresent
+
+# Image used for Postgres instances when a cluster does not name one.
+# This must be reachable from the cluster: leaving the built-in default in place
+# on a real cluster gives every new cluster ImagePullBackOff, since
+# `pglord-agent:dev` only exists on a local development machine.
+agentImage: pglord-agent:dev
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+rbac:
+  # The namespaced Role and RoleBinding pglord needs to manage clusters.
+  # Turn off only if you manage these yourself; pglord cannot work without them.
+  create: true
+
+# pglord keeps no state of its own: cluster specs live in ConfigMaps in the
+# namespace, so more than one replica is safe but buys nothing today. The
+# reconciler and the backup scheduler would both run in every replica.
+replicaCount: 1
+
+service:
+  type: ClusterIP
+  port: 80
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: pglord.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+config:
+  # tracing-subscriber directive, e.g. "info" or "pglord_server=debug,info".
+  logLevel: info
+  # Exact origins allowed by CORS, comma-separated. Empty adds no CORS layer,
+  # which is right when the UI is served by pglord itself.
+  corsAllowedOrigins: ""
+  # Graceful drain budget; keep below terminationGracePeriodSeconds.
+  shutdownTimeoutSeconds: 25
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 32Mi
+  limits:
+    memory: 128Mi
+
+# Applied to the pod. The server writes nothing to its own filesystem.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+readinessProbe:
+  httpGet:
+    path: /readyz
+    port: http
+  initialDelaySeconds: 2
+  periodSeconds: 5
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+extraEnv: []

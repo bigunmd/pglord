@@ -33,6 +33,8 @@ pub struct ClusterOps {
     pub kube: kube::Client,
     pub http: reqwest::Client,
     pub ns: String,
+    /// Image given to clusters created without one. See Config.
+    pub default_agent_image: String,
 }
 
 #[derive(Clone)]

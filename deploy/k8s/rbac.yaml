@@ -16,6 +16,11 @@ rules:
   - apiGroups: [""]
     resources: [configmaps, secrets, services, pods, serviceaccounts]
     verbs: [get, list, watch, create, update, patch, delete]
+  # Claims are created by the StatefulSet controller, but growing storage
+  # patches them and scaling down deletes the orphans it leaves behind.
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims]
+    verbs: [get, list, watch, patch, delete]
   - apiGroups: [apps]
     resources: [statefulsets]
     verbs: [get, list, watch, create, update, patch, delete]

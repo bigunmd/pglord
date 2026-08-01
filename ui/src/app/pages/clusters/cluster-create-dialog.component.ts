@@ -99,8 +99,11 @@ const REPLICA_CHOICES = [1, 2, 3, 4, 5] as const;
           id="pg-cluster-image"
           [ngModel]="image()"
           (ngModelChange)="image.set($event)"
-          placeholder="pglord-agent:dev"
+          [placeholder]="'clusters.imageDefault' | transloco"
         />
+        <p class="text-muted-foreground text-xs leading-relaxed">
+          {{ 'clusters.imageHelp' | transloco }}
+        </p>
       </div>
 
       <!-- Collapsed by default: most clusters need none of this, but init
@@ -192,7 +195,9 @@ export class ClusterCreateDialogComponent {
   protected readonly name = signal('');
   protected readonly replicas = signal<number>(2);
   protected readonly storage = signal('1Gi');
-  protected readonly image = signal('pglord-agent:dev');
+  // Empty means "not specified": the request omits the field and the server
+  // supplies the image this deployment was configured with.
+  protected readonly image = signal('');
 
   protected readonly advanced = signal(false);
   protected readonly credentialsSecret = signal('');
@@ -204,10 +209,7 @@ export class ClusterCreateDialogComponent {
   protected readonly storageValid = computed(() => STORAGE_RE.test(this.storage()));
   protected readonly valid = computed(
     () =>
-      this.nameValid() &&
-      this.storageValid() &&
-      this.image().trim().length > 0 &&
-      rowsValid(this.rows()),
+      this.nameValid() && this.storageValid() && rowsValid(this.rows()),
   );
 
   submit(): void {
@@ -216,7 +218,7 @@ export class ClusterCreateDialogComponent {
       name: this.name(),
       replicas: this.replicas(),
       storage_size: this.storage(),
-      image: this.image().trim(),
+      ...(this.image().trim() ? { image: this.image().trim() } : {}),
       credentials_secret: trimmed(this.credentialsSecret()),
       env: rowsToSpec(this.rows()),
       init: {

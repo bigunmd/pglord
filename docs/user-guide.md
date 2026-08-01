@@ -11,9 +11,29 @@ Everything lives in a single namespace. You do not need cluster-admin.
 
 ## 1. Install
 
-You need: access to a Kubernetes namespace, `kubectl`, and the two pglord images
+You need: access to a Kubernetes namespace, and the two pglord images
 (`pglord-server`, `pglord-agent`) available to your cluster — from your registry,
 or built locally with `make image agent-image` for local clusters like minikube.
+
+### With Helm (recommended)
+
+```bash
+helm install pglord ./charts/pglord \
+  --namespace pglord --create-namespace \
+  --set image.repository=<registry>/pglord-server \
+  --set agentImage=<registry>/pglord-agent:0.1.0
+```
+
+**Set `agentImage`.** It is the image your Postgres instances run, used whenever
+a cluster is created without naming one. The built-in default,
+`pglord-agent:dev`, exists only on a development machine — leave it in place on
+a real cluster and every cluster you create sits in `ImagePullBackOff`.
+
+Installing into a different namespace needs nothing more than `--namespace`:
+pglord is namespaced throughout, so two installations in two namespaces are
+independent. See `charts/pglord/README.md` for every value.
+
+### With plain manifests
 
 ```bash
 kubectl apply -f deploy/k8s/
@@ -21,19 +41,29 @@ kubectl -n pglord rollout status deploy/pglord-server
 ```
 
 This creates the `pglord` namespace, a ServiceAccount with a namespace-scoped
-Role, the pglord Deployment, and its Service. To install into a different
-namespace, change `namespace:` in the manifests.
+Role, the pglord Deployment, and its Service, all fixed to the `pglord`
+namespace. Change `namespace:` in the manifests to install elsewhere.
 
 Open the UI:
 
 ```bash
-kubectl -n pglord port-forward svc/pglord-server 8080:80
+kubectl -n pglord port-forward svc/pglord 8080:80   # helm install
+kubectl -n pglord port-forward svc/pglord-server 8080:80   # plain manifests
 # http://localhost:8080
 ```
 
-For shared access, expose `svc/pglord-server` through your Ingress controller
-instead of port-forwarding. pglord has no built-in authentication yet — put it
-behind your ingress auth, and do not expose it publicly.
+For shared access, expose the Service through your Ingress controller instead of
+port-forwarding (`--set ingress.enabled=true` with the chart). pglord has no
+built-in authentication yet: anyone who can reach it can create and delete
+clusters, and deleting a cluster removes its data volumes. Put it behind your
+ingress auth, and do not expose it publicly.
+
+### Uninstalling
+
+`helm uninstall` removes the control plane but **not** your Postgres clusters:
+their StatefulSets, Services, Secrets and volumes are owned by the spec
+ConfigMaps, not by the Helm release, so they keep running without a UI. Delete
+clusters through the UI first if that is what you meant.
 
 ## 2. Check permissions
 
@@ -42,9 +72,14 @@ actually allowed to do and lists every required permission as granted, denied, o
 unknown.
 
 If anything is denied, cluster management will fail. Ask whoever administers the
-namespace to apply `deploy/k8s/rbac.yaml`, then reload the page. The same report
-is available at `GET /api/v1/preflight`, and the server logs a summary at
-startup.
+namespace to apply `deploy/k8s/rbac.yaml` (or install the chart with
+`rbac.create=true`, the default), then reload the page. The same report is
+available at `GET /api/v1/preflight`, and the server logs a summary at startup.
+
+Worth checking after an upgrade too: a denied row here is the difference between
+an operation failing with a clear reason and one failing at the moment you need
+it. Growing storage, for instance, patches the volume claims and needs `patch`
+on `persistentvolumeclaims`.
 
 ## 3. Create a cluster
 

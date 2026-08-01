@@ -19,6 +19,10 @@ spec:
           ports: [{ containerPort: 8080, name: http }]
           env:
             - { name: PGLORD_LOG_LEVEL, value: "info" }
+            # Image for clusters created without one. On a real cluster this
+            # has to be something the nodes can pull; here it is the tag
+            # `minikube image load` puts in place.
+            - { name: PGLORD_DEFAULT_AGENT_IMAGE, value: "pglord-agent:dev" }
           livenessProbe:
             httpGet: { path: /healthz, port: http }
           readinessProbe:

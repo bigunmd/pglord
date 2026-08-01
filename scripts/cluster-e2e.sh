@@ -46,7 +46,21 @@ echo "==> creating cluster 'demo' via REST API"
 code=$(curl -s -o /tmp/create.json -w '%{http_code}' -X POST "$API/api/v1/clusters" \
   -H 'content-type: application/json' -d '{"name":"demo","replicas":2}')
 [ "$code" = "201" ] || { echo "FAIL: create returned $code: $(cat /tmp/create.json)"; exit 1; }
-echo "OK created"
+# No image was given, so the server supplies the one it was configured with
+# (PGLORD_DEFAULT_AGENT_IMAGE). This is what the chart's agentImage sets, and
+# what stops every cluster on a real deployment from landing in ImagePullBackOff.
+img=$(python3 -c "import json;print(json.load(open('/tmp/create.json'))['image'])")
+[ "$img" = "pglord-agent:dev" ] || { echo "FAIL: default image is '$img'"; exit 1; }
+echo "OK created with the configured default image"
+
+echo "==> an explicit image still wins over the default"
+code=$(curl -s -o /tmp/pinned.json -w '%{http_code}' -X POST "$API/api/v1/clusters" \
+  -H 'content-type: application/json' -d '{"name":"pinned","image":"example.com/agent:9.9"}')
+[ "$code" = "201" ] || { echo "FAIL: pinned create returned $code"; exit 1; }
+img=$(python3 -c "import json;print(json.load(open('/tmp/pinned.json'))['image'])")
+[ "$img" = "example.com/agent:9.9" ] || { echo "FAIL: pinned image became '$img'"; exit 1; }
+curl -s -X DELETE "$API/api/v1/clusters/pinned" >/dev/null
+echo "OK explicit image preserved"
 
 echo "==> waiting for 2/2 ready (bootstrap + basebackup take a while)"
 for _ in $(seq 1 180); do

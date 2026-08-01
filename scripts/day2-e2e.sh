@@ -86,6 +86,68 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "$API/api/v1/clusters/dem
 [ "$code" = "422" ] || { echo "FAIL: shrink returned $code, expected 422"; exit 1; }
 echo "OK shrink rejected"
 
+echo "==> growing storage"
+# minikube's default StorageClass does not allow expansion, and the API server
+# refuses to resize a claim whose class does not. Turn it on for the stand: the
+# hostpath provisioner still will not really grow a filesystem, so what this
+# asserts is that pglord patches the claim -- which is pglord's job, and the
+# part that needs `patch` on persistentvolumeclaims. The actual resize belongs
+# to the storage driver.
+$KUBECTL patch storageclass standard -p '{"allowVolumeExpansion":true}' >/dev/null 2>&1 || true
+
+# Recorded before the growth so we can tell afterwards whether the pod was
+# replaced. Growing a disk must never restart the database.
+uid_before=$($KUBECTL -n pglord get pod demo-1 -o jsonpath='{.metadata.uid}' 2>/dev/null || echo "")
+
+# The shrink case never reaches Kubernetes, so it proves nothing about
+# permissions. Growth patches the claims themselves, which needs `patch` on
+# persistentvolumeclaims -- a rule that was missing from the Role and from the
+# permission preflight, so this failed with a 403 nothing warned about.
+code=$(curl -s -o /tmp/grow.json -w '%{http_code}' -X PATCH "$API/api/v1/clusters/demo" \
+  -H 'content-type: application/json' -d '{"storage_size":"2Gi"}')
+[ "$code" = "200" ] || { echo "FAIL: grow returned $code: $(cat /tmp/grow.json)"; exit 1; }
+for _ in $(seq 1 60); do
+  grown=$($KUBECTL -n pglord get pvc data-demo-0 -o jsonpath='{.spec.resources.requests.storage}' 2>/dev/null || echo "")
+  [ "$grown" = "2Gi" ] && break
+  sleep 2
+done
+[ "$grown" = "2Gi" ] || {
+  echo "FAIL: claim still requests '$grown', expected 2Gi"
+  $KUBECTL -n pglord get pvc
+  $KUBECTL -n pglord logs deploy/pglord-server --tail 20
+  exit 1
+}
+echo "OK storage grew on the claim"
+
+echo "==> the StatefulSet picks up the new claim template without disturbing anything"
+# volumeClaimTemplates are immutable, so pglord recreates the StatefulSet with
+# orphan propagation. That has to leave the pods running and the volumes alone:
+# get it wrong and growing storage destroys the database.
+for _ in $(seq 1 60); do
+  tmpl=$($KUBECTL -n pglord get sts demo -o jsonpath='{.spec.volumeClaimTemplates[0].spec.resources.requests.storage}' 2>/dev/null || echo "")
+  [ "$tmpl" = "2Gi" ] && break
+  sleep 2
+done
+[ "$tmpl" = "2Gi" ] || { echo "FAIL: claim template is '$tmpl', expected 2Gi"; $KUBECTL -n pglord logs deploy/pglord-server --tail 20; exit 1; }
+uid_after=$($KUBECTL -n pglord get pod demo-1 -o jsonpath='{.metadata.uid}' 2>/dev/null || echo "")
+[ -n "$uid_before" ] && [ "$uid_after" = "$uid_before" ] || {
+  echo "FAIL: primary pod was replaced ('$uid_before' -> '$uid_after'); the recreate restarted the database"
+  exit 1
+}
+got=$(psql_on demo-1 "SELECT x FROM day2")
+[ "$got" = "7" ] || { echo "FAIL: data lost across the StatefulSet recreate (got '$got')"; exit 1; }
+echo "OK StatefulSet recreated in place: same pod, data intact"
+
+echo "==> the permission preflight knows about claims"
+# If PVC verbs are absent from the required list, a namespace missing them
+# reports "all good" right up until a day-2 operation fails.
+pvc_checks=$(curl -s "$API/api/v1/preflight" | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+print(sum(1 for c in d['checks'] if c['resource'].startswith('persistentvolumeclaims')))")
+[ "${pvc_checks:-0}" -ge 2 ] || { echo "FAIL: preflight reports $pvc_checks claim checks"; exit 1; }
+echo "OK preflight covers claims ($pvc_checks checks)"
+
 echo "==> scaling to 3 instances"
 code=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "$API/api/v1/clusters/demo" \
   -H 'content-type: application/json' -d '{"replicas":3}')

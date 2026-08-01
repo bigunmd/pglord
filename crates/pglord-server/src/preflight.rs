@@ -47,6 +47,17 @@ pub fn required() -> Vec<PermissionCheck> {
             verb,
         });
     }
+    // Claims are created by the StatefulSet controller, not by pglord — but
+    // growing storage patches them and scaling down deletes the orphans, so
+    // without these two verbs both day-2 operations fail with a permission
+    // error that nothing else would have warned about.
+    for verb in ["get", "list", "patch", "delete"] {
+        out.push(PermissionCheck {
+            group: "",
+            resource: "persistentvolumeclaims",
+            verb,
+        });
+    }
     for verb in WRITE {
         out.push(PermissionCheck {
             group: "apps",
@@ -141,6 +152,7 @@ mod tests {
             "services",
             "serviceaccounts",
             "pods",
+            "persistentvolumeclaims",
             "statefulsets",
             "roles",
             "rolebindings",
@@ -148,6 +160,18 @@ mod tests {
             assert!(
                 checks.iter().any(|c| c.resource == resource),
                 "missing checks for {resource}"
+            );
+        }
+        // Growing storage patches claims and scaling down deletes them. These
+        // were missing from both the Role and this list, so the operations
+        // failed with a permission error the Permissions page said nothing
+        // about.
+        for verb in ["patch", "delete"] {
+            assert!(
+                checks
+                    .iter()
+                    .any(|c| c.resource == "persistentvolumeclaims" && c.verb == verb),
+                "missing {verb} on persistentvolumeclaims"
             );
         }
         let mut seen: Vec<(&str, &str, &str)> = checks

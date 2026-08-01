@@ -70,6 +70,7 @@ async fn main() -> anyhow::Result<()> {
                     .timeout(std::time::Duration::from_secs(2))
                     .build()?,
                 ns,
+                default_agent_image: cfg.default_agent_image.clone(),
             };
             tokio::spawn(pglord_server::backup_scheduler::run(ops.clone()));
             Some(ops)

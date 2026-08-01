@@ -121,9 +121,19 @@ async fn summarize(ops: &ClusterOps, spec: ClusterSpec) -> ClusterSummary {
 )]
 pub async fn create_cluster(
     State(state): State<Option<ClusterOps>>,
-    Json(spec): Json<ClusterSpec>,
+    Json(body): Json<serde_json::Value>,
 ) -> Result<(StatusCode, Json<ClusterSpec>), ApiError> {
     let ops = ops(&state)?;
+    // Taken as raw JSON purely to tell "no image given" from "this exact
+    // image". The spec type carries a compile-time default, which cannot know
+    // what image this deployment can actually pull.
+    let image_omitted = body.get("image").is_none_or(serde_json::Value::is_null);
+    let mut spec: ClusterSpec = serde_json::from_value(body).map_err(|e| {
+        ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, "invalid_spec").with_detail(e.to_string())
+    })?;
+    if image_omitted {
+        spec.image.clone_from(&ops.default_agent_image);
+    }
     spec.validate().map_err(|e| {
         ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, "invalid_spec").with_detail(e.to_string())
     })?;
