@@ -33,6 +33,7 @@ import { getCluster } from '../../api/fn/clusters/get-cluster';
 import { listGucs } from '../../api/fn/system/list-gucs';
 import { patchCluster } from '../../api/fn/clusters/patch-cluster';
 import { restartCluster } from '../../api/fn/clusters/restart-cluster';
+import { rotateCredentials } from '../../api/fn/clusters/rotate-credentials';
 import { switchover } from '../../api/fn/clusters/switchover';
 import { WorkloadSpec } from '../../api/models/workload-spec';
 import { BackupSpec } from '../../api/models/backup-spec';
@@ -108,6 +109,29 @@ export class SwitchoverDialogComponent {
   `,
 })
 export class RestartDialogComponent {
+  protected readonly ref = inject<BrnDialogRef<boolean>>(BrnDialogRef);
+  protected readonly name = injectBrnDialogContext<{ name: string }>().name;
+}
+
+@Component({
+  selector: 'pg-rotate-credentials-dialog',
+  imports: [TranslocoModule, HlmButton, HlmDialogFooter, HlmDialogHeader, HlmDialogTitle],
+  template: `
+    <div hlmDialogHeader>
+      <h2 hlmDialogTitle>{{ 'secrets.rotateTitle' | transloco: { name: name } }}</h2>
+    </div>
+    <p class="text-muted-foreground py-2 text-sm">{{ 'secrets.rotateWarning' | transloco }}</p>
+    <div hlmDialogFooter>
+      <button hlmBtn variant="ghost" (click)="ref.close(false)">
+        {{ 'common.cancel' | transloco }}
+      </button>
+      <button hlmBtn data-testid="confirm-rotate-credentials" (click)="ref.close(true)">
+        {{ 'secrets.rotate' | transloco }}
+      </button>
+    </div>
+  `,
+})
+export class RotateCredentialsDialogComponent {
   protected readonly ref = inject<BrnDialogRef<boolean>>(BrnDialogRef);
   protected readonly name = injectBrnDialogContext<{ name: string }>().name;
 }
@@ -464,16 +488,30 @@ export class RestartDialogComponent {
         <!-- Secrets and initialisation -->
         <div class="mt-6 flex items-center justify-between">
           <h2 class="font-medium">{{ 'secrets.title' | transloco }}</h2>
-          <button
-            hlmBtn
-            variant="outline"
-            size="sm"
-            data-testid="open-env"
-            [disabled]="busy()"
-            (click)="openEnv(d)"
-          >
-            {{ 'secrets.edit' | transloco }}
-          </button>
+          <div class="flex items-center gap-2">
+            @if (!d.credentials_secret) {
+              <button
+                hlmBtn
+                variant="outline"
+                size="sm"
+                data-testid="rotate-credentials"
+                [disabled]="busy()"
+                (click)="openRotateCredentials()"
+              >
+                {{ 'secrets.rotate' | transloco }}
+              </button>
+            }
+            <button
+              hlmBtn
+              variant="outline"
+              size="sm"
+              data-testid="open-env"
+              [disabled]="busy()"
+              (click)="openEnv(d)"
+            >
+              {{ 'secrets.edit' | transloco }}
+            </button>
+          </div>
         </div>
         @if (secrets(); as s) {
           @if (!s.satisfied) {
@@ -787,6 +825,18 @@ export class ClusterDetailComponent implements OnDestroy {
       return;
     }
     await this.run(() => this.api.invoke(restartCluster, { name: this.name() }));
+  }
+
+  async openRotateCredentials(): Promise<void> {
+    const confirmed = await firstValueFrom(
+      this.dialog.open<boolean>(RotateCredentialsDialogComponent, {
+        context: { name: this.name() },
+      }).closed$,
+    );
+    if (!confirmed) {
+      return;
+    }
+    await this.run(() => this.api.invoke(rotateCredentials, { name: this.name() }));
   }
 
   async openEdit(d: ClusterDetail): Promise<void> {

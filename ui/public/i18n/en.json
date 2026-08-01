@@ -165,7 +165,7 @@
     },
     "credentialsSecret": "Credentials secret",
     "credentialsSecretHelp": "Leave empty and pglord generates one. To use your own, create a Secret with keys superuser-password and replication-password first.",
-    "credentialsSecretFixed": "Fixed after creation. Repointing a running cluster would change the password it presents without changing the one stored in the database, locking out every client.",
+    "credentialsSecretFixed": "The Secret reference is fixed after creation. Use Rotate passwords to change the managed passwords safely; repointing to a different Secret is not supported.",
     "env": "Environment variables",
     "envHelp": "Set on every instance. Init scripts can read them as psql variables, for example :'APP_PASSWORD'.",
     "envName": "NAME",
@@ -185,7 +185,10 @@
       "reserved": "{{name}} is set by pglord and cannot be overridden.",
       "duplicate": "{{name}} is defined more than once.",
       "incompleteSecret": "A secret reference needs both a secret name and a key."
-    }
+    },
+    "rotate": "Rotate passwords",
+    "rotateTitle": "Rotate credentials of {{name}}?",
+    "rotateWarning": "New superuser and replication passwords are generated and applied, then every instance restarts one at a time. Connected clients keep working until they reconnect — after that they need the new password from the Secret."
   },
   "restore": {
     "action": "Restore",
