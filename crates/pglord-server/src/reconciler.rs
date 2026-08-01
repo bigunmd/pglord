@@ -44,7 +44,7 @@ pub fn desired_objects(
     )
 }
 
-pub async fn run(client: kube::Client, ns: String) {
+pub async fn run(client: kube::Client, ns: String, metrics: crate::metrics::Metrics) {
     let cms: Api<ConfigMap> = Api::namespaced(client.clone(), &ns);
     let watch_cfg = watcher::Config::default().labels(&spec_label_selector());
 
@@ -70,8 +70,9 @@ pub async fn run(client: kube::Client, ns: String) {
         }
     });
 
+    let mut known: std::collections::HashSet<String> = Default::default();
     loop {
-        if let Err(err) = sync_all(&client, &cms, &ns).await {
+        if let Err(err) = sync_all(&client, &cms, &ns, &metrics, &mut known).await {
             tracing::warn!(%err, "reconcile pass failed");
             tokio::time::sleep(ERROR_BACKOFF).await;
         }
@@ -82,10 +83,18 @@ pub async fn run(client: kube::Client, ns: String) {
     }
 }
 
-async fn sync_all(client: &kube::Client, cms: &Api<ConfigMap>, ns: &str) -> anyhow::Result<()> {
+async fn sync_all(
+    client: &kube::Client,
+    cms: &Api<ConfigMap>,
+    ns: &str,
+    metrics: &crate::metrics::Metrics,
+    known: &mut std::collections::HashSet<String>,
+) -> anyhow::Result<()> {
     let specs = cms
         .list(&kube::api::ListParams::default().labels(&spec_label_selector()))
         .await?;
+    metrics.clusters.set(specs.items.len() as i64);
+    let mut current = std::collections::HashSet::new();
     for cm in &specs.items {
         let (spec, owner) = match configmap_to_spec(cm) {
             Ok(parsed) => parsed,
@@ -94,17 +103,30 @@ async fn sync_all(client: &kube::Client, cms: &Api<ConfigMap>, ns: &str) -> anyh
                 continue;
             }
         };
+        current.insert(spec.name.clone());
         if let Err(err) = spec.validate() {
             tracing::warn!(cluster = %spec.name, %err, "skipping invalid spec");
             continue;
         }
         let primary_pod = recorded_primary(cm, &spec.name);
         if let Err(err) = apply_cluster(client, ns, &spec, &owner, &primary_pod).await {
+            metrics
+                .reconcile_total
+                .with_label_values(&[spec.name.as_str(), "error"])
+                .inc();
             tracing::warn!(cluster = %spec.name, %err, "apply failed");
         } else {
+            metrics
+                .reconcile_total
+                .with_label_values(&[spec.name.as_str(), "ok"])
+                .inc();
             tracing::debug!(cluster = %spec.name, "reconciled");
         }
     }
+    for removed in known.difference(&current) {
+        metrics.forget_cluster(removed);
+    }
+    *known = current;
     Ok(())
 }
 

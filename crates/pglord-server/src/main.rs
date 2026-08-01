@@ -37,8 +37,12 @@ async fn main() -> anyhow::Result<()> {
             let ns = kube_client::current_namespace();
             tracing::info!(%ns, "kubernetes environment detected");
             tokio::spawn(kube_client::health_loop(client.clone(), readiness.clone()));
-            tokio::spawn(reconciler::run(client.clone(), ns.clone()));
-            tokio::spawn(pglord_server::orchestrator::run(client.clone(), ns.clone()));
+            tokio::spawn(reconciler::run(client.clone(), ns.clone(), metrics.clone()));
+            tokio::spawn(pglord_server::orchestrator::run(
+                client.clone(),
+                ns.clone(),
+                metrics.clone(),
+            ));
 
             // One-shot permission report at startup; the full detail is served
             // at /api/v1/preflight and shown in the UI.

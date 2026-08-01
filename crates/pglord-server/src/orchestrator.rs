@@ -32,7 +32,7 @@ pub fn elect_candidate(
         .map(|(pod, _)| pod)
 }
 
-pub async fn run(client: kube::Client, ns: String) {
+pub async fn run(client: kube::Client, ns: String, metrics: crate::metrics::Metrics) {
     let http = match reqwest::Client::builder().timeout(STATUS_TIMEOUT).build() {
         Ok(c) => c,
         Err(err) => {
@@ -62,6 +62,14 @@ pub async fn run(client: kube::Client, ns: String) {
             };
             let primary = recorded_primary(cm, &spec.name);
             let observations = observe_cluster(&http, &spec.name, &ns, spec.replicas).await;
+            metrics
+                .instances
+                .with_label_values(&[spec.name.as_str()])
+                .set(i64::from(spec.replicas));
+            metrics
+                .instances_ready
+                .with_label_values(&[spec.name.as_str()])
+                .set(observations.iter().filter(|o| o.ready).count() as i64);
 
             let primary_ok = observations
                 .iter()
@@ -94,6 +102,10 @@ pub async fn run(client: kube::Client, ns: String) {
             match cas_set_primary(&cms, &cm_name, &rv, &candidate).await {
                 Ok(true) => {
                     tracing::warn!(cluster = %spec.name, old = %primary, new = %candidate, "FAILOVER: primary record updated");
+                    metrics
+                        .failover_total
+                        .with_label_values(&[spec.name.as_str(), "auto"])
+                        .inc();
                     *count = 0;
                     // Belt and suspenders: the candidate also self-promotes by
                     // following the record; POST is just faster.

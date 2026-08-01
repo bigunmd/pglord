@@ -379,6 +379,10 @@ pub async fn switchover(
             .with_detail("The primary record changed concurrently; retry."));
     }
     tracing::warn!(cluster = %name, from = %current, to = %req.target, "SWITCHOVER: primary record updated");
+    ops.metrics
+        .failover_total
+        .with_label_values(&[name.as_str(), "manual"])
+        .inc();
 
     // The target also self-promotes by following the record; this just makes it
     // immediate.

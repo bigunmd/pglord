@@ -211,6 +211,7 @@ pub async fn start_backup(
     );
     let http = ops.http.clone();
     let kube = ops.kube.clone();
+    let metrics = ops.metrics.clone();
     let ns = ops.ns.clone();
     let run_id = id.clone();
     tokio::spawn(async move {
@@ -240,6 +241,14 @@ pub async fn start_backup(
                 (crate::backup_runs::RunState::Failed, Some(err.to_string()))
             }
         };
+        let outcome = match state {
+            crate::backup_runs::RunState::Succeeded => "succeeded",
+            _ => "failed",
+        };
+        metrics
+            .backup_runs_total
+            .with_label_values(&[name.as_str(), kind.as_str(), outcome])
+            .inc();
         if let Err(err) = crate::backup_runs::record_finish(
             &kube,
             &ns,
