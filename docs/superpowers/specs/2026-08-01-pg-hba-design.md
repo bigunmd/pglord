@@ -69,9 +69,10 @@ Rendering: `hba::render(rules, repl_user, scram) -> String` produces the whole f
 
 ```
 # Managed by pglord — do not edit; changes come from the cluster spec.
-local   all  all                trust
-host    all  all  127.0.0.1/32  trust
-host    all  all  ::1/128       trust
+local   all  all                peer
+host    all  all  127.0.0.1/32  scram-sha-256
+host    all  all  ::1/128       scram-sha-256
+local   replication  all        peer
 host    replication  <repl_user>  0.0.0.0/0  scram-sha-256
 
 # User rules (cluster spec pg_hba)
@@ -81,10 +82,14 @@ host    replication  <repl_user>  0.0.0.0/0  scram-sha-256
 host    all  all  0.0.0.0/0  scram-sha-256
 ```
 
-The prefix preserves today's effective behavior (initdb wrote local + loopback trust).
-In credential-less dev mode (`scram = false`) the replication rule and catch-all render
-as `trust`, exactly like `pg_hba_extra` today. Managed rules stay IPv4-only, matching
-today's `pg_hba_extra`; users who need IPv6 client access can add rules themselves.
+The prefix preserves today's effective behavior: initdb runs with
+`--auth-local peer --auth-host scram-sha-256`, so local socket access is peer (the
+postgres OS user — pgBackRest, pg_ctl, the agent's status queries) and loopback is
+scram. In credential-less dev mode (`scram = false`) every managed rule renders as
+`trust` and the replication rule widens to `host replication all 0.0.0.0/0 trust`,
+exactly like initdb `-A trust` plus `pg_hba_extra` today. The remote replication rule
+stays IPv4-only, matching today's `pg_hba_extra`; users who need IPv6 client access
+can add rules themselves.
 
 ## Agent
 
