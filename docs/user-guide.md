@@ -335,8 +335,32 @@ rather than left to break startup), and settings pglord manages itself —
 `listen_addresses`, `port` — cannot be overridden, because replication and
 failover depend on them.
 
-Editing `pg_hba.conf` is not available yet; connection rules stay as pglord
-configures them.
+### Client access rules (pg_hba)
+
+Each cluster carries a list of `pg_hba.conf` rules, edited on the cluster page
+(**Client access rules → Edit access rules**) or via
+`PATCH /api/v1/clusters/{name}` with a `pg_hba` array. A rule has a connection
+type (`host`, `hostssl`, `hostnossl`), a database (`all`, `replication`, or
+one database name), a user (`all` or one role name), an address (a CIDR like
+`10.0.0.0/8` or `::1/128`, or `all`, `samehost`, `samenet`), and an auth
+method (`scram-sha-256`, `reject`, `trust`).
+
+PostgreSQL evaluates pg_hba rules first match wins, and pglord fixes the ends
+of the file: replication and local socket access always come first (so a rule
+cannot break HA or the agent), and a catch-all accepting any
+password-authenticated client always comes last. Your rules sit in between —
+which means they mostly matter for *tightening*: a `reject` rule matches
+before the catch-all and turns clients away. Example: reject one role from
+everywhere, and everyone else stays implicitly allowed:
+
+    host  all  contractor  0.0.0.0/0  reject
+
+Changes apply with a configuration reload — connections already established
+are not re-checked, and no instance restarts. Rules apply identically on every
+instance, primary and standbys, and a restored cluster inherits its source's
+rules. Rule changes are validated up front; a rule that does not pass (bad
+CIDR, unknown method, hostname addresses) is rejected with HTTP 422 and
+applies nothing.
 
 ### Grow storage
 
@@ -529,7 +553,6 @@ default because they require the monitoring.coreos.com CRDs; the raw
   images are not usable yet.
 - Cluster name and image cannot be changed after creation (instances, storage
   and PostgreSQL settings can — see Day-2 operations).
-- `pg_hba.conf` rules are not editable yet.
 - The credentials Secret reference is fixed once a cluster exists (the managed
   passwords themselves can be rotated — see Rotating credentials).
 - Initialisation scripts are SQL only, and run only when a cluster is first

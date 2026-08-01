@@ -56,6 +56,57 @@ for body in '{"parameters":{"wrk_mem":"16MB"}}' '{"parameters":{"wal_level":"min
 done
 echo "OK unknown, reserved and malformed settings rejected"
 
+# The pg_hba section runs before the restart-required steps on purpose: rules
+# apply with a reload, and a freshly created cluster has stable pod IPs and a
+# known primary (cfg-0). After a roll, pod churn leaves stale headless-service
+# DNS ("No route to host") and the orchestrator can depose the just-restarted
+# primary, which makes TCP reachability assertions ambiguous.
+echo "==> pg_hba: invalid rule rejected"
+code=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "$API/api/v1/clusters/cfg" \
+  -H 'content-type: application/json' \
+  -d '{"pg_hba":[{"conn":"host","database":"all","user":"postgres","address":"not-a-cidr","method":"reject"}]}')
+[ "$code" = "422" ] || { echo "FAIL: bad hba rule returned $code, expected 422"; exit 1; }
+echo "OK invalid address rejected"
+
+echo "==> pg_hba: reject rule blocks network clients, replication survives"
+# Network path: exec on cfg-1, connect to cfg-0 over TCP (local socket access
+# is peer/managed and must keep working regardless of user rules).
+net_psql() { $KUBECTL -n pglord exec cfg-1 -- env PGPASSWORD="$SU_PW" psql -h cfg-0.cfg-pods -U postgres -tAc "$1" 2>/dev/null || echo "DENIED"; }
+# Retried like the other stateful checks: a single kubectl exec can hiccup.
+for _ in $(seq 1 15); do
+  [ "$(net_psql 'SELECT 1')" = "1" ] && break
+  sleep 2
+done
+[ "$(net_psql 'SELECT 1')" = "1" ] || { echo "FAIL: network access broken before any rule"; exit 1; }
+before0=$(restarts_of cfg-0); before1=$(restarts_of cfg-1)
+code=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "$API/api/v1/clusters/cfg" \
+  -H 'content-type: application/json' \
+  -d '{"pg_hba":[{"conn":"host","database":"all","user":"postgres","address":"0.0.0.0/0","method":"reject"}]}')
+[ "$code" = "200" ] || { echo "FAIL: hba patch returned $code"; exit 1; }
+for _ in $(seq 1 30); do
+  [ "$(net_psql 'SELECT 1')" = "DENIED" ] && break
+  sleep 2
+done
+[ "$(net_psql 'SELECT 1')" = "DENIED" ] || { echo "FAIL: reject rule not enforced"; exit 1; }
+[ "$(psql_on cfg-0 'SELECT 1')" = "1" ] || { echo "FAIL: local socket access broken by user rule"; exit 1; }
+# pg_stat_replication lives on the primary; ask the record which pod that is.
+hba_primary=$(field "['primary']")
+[ "$(psql_on "$hba_primary" 'SELECT count(*) FROM pg_stat_replication')" = "1" ] \
+  || { echo "FAIL: replication lost after hba change"; exit 1; }
+[ "$(restarts_of cfg-0)" = "$before0" ] && [ "$(restarts_of cfg-1)" = "$before1" ] \
+  || { echo "FAIL: instances restarted for a reload-safe hba change"; exit 1; }
+echo "OK network rejected, socket and replication intact, no restarts"
+
+echo "==> pg_hba: clearing rules restores access"
+curl -s -o /dev/null -X PATCH "$API/api/v1/clusters/cfg" \
+  -H 'content-type: application/json' -d '{"pg_hba":[]}'
+for _ in $(seq 1 30); do
+  [ "$(net_psql 'SELECT 1')" = "1" ] && break
+  sleep 2
+done
+[ "$(net_psql 'SELECT 1')" = "1" ] || { echo "FAIL: access not restored after clearing rules"; exit 1; }
+echo "OK rules cleared"
+
 echo "==> applying a reload-safe setting (work_mem)"
 before0=$(restarts_of cfg-0); before1=$(restarts_of cfg-1)
 code=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "$API/api/v1/clusters/cfg" \
@@ -76,11 +127,15 @@ echo "==> applying a restart-required setting (max_connections)"
 code=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "$API/api/v1/clusters/cfg" \
   -H 'content-type: application/json' -d '{"parameters":{"work_mem":"8MB","max_connections":"150"}}')
 [ "$code" = "200" ] || { echo "FAIL: patch returned $code"; exit 1; }
+# Every instance must have staged the setting: the agents poll the spec on
+# their own 5s clocks, and restarting an instance before its agent wrote the
+# new file would reboot it into the old value.
+all_pending() { detail | python3 -c "import sys,json; d=json.load(sys.stdin); print(bool(d['instances']) and all(i['pending_restart'] for i in d['instances']))" 2>/dev/null || echo ""; }
 for _ in $(seq 1 30); do
-  [ "$(field "['pending_restart']")" = "True" ] && break
+  [ "$(all_pending)" = "True" ] && break
   sleep 2
 done
-[ "$(field "['pending_restart']")" = "True" ] || { echo "FAIL: pending_restart not reported"; exit 1; }
+[ "$(all_pending)" = "True" ] || { echo "FAIL: pending_restart not reported on every instance"; exit 1; }
 [ "$(psql_on cfg-0 "SHOW max_connections")" = "100" ] || { echo "FAIL: max_connections changed without a restart"; exit 1; }
 echo "OK reported as pending, not yet in effect"
 
