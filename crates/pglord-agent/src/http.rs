@@ -18,6 +18,7 @@ pub fn router(cfg: Arc<Config>) -> Router {
         .route("/healthz", get(|| async { StatusCode::OK }))
         .route("/readyz", get(readyz))
         .route("/status", get(get_status))
+        .route("/metrics", get(metrics))
         .route("/promote", post(promote))
         .route("/backup", post(take_backup))
         .route("/backups", get(list_backups))
@@ -35,6 +36,16 @@ async fn readyz(State(cfg): State<Arc<Config>>) -> StatusCode {
     } else {
         StatusCode::SERVICE_UNAVAILABLE
     }
+}
+
+/// Prometheus text format. Always 200: postgres being down is reported as
+/// pglord_pg_up 0, not as a scrape failure.
+async fn metrics(State(cfg): State<Arc<Config>>) -> impl IntoResponse {
+    let sample = crate::metrics::collect(&cfg).await;
+    (
+        [(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4")],
+        crate::metrics::render(&sample),
+    )
 }
 
 #[derive(serde::Deserialize, Default)]
