@@ -1680,6 +1680,7 @@ dependencies = [
  "kube",
  "mime_guess",
  "pglord-core",
+ "prometheus",
  "rand 0.10.2",
  "reqwest",
  "rust-embed",

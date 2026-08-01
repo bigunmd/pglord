@@ -7,8 +7,12 @@ use tower::ServiceExt;
 
 fn test_app() -> axum::Router {
     let cfg = pglord_server::config::Config::test_default();
-    let (router, _api) =
-        pglord_server::app::build(pglord_server::health::Readiness::default(), &cfg, None);
+    let (router, _api) = pglord_server::app::build(
+        pglord_server::health::Readiness::default(),
+        &cfg,
+        None,
+        Default::default(),
+    );
     router
 }
 
@@ -123,8 +127,35 @@ async fn healthz_and_readyz_live_outside_api_contract() {
         pglord_server::health::Readiness::default(),
         &pglord_server::config::Config::test_default(),
         None,
+        Default::default(),
     );
     assert!(api.paths.paths.contains_key("/api/v1/ping"));
     assert!(api.paths.paths.contains_key("/api/v1/clusters"));
     assert!(!api.paths.paths.contains_key("/healthz"));
+}
+
+#[tokio::test]
+async fn metrics_serves_prometheus_text() {
+    let resp = test_app()
+        .oneshot(
+            Request::get("/metrics")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = resp.into_body().collect().await.expect("body").to_bytes();
+    assert!(String::from_utf8_lossy(&body).contains("pglord_clusters"));
+}
+
+#[tokio::test]
+async fn metrics_is_not_in_the_openapi_contract() {
+    let (_router, api) = pglord_server::app::build(
+        pglord_server::health::Readiness::default(),
+        &pglord_server::config::Config::test_default(),
+        None,
+        Default::default(),
+    );
+    assert!(!api.paths.paths.contains_key("/metrics"));
 }

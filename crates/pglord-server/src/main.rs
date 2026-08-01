@@ -15,7 +15,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Early exit: emit the OpenAPI artifact without touching the network.
     if std::env::args().any(|a| a == "--dump-openapi") {
-        let (_router, api) = app::build(Readiness::default(), &cfg, None);
+        let (_router, api) = app::build(Readiness::default(), &cfg, None, Default::default());
         std::fs::create_dir_all("spec")?;
         std::fs::write("spec/openapi.yaml", api.to_yaml()?)?;
         println!("wrote spec/openapi.yaml");
@@ -30,6 +30,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let readiness = Readiness::default();
+    let metrics = pglord_server::metrics::Metrics::new();
 
     let cluster_ops = match kube_client::init(&readiness).await {
         Some(client) => {
@@ -71,6 +72,7 @@ async fn main() -> anyhow::Result<()> {
                     .build()?,
                 ns,
                 default_agent_image: cfg.default_agent_image.clone(),
+                metrics: metrics.clone(),
             };
             tokio::spawn(pglord_server::backup_scheduler::run(ops.clone()));
             Some(ops)
@@ -78,7 +80,7 @@ async fn main() -> anyhow::Result<()> {
         None => None,
     };
 
-    let (router, _api) = app::build(readiness, &cfg, cluster_ops);
+    let (router, _api) = app::build(readiness, &cfg, cluster_ops, metrics);
     let router = router.layer(
         tower_http::trace::TraceLayer::new_for_http()
             .make_span_with(tower_http::trace::DefaultMakeSpan::new().level(tracing::Level::INFO)),

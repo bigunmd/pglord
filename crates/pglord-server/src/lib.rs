@@ -10,6 +10,7 @@ pub mod error;
 pub mod health;
 pub mod instance_probe;
 pub mod kube_client;
+pub mod metrics;
 pub mod orchestrator;
 pub mod preflight;
 pub mod primary_record;

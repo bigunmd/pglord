@@ -35,6 +35,7 @@ pub struct ClusterOps {
     pub ns: String,
     /// Image given to clusters created without one. See Config.
     pub default_agent_image: String,
+    pub metrics: crate::metrics::Metrics,
 }
 
 #[derive(Clone)]
@@ -42,6 +43,7 @@ pub struct AppState {
     pub readiness: Readiness,
     pub cfg: Arc<Config>,
     pub cluster_ops: Option<ClusterOps>,
+    pub metrics: crate::metrics::Metrics,
 }
 
 impl FromRef<AppState> for Readiness {
@@ -56,10 +58,17 @@ impl FromRef<AppState> for Option<ClusterOps> {
     }
 }
 
+impl FromRef<AppState> for crate::metrics::Metrics {
+    fn from_ref(s: &AppState) -> crate::metrics::Metrics {
+        s.metrics.clone()
+    }
+}
+
 pub fn build(
     readiness: Readiness,
     cfg: &Config,
     cluster_ops: Option<ClusterOps>,
+    metrics: crate::metrics::Metrics,
 ) -> (Router, utoipa::openapi::OpenApi) {
     let api = OpenApiRouter::new()
         .routes(routes!(crate::api::ping::ping))
@@ -117,12 +126,25 @@ pub fn build(
     let router = api_router
         .route("/healthz", get(health::healthz))
         .route("/readyz", get(health::readyz))
+        .route("/metrics", get(serve_metrics))
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", api.clone()));
 
     let state = AppState {
         readiness,
         cfg: Arc::new(cfg.clone()),
         cluster_ops,
+        metrics,
     };
     (router.with_state(state), api)
+}
+
+/// Prometheus text format for the control plane. Merged after the API router:
+/// excluded from the OpenAPI contract by construction.
+async fn serve_metrics(
+    axum::extract::State(metrics): axum::extract::State<crate::metrics::Metrics>,
+) -> impl IntoResponse {
+    (
+        [(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4")],
+        metrics.render(),
+    )
 }
