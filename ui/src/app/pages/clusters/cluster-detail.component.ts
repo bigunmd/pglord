@@ -1,5 +1,5 @@
 import { Component, OnDestroy, inject, input, signal } from '@angular/core';
-import { RouterLink } from '@angular/router';
+import { Router, RouterLink } from '@angular/router';
 import { TranslocoModule } from '@jsverse/transloco';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
@@ -41,6 +41,9 @@ import { BackupRun } from '../../api/models/backup-run';
 import { listBackups } from '../../api/fn/backups/list-backups';
 import { createBackup } from '../../api/fn/backups/create-backup';
 import { ClusterBackupDialogComponent } from './cluster-backup-dialog.component';
+import { ClusterRestoreDialogComponent } from './cluster-restore-dialog.component';
+import { RestoreRequest } from '../../api/models/restore-request';
+import { restoreCluster } from '../../api/fn/backups/restore-cluster';
 import { ClusterConfigDialogComponent } from './cluster-config-dialog.component';
 import { ClusterEditDialogComponent } from './cluster-edit-dialog.component';
 import { ClusterWorkloadDialogComponent } from './cluster-workload-dialog.component';
@@ -160,6 +163,27 @@ export class RestartDialogComponent {
           <span class="font-mono text-xs">{{ d.image }}</span>
           · {{ d.storage_size }} · {{ 'clusterDetail.primaryIs' | transloco: { pod: d.primary } }}
         </p>
+
+        @if (d.restore; as r) {
+          <!-- Provenance matters: someone looking at this cluster months later
+               needs to know its data is a copy, and of what. -->
+          <p
+            class="border-border bg-muted/40 text-muted-foreground mb-4 rounded-lg border px-3 py-2 text-xs leading-relaxed"
+            data-testid="restored-from"
+          >
+            @if (r.target_time) {
+              {{
+                'restore.provenanceAtTime'
+                  | transloco: { source: r.source_cluster, time: formatIsoTime(r.target_time) }
+              }}
+            } @else {
+              {{
+                'restore.provenance'
+                  | transloco: { source: r.source_cluster, label: r.backup_label ?? '' }
+              }}
+            }
+          </p>
+        }
 
         <div class="border-border overflow-x-auto rounded-lg border">
           <table hlmTable class="w-full">
@@ -394,6 +418,7 @@ export class RestartDialogComponent {
                       <th hlmTh>{{ 'backups.kind' | transloco }}</th>
                       <th hlmTh>{{ 'backups.size' | transloco }}</th>
                       <th hlmTh>{{ 'backups.finished' | transloco }}</th>
+                      <th hlmTh class="text-right">{{ 'common.actions' | transloco }}</th>
                     </tr>
                   </thead>
                   <tbody hlmTBody>
@@ -407,6 +432,18 @@ export class RestartDialogComponent {
                         <td hlmTd class="text-muted-foreground text-xs">
                           {{ formatTime(bk.finished) }}
                         </td>
+                        <td hlmTd class="text-right">
+                          <button
+                            hlmBtn
+                            variant="outline"
+                            size="sm"
+                            [attr.data-testid]="'restore-' + bk.label"
+                            [disabled]="busy()"
+                            (click)="openRestore(d, bk.label, bk.finished)"
+                          >
+                            {{ 'restore.action' | transloco }}
+                          </button>
+                        </td>
                       </tr>
                     }
                   </tbody>
@@ -415,7 +452,6 @@ export class RestartDialogComponent {
             } @else {
               <p class="text-muted-foreground mt-2 text-sm">{{ 'backups.none' | transloco }}</p>
             }
-            <p class="text-muted-foreground mt-2 text-xs">{{ 'backups.noRestoreYet' | transloco }}</p>
           }
         }
 
@@ -487,6 +523,7 @@ export class RestartDialogComponent {
 export class ClusterDetailComponent implements OnDestroy {
   private readonly api = inject(Api);
   private readonly dialog = inject(HlmDialogService);
+  private readonly router = inject(Router);
 
   readonly name = input.required<string>();
 
@@ -513,6 +550,34 @@ export class ClusterDetailComponent implements OnDestroy {
       return '—';
     }
     return new Date(unixSeconds * 1000).toLocaleString();
+  }
+
+  protected formatIsoTime(iso: string): string {
+    const at = new Date(iso);
+    return isNaN(at.getTime()) ? iso : at.toLocaleString();
+  }
+
+  /**
+   * Restore into a new cluster and go to it. Navigating is the point: the
+   * restore happens on the *new* cluster, so leaving the user here watching an
+   * unchanged page would look like nothing happened.
+   */
+  async openRestore(d: ClusterDetail, label?: string, finished?: number): Promise<void> {
+    const req = await firstValueFrom(
+      this.dialog.open<RestoreRequest | undefined>(ClusterRestoreDialogComponent, {
+        context: { source: d.name, label, finished },
+        contentClass: FORM_DIALOG_CLASS,
+      }).closed$,
+    );
+    if (!req) {
+      return;
+    }
+    const ok = await this.run(() =>
+      this.api.invoke(restoreCluster, { name: this.name(), body: req }),
+    );
+    if (ok) {
+      await this.router.navigate(['/clusters', req.target_cluster]);
+    }
   }
 
   async openBackupConfig(d: ClusterDetail): Promise<void> {
@@ -647,15 +712,18 @@ export class ClusterDetailComponent implements OnDestroy {
     );
   }
 
-  private async run(op: () => Promise<unknown>): Promise<void> {
+  /** Returns whether the operation succeeded, so callers can act on it. */
+  private async run(op: () => Promise<unknown>): Promise<boolean> {
     this.busy.set(true);
     try {
       await op();
       this.error.set(null);
       await this.refresh();
+      return true;
     } catch (err) {
       const e = err as { error?: { detail?: string; code?: string }; message?: string };
       this.error.set(e?.error?.detail ?? e?.error?.code ?? e?.message ?? 'Request failed');
+      return false;
     } finally {
       this.busy.set(false);
     }

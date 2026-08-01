@@ -3,6 +3,7 @@
 pub mod backup;
 pub mod guc;
 pub mod render;
+pub mod restore;
 pub mod spec;
 pub mod workload;
 

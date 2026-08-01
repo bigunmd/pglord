@@ -99,7 +99,16 @@ done
 echo "OK demo-0 rejoined as standby"
 
 echo "==> write through demo-rw replicates to rejoined standby"
-$KUBECTL -n pglord exec demo-1 -- env PGPASSWORD="$SU_PW" psql -h demo-rw -U postgres -c "INSERT INTO failover_e2e VALUES (43);" >/dev/null
+# Retry the write: demo-0 rejoining re-Ready-s a pod that -rw's selector does
+# not match, and kube-proxy briefly reprogramming endpoints is enough to refuse
+# one connection. Every other step here retries; a single un-retried call was
+# failing whole runs for a reason that has nothing to do with failover.
+for attempt in $(seq 1 30); do
+  $KUBECTL -n pglord exec demo-1 -- env PGPASSWORD="$SU_PW" psql -h demo-rw -U postgres \
+    -c "INSERT INTO failover_e2e VALUES (43);" >/dev/null 2>&1 && { wrote=yes; break; }
+  sleep 2
+done
+[ "${wrote:-}" = "yes" ] || { echo "FAIL: could not write through demo-rw"; $KUBECTL -n pglord get endpoints demo-rw; exit 1; }
 for _ in $(seq 1 30); do
   got=$(psql_on demo-0 "SELECT count(*) FROM failover_e2e")
   [ "$got" = "2" ] && break

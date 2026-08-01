@@ -207,10 +207,40 @@ the repository, which is exactly why both are shown. Only one backup of a
 cluster runs at a time; asking for another while one is in flight is refused
 rather than queued.
 
-**Restore is not available yet.** A backup you cannot restore is not yet a
-safety net, so until that ships, take a `pg_dump` before anything irreversible
-(see *Delete a cluster*). Scheduled backups are also still to come; for now a
-backup happens when you ask for one.
+### Restore a backup
+
+Every backup row has a **Restore** button. A restore always creates a **new
+cluster** and never touches the one you restored from — usually you are trying
+to rescue data, and writing an older copy over the live cluster would destroy
+the only thing you still have. Restoring onto the source's own name is refused.
+
+Two things you can restore to:
+
+- **A backup** — the data exactly as that backup captured it, plus every change
+  archived afterwards. Restoring the newest backup gives you the cluster as it
+  was moments before the repository last received WAL.
+- **A point in time** — the write-ahead log is replayed up to the moment you
+  name and then stops. This is what recovers from a bad migration or a
+  `DELETE` without a `WHERE`: pick a time just before it happened. The moment
+  has to fall inside the range your backups and archived WAL cover, and times
+  are interpreted in UTC.
+
+The new cluster inherits the source's image, size, storage and settings, so what
+comes up is shaped like what you lost. Two things are deliberately *not*
+inherited:
+
+- **Backups are off on the restored cluster.** It would otherwise write into the
+  same repository path it was restored from, where a stanza for a different
+  database already lives. Give it a repository of its own — a different path
+  prefix — once you are satisfied with the data.
+- **Its passwords are its own.** The restored files carry the source cluster's
+  roles, so pglord resets the superuser and replication passwords to the ones in
+  the new cluster's own Secret. Read them the same way as for any cluster.
+
+The restored cluster shows where it came from at the top of its page. Restoring
+takes as long as the data needs to come back from object storage and replay, so
+the cluster sits not-ready until that finishes; if it never becomes ready, the
+instance's logs carry pgBackRest's own error.
 
 ### Placement and resources
 
@@ -299,8 +329,11 @@ kubectl -n pglord exec <name>-0 -- \
   env PGPASSWORD=<password> pg_dump -U postgres postgres > backup.sql
 ```
 
-A repository backup is not a substitute here: restoring from one is not
-supported yet, so a dump is the only way to get this data back.
+If the cluster has a backup repository, restoring from it into a new cluster
+(see *Restore a backup*) recovers this data too — but only up to the last
+archived WAL, and only while the repository itself survives. Deleting the
+cluster does not delete its repository, so a restore stays possible afterwards;
+a dump is still the surer option when you want a single file in your own hands.
 
 ## 8. Troubleshooting
 
@@ -317,8 +350,8 @@ supported yet, so a dump is the only way to get this data back.
 
 - No authentication in front of the UI — put it behind your ingress auth.
 - Asynchronous replication only (synchronous is not exposed yet).
-- Backups can be taken and listed, but **not restored** yet, and cannot be
-  scheduled — see *Back up to object storage*.
+- A restore always creates a new cluster; restoring in place is not supported,
+  and the restored cluster starts with backups switched off.
 - Custom images must be built on the pglord agent image; stock `postgres:NN`
   images are not usable yet.
 - Cluster name and image cannot be changed after creation (instances, storage

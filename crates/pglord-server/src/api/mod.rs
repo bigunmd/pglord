@@ -5,4 +5,5 @@ pub mod clusters;
 pub mod gucs;
 pub mod ping;
 pub mod preflight;
+pub mod restore;
 pub mod version;

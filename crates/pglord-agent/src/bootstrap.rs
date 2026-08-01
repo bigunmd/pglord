@@ -1,12 +1,20 @@
-//! Data-directory bootstrap: initdb for primaries, pg_basebackup for standbys.
+//! Data-directory bootstrap: a restore when the cluster was created from a
+//! backup, otherwise initdb for primaries and pg_basebackup for standbys.
 
 use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, bail};
+use pglord_core::restore::RestoreSpec;
 use tokio::process::Command;
 
 use crate::config::{Config, Role};
+
+/// Written into PGDATA once a restore has finished completely. PG_VERSION
+/// appears early in a restore, so it cannot tell a finished restore from one
+/// that died half way; without this marker an interrupted restore would look
+/// bootstrapped and crashloop forever on a partial data directory.
+const RESTORE_MARKER: &str = "pglord.restore-complete";
 
 /// Extra postgresql.conf lines appended after initdb.
 /// wal_log_hints is required for pg_rewind (old-primary rejoin after failover).
@@ -56,11 +64,27 @@ fn has_standby_signal(pgdata: &Path) -> bool {
     pgdata.join("standby.signal").exists()
 }
 
+/// Whether a restore still has to run: this cluster was created from a backup
+/// and its data directory does not carry a completed-restore marker. An
+/// unmarked but non-empty PGDATA is the wreckage of an interrupted restore.
+pub fn restore_pending(pgdata: &Path, restore: Option<&RestoreSpec>) -> bool {
+    restore.is_some() && !pgdata.join(RESTORE_MARKER).exists()
+}
+
 /// Idempotently prepare PGDATA for the configured role. A standby role with
 /// primary-shaped data (no standby.signal) is a deposed ex-primary rejoining
 /// after failover: rewind it BEFORE postgres starts — doing this at startup
 /// (not at fence time) avoids racing the process supervisor.
-pub async fn ensure_bootstrapped(cfg: &Config) -> anyhow::Result<()> {
+pub async fn ensure_bootstrapped(
+    cfg: &Config,
+    restore: Option<&RestoreSpec>,
+) -> anyhow::Result<()> {
+    // Only the primary restores. Standbys of a restored cluster stream from it
+    // with an ordinary basebackup, exactly like any other cluster's standbys.
+    if cfg.role == Role::Primary && restore_pending(&cfg.pgdata, restore) {
+        let restore = restore.expect("restore_pending implies Some");
+        return bootstrap_restore(cfg, restore).await;
+    }
     if is_bootstrapped(&cfg.pgdata) {
         if cfg.role == Role::Standby && !has_standby_signal(&cfg.pgdata) {
             tracing::warn!("ex-primary PGDATA with standby role: rewinding to new primary");
@@ -74,6 +98,72 @@ pub async fn ensure_bootstrapped(cfg: &Config) -> anyhow::Result<()> {
         Role::Standby => bootstrap_standby(cfg).await,
         Role::Auto => bail!("role must be resolved before bootstrap (see rolestrategy)"),
     }
+}
+
+/// Restore this cluster's PGDATA from another cluster's backup repository.
+///
+/// Runs before postgres has ever started, so nothing can be reading the data
+/// directory while it is replaced.
+async fn bootstrap_restore(cfg: &Config, r: &RestoreSpec) -> anyhow::Result<()> {
+    tracing::info!(
+        source = %r.source_cluster,
+        label = r.backup_label.as_deref().unwrap_or("latest"),
+        target_time = r.target_time.as_deref().unwrap_or("end of WAL"),
+        "restoring from backup"
+    );
+
+    let conf = pglord_core::restore::pgbackrest_restore_conf(r, &cfg.pgdata.display().to_string());
+    let conf_path = Path::new(pglord_core::backup::CONF_PATH);
+    if let Some(dir) = conf_path.parent() {
+        std::fs::create_dir_all(dir).context("create pgbackrest conf dir")?;
+    }
+    std::fs::write(conf_path, conf).context("write restore pgbackrest.conf")?;
+
+    // Start from nothing. pgBackRest refuses to restore into a directory that
+    // already has files, and leftovers here are always the remains of a failed
+    // attempt — there is no data to preserve before the first successful boot.
+    if cfg.pgdata.exists() {
+        std::fs::remove_dir_all(&cfg.pgdata).context("clear PGDATA before restore")?;
+    }
+    std::fs::create_dir_all(&cfg.pgdata).context("create PGDATA")?;
+
+    let mut cmd = Command::new("pgbackrest");
+    cmd.arg(format!(
+        "--stanza={}",
+        pglord_core::restore::source_stanza(r)
+    ))
+    .args(pglord_core::restore::restore_args(r));
+    // The repository being read is the source's, so these are the source
+    // repository's credentials; they reach us through the same env vars.
+    if !cfg.s3_access_key.is_empty() {
+        cmd.env("PGBACKREST_REPO1_S3_KEY", &cfg.s3_access_key);
+        cmd.env("PGBACKREST_REPO1_S3_KEY_SECRET", &cfg.s3_secret_key);
+    }
+    let out = cmd.output().await.context("spawn pgbackrest restore")?;
+    if !out.status.success() {
+        bail!(
+            "restore from {} failed: {}",
+            r.source_cluster,
+            crate::backup::pgbackrest_error(&out.stdout, &out.stderr, out.status)
+        );
+    }
+
+    // The restored PGDATA carries the SOURCE cluster's archive settings, whose
+    // archive_command pushes WAL into the repository we just read from. Left
+    // alone, this cluster would write its own diverging timeline into the
+    // source's repository and corrupt the backups of a cluster that is very
+    // possibly still running. Neutralise it before postgres ever starts;
+    // enabling backups here later rewrites the file with our own stanza.
+    crate::params::write_archive_if_changed(
+        &cfg.pgdata,
+        &crate::params::archive_conf(&cfg.cluster, false),
+    )
+    .context("disable inherited archiving")?;
+
+    std::fs::write(cfg.pgdata.join(RESTORE_MARKER), "")
+        .context("write restore completion marker")?;
+    tracing::info!("restore complete; postgres will replay WAL and promote");
+    Ok(())
 }
 
 /// Connection user/password for streaming: replication role when configured,
@@ -298,6 +388,48 @@ mod tests {
         assert!(!has_standby_signal(&dir));
         std::fs::write(dir.join("standby.signal"), "").expect("write");
         assert!(has_standby_signal(&dir));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn restore_spec() -> RestoreSpec {
+        serde_json::from_value(serde_json::json!({
+            "source_cluster": "src",
+            "repository": {
+                "enabled": true,
+                "s3_endpoint": "https://s3.example.com",
+                "s3_bucket": "b",
+                "s3_credentials_secret": "creds"
+            }
+        }))
+        .expect("restore spec")
+    }
+
+    #[test]
+    fn restore_runs_once_and_only_for_restored_clusters() {
+        let dir = std::env::temp_dir().join("pglord-agent-test-restore");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let spec = restore_spec();
+
+        // An ordinary cluster never restores, whatever is on disk.
+        assert!(!restore_pending(&dir, None));
+
+        // A restored cluster with an empty data directory has work to do.
+        assert!(restore_pending(&dir, Some(&spec)));
+
+        // Half-finished restore: PG_VERSION lands early, so it alone must not
+        // count as done or the pod would crashloop on partial data forever.
+        std::fs::write(dir.join("PG_VERSION"), "17\n").expect("write");
+        assert!(
+            restore_pending(&dir, Some(&spec)),
+            "a partial restore must be redone, not treated as bootstrapped"
+        );
+
+        // Marked complete: never restore again, or every pod restart would wipe
+        // the cluster back to the backup.
+        std::fs::write(dir.join(RESTORE_MARKER), "").expect("write");
+        assert!(!restore_pending(&dir, Some(&spec)));
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 

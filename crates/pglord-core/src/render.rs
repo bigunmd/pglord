@@ -185,16 +185,25 @@ fn secret_env(name: &str, cluster: &str, key: &str) -> EnvVar {
     }
 }
 
-/// Object-storage credentials from the user's Secret, only when backups are
-/// configured. `optional: true` keeps pods schedulable if the Secret is added
-/// after the cluster.
+/// Object-storage credentials from the user's Secret. `optional: true` keeps
+/// pods schedulable if the Secret is added after the cluster.
+///
+/// A cluster created by a restore usually has backups of its own switched off,
+/// but still has to read the *source's* repository to bootstrap — so the
+/// restore repository's Secret is used when there is no backup repository of
+/// our own. Without this a restored cluster comes up with no credentials and
+/// fails the restore with an authentication error.
 fn backup_env(spec: &ClusterSpec) -> Vec<EnvVar> {
-    let Some(secret) = spec
+    let own = spec
         .backup
         .s3_credentials_secret
         .as_deref()
-        .filter(|_| spec.backup.enabled)
-    else {
+        .filter(|_| spec.backup.enabled);
+    let from_restore = spec
+        .restore
+        .as_ref()
+        .and_then(|r| r.repository.s3_credentials_secret.as_deref());
+    let Some(secret) = own.or(from_restore) else {
         return Vec::new();
     };
     [
@@ -557,6 +566,53 @@ mod tests {
         assert_eq!(sel.key, "access-key");
         // Optional so a missing Secret does not make pods unschedulable.
         assert_eq!(sel.optional, Some(true));
+    }
+
+    #[test]
+    fn a_restored_cluster_gets_the_source_repositorys_credentials() {
+        // A restored cluster has backups of its own switched off, but still has
+        // to read the source's repository to bootstrap. Without these env vars
+        // the restore fails with an authentication error and the pod
+        // crashloops on an empty data directory.
+        let (mut spec, owner) = demo();
+        spec.restore = Some(
+            serde_json::from_value(serde_json::json!({
+                "source_cluster": "src",
+                "repository": {
+                    "enabled": true,
+                    "s3_endpoint": "https://s3.example.com",
+                    "s3_bucket": "b",
+                    "s3_credentials_secret": "source-creds"
+                }
+            }))
+            .expect("restore spec"),
+        );
+        assert!(
+            !spec.backup.enabled,
+            "backups stay off on a restored cluster"
+        );
+
+        let env = render_statefulset(&spec, "ns", &owner)
+            .spec
+            .expect("spec")
+            .template
+            .spec
+            .expect("pod")
+            .containers[0]
+            .env
+            .clone()
+            .expect("env");
+        let sel = env
+            .iter()
+            .find(|e| e.name == "PGLORD_AGENT_S3_ACCESS_KEY")
+            .expect("access key env")
+            .value_from
+            .as_ref()
+            .expect("value_from")
+            .secret_key_ref
+            .as_ref()
+            .expect("secret ref");
+        assert_eq!(sel.name, "source-creds");
     }
 
     #[test]

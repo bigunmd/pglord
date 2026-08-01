@@ -32,15 +32,25 @@ async fn main() -> anyhow::Result<()> {
         },
         None => rolestrategy::resolve_role(cfg.role, &hostname)?,
     };
-    let cfg = Arc::new(cfg);
-    tracing::info!(role = ?cfg.role, %hostname, version = env!("CARGO_PKG_VERSION"), "pglord-agent starting");
+    // Read once, before bootstrap: a cluster created by a restore has to know
+    // where its data comes from before it has any.
+    let restore = match &reader {
+        Some(r) => r.spec().await.and_then(|s| s.restore),
+        None => None,
+    };
+    let restored = restore.is_some();
 
-    bootstrap::ensure_bootstrapped(&cfg).await?;
+    let cfg = Arc::new(cfg);
+    tracing::info!(role = ?cfg.role, %hostname, restored, version = env!("CARGO_PKG_VERSION"), "pglord-agent starting");
+
+    bootstrap::ensure_bootstrapped(&cfg, restore.as_ref()).await?;
     let child = supervisor::spawn_postgres(&cfg)?;
 
     if cfg.role == Role::Primary {
         let cfg_pb = cfg.clone();
-        tokio::spawn(async move { pglord_agent::postboot::ensure_replication_role(&cfg_pb).await });
+        // Restored data carries the SOURCE cluster's roles, so this cluster's
+        // own generated password would not open it. Reset the superuser too.
+        tokio::spawn(async move { pglord_agent::postboot::ensure_roles(&cfg_pb, restored).await });
     }
     if let Some(reader) = reader {
         tokio::spawn(record::follow(reader, cfg.clone(), hostname.clone()));

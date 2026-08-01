@@ -3,6 +3,7 @@
 
 import { BackupSpec } from '../models/backup-spec';
 import { InstanceDto } from '../models/instance-dto';
+import { RestoreSpec } from '../models/restore-spec';
 import { WorkloadSpec } from '../models/workload-spec';
 export interface ClusterDetail {
 
@@ -32,6 +33,7 @@ export interface ClusterDetail {
   primary: string;
   ready_replicas: number;
   replicas: number;
+  restore?: (null | RestoreSpec);
   storage_size: string;
 
   /**

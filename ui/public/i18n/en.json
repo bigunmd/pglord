@@ -32,7 +32,6 @@
     "kind": "Type",
     "size": "Size",
     "finished": "Finished",
-    "noRestoreYet": "Restoring from a backup is not available yet — take a pg_dump before anything irreversible.",
     "verifyTls": "Verify the storage certificate",
     "verifyTlsHelp": "Leave on for real object storage. Turn off only if your endpoint uses a self-signed certificate.",
     "schedule": "Schedule (cron, UTC)",
@@ -139,7 +138,29 @@
   },
   "common": {
     "cancel": "Cancel",
-    "loading": "Loading…"
+    "loading": "Loading…",
+    "actions": "Actions"
+  },
+  "restore": {
+    "action": "Restore",
+    "title": "Restore into a new cluster",
+    "subtitle": "Creates a new cluster from {{source}}'s backups. {{source}} itself is not touched.",
+    "targetName": "New cluster name",
+    "targetHelp": "Lowercase letters, digits and dashes, up to 40 characters. Must differ from the cluster being restored.",
+    "point": "Restore to",
+    "modes": {
+      "backup": "This backup",
+      "latest": "Latest state",
+      "time": "A point in time"
+    },
+    "fromBackup": "The data exactly as backup {{label}} captured it. Nothing written after that backup is included.",
+    "fromLatest": "The newest backup plus every change archived since — the most recent state the repository can produce.",
+    "targetTime": "Point in time",
+    "targetTimeHelp": "Replays the write-ahead log up to this moment, then stops. Must be within the range the backups and archived WAL cover.",
+    "note": "Backups are switched off on the new cluster: it would otherwise write into the repository it was restored from. Configure a repository of its own once you are happy with the data.",
+    "submit": "Restore",
+    "provenance": "Restored from {{source}}'s backup {{label}}.",
+    "provenanceAtTime": "Restored from {{source}}, to {{time}}."
   },
   "home": {
     "serverStatus": "Server status",

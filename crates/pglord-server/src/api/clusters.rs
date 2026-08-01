@@ -48,6 +48,9 @@ pub struct ClusterDetail {
     pub workload: pglord_core::workload::WorkloadSpec,
     /// Backup repository (secret name only — never its contents).
     pub backup: pglord_core::backup::BackupSpec,
+    /// Where this cluster's data came from, when it was created by a restore.
+    /// Null for clusters that started empty.
+    pub restore: Option<pglord_core::restore::RestoreSpec>,
     /// Any instance is waiting on a restart to apply staged settings.
     pub pending_restart: bool,
     pub instances: Vec<InstanceDto>,
@@ -201,6 +204,7 @@ pub async fn get_cluster(
         parameters: spec.parameters,
         workload: spec.workload,
         backup: spec.backup,
+        restore: spec.restore,
         pending_restart,
         instances,
     }))

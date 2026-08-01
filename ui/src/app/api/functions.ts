@@ -19,6 +19,8 @@ export type { ListBackups$Params as ListBackups$Params } from './fn/backups/list
 export { listBackups as listBackups } from './fn/backups/list-backups';
 export type { CreateBackup$Params as CreateBackup$Params } from './fn/backups/create-backup';
 export { createBackup as createBackup } from './fn/backups/create-backup';
+export type { RestoreCluster$Params as RestoreCluster$Params } from './fn/backups/restore-cluster';
+export { restoreCluster as restoreCluster } from './fn/backups/restore-cluster';
 export type { ListGucs$Params as ListGucs$Params } from './fn/system/list-gucs';
 export { listGucs as listGucs } from './fn/system/list-gucs';
 export type { Ping$Params as Ping$Params } from './fn/system/ping';

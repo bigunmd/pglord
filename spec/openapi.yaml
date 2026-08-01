@@ -233,6 +233,50 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
+  /api/v1/clusters/{name}/restore:
+    post:
+      tags:
+      - backups
+      summary: Restore this cluster's backup into a new cluster.
+      operationId: restore_cluster
+      parameters:
+      - name: name
+        in: path
+        description: Source cluster name
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RestoreRequest'
+        required: true
+      responses:
+        '201':
+          description: Restored cluster created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClusterSpec'
+        '404':
+          description: Source cluster not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '409':
+          description: Target exists, or the source has no repository
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '422':
+          description: Invalid request
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
   /api/v1/clusters/{name}/switchover:
     post:
       tags:
@@ -544,6 +588,13 @@ components:
           type: integer
           format: int32
           minimum: 0
+        restore:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/RestoreSpec'
+            description: |-
+              Where this cluster's data came from, when it was created by a restore.
+              Null for clusters that started empty.
         storage_size:
           type: string
         workload:
@@ -579,6 +630,14 @@ components:
           format: int32
           description: 'Total instances: 1 primary + (replicas - 1) streaming standbys.'
           minimum: 0
+        restore:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/RestoreSpec'
+            description: |-
+              Where this cluster's data came from, when it was created by restoring
+              someone's backup. A one-shot bootstrap source: it is consumed the first
+              time PGDATA is created and has no effect on a running cluster.
         storage_size:
           type: string
           description: PVC size per instance, e.g. "1Gi".
@@ -745,6 +804,58 @@ components:
           type:
           - string
           - 'null'
+    RestoreRequest:
+      type: object
+      required:
+      - target_cluster
+      properties:
+        backup_label:
+          type:
+          - string
+          - 'null'
+          description: Backup to restore, as listed in the repository. Omit for the latest.
+        replicas:
+          type:
+          - integer
+          - 'null'
+          format: int32
+          description: Instances in the new cluster. Defaults to the source's.
+          minimum: 0
+        target_cluster:
+          type: string
+          description: Name of the cluster to create. Must not already exist.
+        target_time:
+          type:
+          - string
+          - 'null'
+          description: Recover to this instant (RFC3339, UTC) instead of the end of the WAL.
+    RestoreSpec:
+      type: object
+      required:
+      - source_cluster
+      - repository
+      properties:
+        backup_label:
+          type:
+          - string
+          - 'null'
+          description: Which backup to restore. None restores the most recent one.
+        repository:
+          $ref: '#/components/schemas/BackupSpec'
+          description: |-
+            The repository to read, copied from the source when the restore was
+            requested rather than referenced. The source can afterwards be
+            reconfigured or deleted without stranding this cluster's bootstrap.
+        source_cluster:
+          type: string
+          description: |-
+            Cluster whose repository holds the backup. Names the pgBackRest stanza
+            that is read — which is the *source's* stanza, not this cluster's.
+        target_time:
+          type:
+          - string
+          - 'null'
+          description: Recover to this instant (RFC3339, UTC) instead of the end of the WAL.
     RunState:
       type: string
       enum:

@@ -34,6 +34,11 @@ pub struct ClusterSpec {
     /// archiving, which needs a restart.
     #[serde(default)]
     pub backup: crate::backup::BackupSpec,
+    /// Where this cluster's data came from, when it was created by restoring
+    /// someone's backup. A one-shot bootstrap source: it is consumed the first
+    /// time PGDATA is created and has no effect on a running cluster.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restore: Option<crate::restore::RestoreSpec>,
 }
 
 fn default_image() -> String {
@@ -66,6 +71,8 @@ pub enum SpecError {
     InvalidWorkload(#[from] crate::workload::WorkloadError),
     #[error("{0}")]
     InvalidBackup(#[from] crate::backup::BackupError),
+    #[error("{0}")]
+    InvalidRestore(#[from] crate::restore::RestoreError),
 }
 
 /// The fields a running cluster may change. Name and image are deliberately
@@ -165,6 +172,9 @@ impl ClusterSpec {
         }
         crate::workload::validate(&self.workload)?;
         crate::backup::validate(&self.backup)?;
+        if let Some(restore) = &self.restore {
+            crate::restore::validate(restore)?;
+        }
         Ok(())
     }
 }
@@ -356,6 +366,34 @@ mod tests {
             })
             .expect("change");
         assert_eq!(scaled.parameters, s.parameters);
+    }
+
+    #[test]
+    fn editing_a_cluster_never_loses_where_its_data_came_from() {
+        // `restore` is absent from SpecChange on purpose: it is a bootstrap
+        // source, not a setting. Editing the cluster must keep it, both because
+        // re-running it would be catastrophic and because it is the only record
+        // that this cluster's contents are a copy of something else.
+        let mut s = spec("demo");
+        s.restore = Some(
+            serde_json::from_value(serde_json::json!({
+                "source_cluster": "src",
+                "repository": {
+                    "enabled": true,
+                    "s3_endpoint": "https://s3.example.com",
+                    "s3_bucket": "b",
+                    "s3_credentials_secret": "creds"
+                }
+            }))
+            .expect("restore"),
+        );
+        let next = s
+            .apply_change(&SpecChange {
+                replicas: Some(3),
+                ..Default::default()
+            })
+            .expect("change");
+        assert_eq!(next.restore, s.restore);
     }
 
     #[test]

@@ -18,6 +18,8 @@ export type { PreflightCheck } from './models/preflight-check';
 export type { PreflightReport } from './models/preflight-report';
 export type { ProblemDetails } from './models/problem-details';
 export type { Resources } from './models/resources';
+export type { RestoreRequest } from './models/restore-request';
+export type { RestoreSpec } from './models/restore-spec';
 export type { RunState } from './models/run-state';
 export type { SpecChange } from './models/spec-change';
 export type { SwitchoverRequest } from './models/switchover-request';
