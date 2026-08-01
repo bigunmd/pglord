@@ -26,7 +26,8 @@ pub struct MetricsSample {
 
 fn gauge(reg: &Registry, name: &str, help: &str, value: f64) {
     let g = Gauge::new(name, help).expect("static metric name");
-    reg.register(Box::new(g.clone())).expect("unique metric name");
+    reg.register(Box::new(g.clone()))
+        .expect("unique metric name");
     g.set(value);
 }
 
@@ -35,7 +36,8 @@ fn gauge_vec(reg: &Registry, name: &str, help: &str, label: &str, values: &[(Str
         return;
     }
     let v = GaugeVec::new(Opts::new(name, help), &[label]).expect("static metric name");
-    reg.register(Box::new(v.clone())).expect("unique metric name");
+    reg.register(Box::new(v.clone()))
+        .expect("unique metric name");
     for (key, value) in values {
         v.with_label_values(&[key]).set(*value);
     }
@@ -88,7 +90,12 @@ pub fn render(sample: &MetricsSample) -> String {
         &sample.connections,
     );
     if let Some(v) = sample.max_connections {
-        gauge(&reg, "pglord_pg_max_connections", "max_connections setting.", v);
+        gauge(
+            &reg,
+            "pglord_pg_max_connections",
+            "max_connections setting.",
+            v,
+        );
     }
     gauge_vec(
         &reg,
@@ -172,7 +179,9 @@ async fn try_collect(cfg: &Config) -> anyhow::Result<MetricsSample> {
             )
             .await?
         {
-            sample.standby_replay_lag_bytes.push((row.get(0), row.get(1)));
+            sample
+                .standby_replay_lag_bytes
+                .push((row.get(0), row.get(1)));
         }
     }
     for row in client

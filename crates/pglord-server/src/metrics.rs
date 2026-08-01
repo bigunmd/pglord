@@ -17,13 +17,15 @@ pub struct Metrics {
 
 fn counter_vec(reg: &Registry, name: &str, help: &str, labels: &[&str]) -> IntCounterVec {
     let v = IntCounterVec::new(Opts::new(name, help), labels).expect("static metric name");
-    reg.register(Box::new(v.clone())).expect("unique metric name");
+    reg.register(Box::new(v.clone()))
+        .expect("unique metric name");
     v
 }
 
 fn gauge_vec(reg: &Registry, name: &str, help: &str) -> IntGaugeVec {
     let v = IntGaugeVec::new(Opts::new(name, help), &["cluster"]).expect("static metric name");
-    reg.register(Box::new(v.clone())).expect("unique metric name");
+    reg.register(Box::new(v.clone()))
+        .expect("unique metric name");
     v
 }
 
@@ -91,7 +93,9 @@ impl Metrics {
         let _ = self.instances_ready.remove_label_values(&[cluster]);
         let _ = self.instances.remove_label_values(&[cluster]);
         for outcome in ["ok", "error"] {
-            let _ = self.reconcile_total.remove_label_values(&[cluster, outcome]);
+            let _ = self
+                .reconcile_total
+                .remove_label_values(&[cluster, outcome]);
         }
         for trigger in ["auto", "manual"] {
             let _ = self.failover_total.remove_label_values(&[cluster, trigger]);

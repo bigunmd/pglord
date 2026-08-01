@@ -43,7 +43,10 @@ async fn readyz(State(cfg): State<Arc<Config>>) -> StatusCode {
 async fn metrics(State(cfg): State<Arc<Config>>) -> impl IntoResponse {
     let sample = crate::metrics::collect(&cfg).await;
     (
-        [(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4")],
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; version=0.0.4",
+        )],
         crate::metrics::render(&sample),
     )
 }

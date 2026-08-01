@@ -96,7 +96,10 @@ fn pod_labels(spec: &ClusterSpec) -> BTreeMap<String, String> {
 fn pod_annotations(spec: &ClusterSpec) -> BTreeMap<String, String> {
     let mut ann = BTreeMap::from([
         ("prometheus.io/scrape".to_string(), "true".to_string()),
-        ("prometheus.io/port".to_string(), AGENT_HTTP_PORT.to_string()),
+        (
+            "prometheus.io/port".to_string(),
+            AGENT_HTTP_PORT.to_string(),
+        ),
         ("prometheus.io/path".to_string(), "/metrics".to_string()),
     ]);
     ann.extend(spec.workload.annotations.clone());
