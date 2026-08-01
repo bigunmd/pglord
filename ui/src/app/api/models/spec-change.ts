@@ -3,6 +3,7 @@
 
 import { BackupSpec } from '../models/backup-spec';
 import { EnvVarSpec } from '../models/env-var-spec';
+import { HbaRule } from '../models/hba-rule';
 import { InitSpec } from '../models/init-spec';
 import { WorkloadSpec } from '../models/workload-spec';
 
@@ -35,6 +36,12 @@ export interface SpecChange {
   parameters?: ({
 [key: string]: string;
 } | null);
+
+  /**
+   * Full replacement of the pg_hba rule list: absent leaves it untouched,
+   * an empty list removes every user rule.
+   */
+  pg_hba?: (Array<HbaRule> | null);
   replicas?: (number | null);
   storage_size?: (string | null);
   workload?: (null | WorkloadSpec);

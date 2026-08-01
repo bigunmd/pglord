@@ -3,6 +3,7 @@
 
 import { BackupSpec } from '../models/backup-spec';
 import { EnvVarSpec } from '../models/env-var-spec';
+import { HbaRule } from '../models/hba-rule';
 import { InitSpec } from '../models/init-spec';
 import { RestoreSpec } from '../models/restore-spec';
 import { WorkloadSpec } from '../models/workload-spec';
@@ -49,6 +50,13 @@ export interface ClusterSpec {
   parameters?: {
 [key: string]: string;
 };
+
+  /**
+   * Client access rules (pg_hba.conf) inserted between pglord's managed
+   * prefix and its scram catch-all. First match wins; use `reject` rules
+   * to tighten access. Applied with a reload — no restart.
+   */
+  pg_hba?: Array<HbaRule>;
 
   /**
    * Total instances: 1 primary + (replicas - 1) streaming standbys.

@@ -608,6 +608,7 @@ components:
       - ready_replicas
       - primary
       - parameters
+      - pg_hba
       - workload
       - backup
       - env
@@ -653,6 +654,11 @@ components:
         pending_restart:
           type: boolean
           description: Any instance is waiting on a restart to apply staged settings.
+        pg_hba:
+          type: array
+          items:
+            $ref: '#/components/schemas/HbaRule'
+          description: Client access rules between pglord's managed prefix and catch-all.
         primary:
           type: string
           description: Recorded primary pod (the single writer per the primary record).
@@ -718,6 +724,14 @@ components:
             type: string
           propertyNames:
             type: string
+        pg_hba:
+          type: array
+          items:
+            $ref: '#/components/schemas/HbaRule'
+          description: |-
+            Client access rules (pg_hba.conf) inserted between pglord's managed
+            prefix and its scram catch-all. First match wins; use `reject` rules
+            to tighten access. Applied with a reload — no restart.
         replicas:
           type: integer
           format: int32
@@ -798,6 +812,48 @@ components:
           type: string
         summary:
           type: string
+    HbaConn:
+      type: string
+      enum:
+      - host
+      - hostssl
+      - hostnossl
+    HbaMethod:
+      type: string
+      description: |-
+        Deliberately small: cert needs TLS (not built), ldap/radius need auth
+        options this schema does not carry, md5 is deprecated. Growing the list
+        later is backwards-compatible; shrinking it is not.
+      enum:
+      - scram-sha-256
+      - reject
+      - trust
+    HbaRule:
+      type: object
+      description: |-
+        One user-supplied pg_hba rule. `local` is not expressible: the managed
+        prefix owns socket access, and a user local rule after `local all all peer`
+        could never match anyway.
+      required:
+      - conn
+      - database
+      - user
+      - address
+      - method
+      properties:
+        address:
+          type: string
+          description: CIDR ("10.0.0.0/8", "::1/128") or all | samehost | samenet.
+        conn:
+          $ref: '#/components/schemas/HbaConn'
+        database:
+          type: string
+          description: '"all", "replication", or a single database name.'
+        method:
+          $ref: '#/components/schemas/HbaMethod'
+        user:
+          type: string
+          description: '"all" or a single role name.'
     InitSpec:
       type: object
       properties:
@@ -1116,6 +1172,15 @@ components:
             type: string
           propertyNames:
             type: string
+        pg_hba:
+          type:
+          - array
+          - 'null'
+          items:
+            $ref: '#/components/schemas/HbaRule'
+          description: |-
+            Full replacement of the pg_hba rule list: absent leaves it untouched,
+            an empty list removes every user rule.
         replicas:
           type:
           - integer

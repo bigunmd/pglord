@@ -44,6 +44,8 @@ pub struct ClusterDetail {
     pub primary: String,
     /// PostgreSQL settings applied on top of the defaults.
     pub parameters: std::collections::BTreeMap<String, String>,
+    /// Client access rules between pglord's managed prefix and catch-all.
+    pub pg_hba: Vec<pglord_core::hba::HbaRule>,
     /// Scheduling, resources and Kubernetes metadata for the instances.
     pub workload: pglord_core::workload::WorkloadSpec,
     /// Backup repository (secret name only — never its contents).
@@ -229,6 +231,7 @@ pub async fn get_cluster(
         ready_replicas,
         primary,
         parameters: spec.parameters,
+        pg_hba: spec.pg_hba,
         workload: spec.workload,
         backup: spec.backup,
         restore: spec.restore,
@@ -252,6 +255,7 @@ fn spec_error(e: SpecError) -> ApiError {
         SpecError::UnknownParameter(_)
         | SpecError::ReservedParameter(_)
         | SpecError::InvalidParameterValue { .. } => "invalid_parameter",
+        SpecError::InvalidHba(_) => "invalid_pg_hba",
         SpecError::InvalidWorkload(_) => "invalid_workload",
         SpecError::InvalidBackup(_) => "invalid_backup",
         _ => "invalid_spec",

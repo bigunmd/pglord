@@ -3,6 +3,7 @@
 
 import { BackupSpec } from '../models/backup-spec';
 import { EnvVarSpec } from '../models/env-var-spec';
+import { HbaRule } from '../models/hba-rule';
 import { InitSpec } from '../models/init-spec';
 import { InstanceDto } from '../models/instance-dto';
 import { RestoreSpec } from '../models/restore-spec';
@@ -45,6 +46,11 @@ export interface ClusterDetail {
    * Any instance is waiting on a restart to apply staged settings.
    */
   pending_restart: boolean;
+
+  /**
+   * Client access rules between pglord's managed prefix and catch-all.
+   */
+  pg_hba: Array<HbaRule>;
 
   /**
    * Recorded primary pod (the single writer per the primary record).
