@@ -10,6 +10,21 @@ info:
     identifier: AGPL-3.0-or-later
   version: 0.1.0
 paths:
+  /api/v1/auth/config:
+    get:
+      tags:
+      - system
+      summary: |-
+        Which login affordances the UI should render. When both modes are off the
+        API runs unauthenticated and the UI skips login entirely.
+      operationId: auth_config
+      responses:
+        '200':
+          description: Available authentication modes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthConfigResponse'
   /api/v1/clusters:
     get:
       tags:
@@ -444,6 +459,19 @@ components:
       - preferred
       - required
       - disabled
+    AuthConfigResponse:
+      type: object
+      required:
+      - static_tokens_enabled
+      properties:
+        oidc:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/OidcPublicConfig'
+            description: Present when OIDC login is available; null otherwise.
+        static_tokens_enabled:
+          type: boolean
+          description: True when the operator configured at least one static bearer token.
     BackupEntry:
       type: object
       required:
@@ -919,6 +947,18 @@ components:
             Primary only: connected standbys eligible to confirm a synchronous
             commit. Null on standbys and unreachable instances.
           minimum: 0
+    OidcPublicConfig:
+      type: object
+      required:
+      - issuer
+      - client_id
+      properties:
+        client_id:
+          type: string
+          description: Public client ID for the authorization-code + PKCE flow.
+        issuer:
+          type: string
+          description: OIDC issuer URL the SPA runs discovery against.
     PingResponse:
       type: object
       required:
