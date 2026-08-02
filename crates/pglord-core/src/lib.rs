@@ -9,6 +9,7 @@ pub mod init;
 pub mod render;
 pub mod restore;
 pub mod spec;
+pub mod standby;
 pub mod sync;
 pub mod workload;
 
