@@ -427,6 +427,75 @@ rules. Rule changes are validated up front; a rule that does not pass (bad
 CIDR, unknown method, hostname addresses) is rejected with HTTP 422 and
 applies nothing.
 
+With [TLS enabled](#tls-for-client-connections) two more things become useful:
+`hostssl`/`hostnossl` rules actually distinguish encrypted from plaintext
+connections, and the `cert` method authenticates clients by certificate
+instead of password (see below).
+
+### TLS for client connections
+
+pglord never generates certificates. You point a cluster at a standard
+`kubernetes.io/tls` Secret — keys `tls.crt` and `tls.key`, optionally
+`ca.crt` — and pglord mounts it into every instance and configures
+PostgreSQL to serve it. cert-manager produces exactly this kind of Secret:
+
+```yaml
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: orders-db-tls
+spec:
+  secretName: orders-db-tls
+  issuerRef:
+    name: my-issuer
+    kind: ClusterIssuer
+  dnsNames:
+    - orders-db-rw
+    - orders-db-rw.<namespace>.svc
+    - orders-db-rw.<namespace>.svc.cluster.local
+```
+
+Enable it on the cluster page (**TLS → Configure TLS**), in the create
+dialog's advanced section, or via `PATCH /api/v1/clusters/{name}` with
+`{"tls": {"server_secret": "orders-db-tls"}}`. An empty block
+(`{"tls": {}}`) disables TLS again. Enabling, disabling or repointing changes
+the pod template, so the instances roll one at a time — standbys first, the
+primary last. The Secret must exist before the roll: pods deliberately wait
+on a missing certificate rather than starting without the TLS they were told
+to serve (the Secrets table on the cluster page shows what is missing).
+
+Clients connect with their usual `sslmode` settings — `require` for
+encryption, `verify-full` with the CA to also authenticate the server.
+Replication between instances encrypts automatically once the primary serves
+a certificate (libpq's default `sslmode=prefer`), and keeps working while a
+cluster rolls into or out of TLS.
+
+**Rotation is automatic.** When cert-manager renews the Secret, every
+instance picks the new certificate up within a few seconds with a
+configuration reload — no restart, nothing to do. The lock icon in the
+instances table shows which instances are serving TLS.
+
+**Requiring TLS** is a pg_hba decision, not a switch: user rules run before
+the managed password catch-all, so one rule turns every plaintext client
+away while encrypted ones proceed:
+
+    hostnossl  all  all  0.0.0.0/0  reject
+
+**Client certificates (mTLS).** If the Secret carries a `ca.crt` key,
+PostgreSQL verifies client certificates against that CA, and `cert` becomes
+available as a pg_hba method: the connection must present a valid client
+certificate whose CN equals the database role, and no password is asked.
+`cert` rules are only accepted on `hostssl` lines and only while TLS is
+enabled; with such rules present, `ca.crt` shows up as a required key in the
+Secrets table.
+
+    hostssl  all  app_rw  10.0.0.0/8  cert
+
+A restored cluster inherits its source's TLS block along with its pg_hba
+rules. The certificate's DNS names still name the source's services, so
+`verify-full` clients need a certificate issued for the new name — the wire
+stays encrypted in the meantime.
+
 ### Grow storage
 
 **Edit → Storage per instance.** Storage can only grow — Kubernetes cannot
