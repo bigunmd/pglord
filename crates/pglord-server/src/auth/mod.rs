@@ -15,22 +15,34 @@ use subtle::ConstantTimeEq;
 use crate::config::Config;
 use crate::error::ApiError;
 
+pub mod jwks;
+
 /// The one anonymous API path: the UI needs it to render the login screen
 /// before it has any credential.
 const PUBLIC_PATH: &str = "/api/v1/auth/config";
 
 pub struct AuthState {
     tokens: Vec<String>,
+    pub oidc: Option<jwks::OidcValidator>,
 }
 
 impl AuthState {
     /// None = auth disabled (no middleware installed, API runs open).
-    pub fn from_config(cfg: &Config) -> Option<Arc<AuthState>> {
+    pub fn from_config(cfg: &Config, http: reqwest::Client) -> Option<Arc<AuthState>> {
         if !cfg.auth_enabled() {
             return None;
         }
+        let oidc = (!cfg.auth_oidc_issuer.is_empty()).then(|| {
+            jwks::OidcValidator::new(
+                cfg.auth_oidc_issuer.clone(),
+                cfg.auth_oidc_client_id.clone(),
+                cfg.oidc_audience().to_string(),
+                http,
+            )
+        });
         Some(Arc::new(AuthState {
             tokens: cfg.auth_token_list(),
+            oidc,
         }))
     }
 
@@ -74,6 +86,11 @@ pub async fn middleware(
     if auth.matches_static(token) {
         return next.run(req).await;
     }
+    if let Some(oidc) = &auth.oidc
+        && oidc.validate(token).await
+    {
+        return next.run(req).await;
+    }
     ApiError::unauthorized("auth_invalid")
         .with_detail("The presented credential was not accepted.")
         .into_response()
@@ -101,7 +118,7 @@ mod tests {
             auth_tokens: tokens.into(),
             ..Config::test_default()
         };
-        AuthState::from_config(&cfg)
+        AuthState::from_config(&cfg, reqwest::Client::new())
     }
 
     async fn get_with(
@@ -140,8 +157,12 @@ mod tests {
 
     #[tokio::test]
     async fn right_token_passes() {
-        let (status, _) =
-            get_with(app(state("tok-a,tok-b")), "/api/v1/ping", Some("Bearer tok-b")).await;
+        let (status, _) = get_with(
+            app(state("tok-a,tok-b")),
+            "/api/v1/ping",
+            Some("Bearer tok-b"),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
     }
 

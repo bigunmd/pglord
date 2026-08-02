@@ -132,7 +132,10 @@ mod tests {
     async fn unauthorized_carries_www_authenticate_bearer() {
         let resp = ApiError::unauthorized("auth_required").into_response();
         assert_eq!(resp.status(), axum::http::StatusCode::UNAUTHORIZED);
-        assert_eq!(resp.headers()[axum::http::header::WWW_AUTHENTICATE], "Bearer");
+        assert_eq!(
+            resp.headers()[axum::http::header::WWW_AUTHENTICATE],
+            "Bearer"
+        );
     }
 
     #[tokio::test]
