@@ -169,6 +169,20 @@
     "userPlaceholder": "all",
     "addressPlaceholder": "10.0.0.0/8"
   },
+  "tls": {
+    "title": "TLS",
+    "edit": "Configure TLS",
+    "editTitle": "TLS for client connections",
+    "explainer": "Point the cluster at a kubernetes.io/tls Secret (keys tls.crt and tls.key, optional ca.crt) — typically created and renewed by cert-manager. pglord never generates certificates. When the Secret is renewed, instances pick up the new certificate within a few seconds, with no restart.",
+    "serverSecret": "Server certificate Secret",
+    "serverSecretPlaceholder": "my-cluster-tls",
+    "serverSecretHelp": "Name of a kubernetes.io/tls Secret in this namespace. Leave empty to disable TLS. With a ca.crt key present, pg_hba rules can use the cert method for client-certificate authentication.",
+    "rollWarning": "Enabling, disabling or repointing TLS rolls the instances one at a time, standbys first and the primary last.",
+    "apply": "Apply",
+    "on": "On — serving the certificate from Secret {{secret}}.",
+    "off": "Off — connections are not encrypted.",
+    "instanceOn": "Accepting TLS connections"
+  },
   "preflight": {
     "title": "Cluster permissions",
     "intro": "What pglord is allowed to do in its namespace, as reported by the Kubernetes API server.",
@@ -206,7 +220,8 @@
       "backup_repository": "Backup object storage",
       "restore_repository": "Object storage this cluster was restored from",
       "custom_env": "Custom environment variable",
-      "init_scripts": "Initialisation scripts"
+      "init_scripts": "Initialisation scripts",
+      "tls": "TLS server certificate"
     },
     "states": {
       "managed": "Created by pglord",

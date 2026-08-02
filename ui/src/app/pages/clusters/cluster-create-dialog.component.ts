@@ -175,6 +175,23 @@ const REPLICA_CHOICES = [1, 2, 3, 4, 5] as const;
               {{ 'secrets.initSecretHelp' | transloco }}
             </p>
           </div>
+
+          <div class="grid gap-1.5">
+            <label hlmLabel for="pg-cluster-tls-secret">
+              {{ 'tls.serverSecret' | transloco }}
+            </label>
+            <input
+              hlmInput
+              id="pg-cluster-tls-secret"
+              data-testid="create-tls-secret"
+              [placeholder]="'tls.serverSecretPlaceholder' | transloco"
+              [ngModel]="tlsSecret()"
+              (ngModelChange)="tlsSecret.set($event)"
+            />
+            <p class="text-muted-foreground text-xs leading-relaxed">
+              {{ 'tls.serverSecretHelp' | transloco }}
+            </p>
+          </div>
         </div>
       }
     </div>
@@ -203,6 +220,7 @@ export class ClusterCreateDialogComponent {
   protected readonly credentialsSecret = signal('');
   protected readonly initConfigMap = signal('');
   protected readonly initSecret = signal('');
+  protected readonly tlsSecret = signal('');
   protected readonly rows = signal<EnvRow[]>([]);
 
   protected readonly nameValid = computed(() => NAME_RE.test(this.name()));
@@ -225,6 +243,7 @@ export class ClusterCreateDialogComponent {
         scripts_config_map: trimmed(this.initConfigMap()),
         scripts_secret: trimmed(this.initSecret()),
       },
+      tls: { server_secret: trimmed(this.tlsSecret()) },
     });
   }
 }

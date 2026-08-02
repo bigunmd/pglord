@@ -6,6 +6,7 @@ import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   lucideArrowLeft,
   lucideCrown,
+  lucideLock,
   lucidePencil,
   lucidePower,
   lucideRefreshCw,
@@ -60,6 +61,8 @@ import { ClusterEditDialogComponent } from './cluster-edit-dialog.component';
 import { ClusterHbaDialogComponent } from './cluster-hba-dialog.component';
 import { HbaRule } from '../../api/models/hba-rule';
 import { ClusterWorkloadDialogComponent } from './cluster-workload-dialog.component';
+import { ClusterTlsDialogComponent } from './cluster-tls-dialog.component';
+import { TlsSpec } from '../../api/models/tls-spec';
 
 const REFRESH_MS = 5000;
 
@@ -244,6 +247,7 @@ export class ImageDialogComponent {
     provideIcons({
       lucideArrowLeft,
       lucideCrown,
+      lucideLock,
       lucidePencil,
       lucidePower,
       lucideRefreshCw,
@@ -370,6 +374,15 @@ export class ImageDialogComponent {
                         [class.bg-destructive]="!i.ready"
                       ></span>
                       {{ (i.ready ? 'clusterDetail.ready' : 'clusterDetail.notReady') | transloco }}
+                      @if (i.ssl) {
+                        <ng-icon
+                          name="lucideLock"
+                          size="13"
+                          class="text-success"
+                          [attr.data-testid]="'ssl-' + i.pod"
+                          [attr.aria-label]="'tls.instanceOn' | transloco"
+                        />
+                      }
                     </span>
                   </td>
                   <td hlmTd class="font-mono text-xs tabular-nums">{{ i.lsn ?? '—' }}</td>
@@ -814,6 +827,29 @@ export class ImageDialogComponent {
         } @else {
           <p class="text-muted-foreground mt-2 text-sm">{{ 'hba.noneSet' | transloco }}</p>
         }
+
+        <!-- TLS -->
+        <div class="mt-6 flex items-center justify-between">
+          <h2 class="font-medium">{{ 'tls.title' | transloco }}</h2>
+          <button
+            hlmBtn
+            variant="outline"
+            size="sm"
+            data-testid="open-tls"
+            [disabled]="busy()"
+            (click)="openTls(d)"
+          >
+            <ng-icon name="lucideLock" size="14" />
+            {{ 'tls.edit' | transloco }}
+          </button>
+        </div>
+        <p class="text-muted-foreground mt-2 text-sm" data-testid="tls-state">
+          {{
+            d.tls.server_secret
+              ? ('tls.on' | transloco: { secret: d.tls.server_secret })
+              : ('tls.off' | transloco)
+          }}
+        </p>
       } @else if (!error()) {
         <p class="text-muted-foreground text-sm">{{ 'common.loading' | transloco }}</p>
       }
@@ -999,6 +1035,21 @@ export class ClusterDetailComponent implements OnDestroy {
     }
     await this.run(() =>
       this.api.invoke(patchCluster, { name: this.name(), body: { parameters } }),
+    );
+  }
+
+  async openTls(d: ClusterDetail): Promise<void> {
+    const result = await firstValueFrom(
+      this.dialog.open<TlsSpec | undefined>(ClusterTlsDialogComponent, {
+        context: { tls: d.tls ?? {} },
+        contentClass: FORM_DIALOG_CLASS,
+      }).closed$,
+    );
+    if (!result) {
+      return;
+    }
+    await this.run(() =>
+      this.api.invoke(patchCluster, { name: this.name(), body: { tls: result } }),
     );
   }
 

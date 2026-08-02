@@ -15,7 +15,7 @@ export interface HbaDialogContext {
 }
 
 const CONNS: HbaRule['conn'][] = ['host', 'hostssl', 'hostnossl'];
-const METHODS: HbaRule['method'][] = ['scram-sha-256', 'reject', 'trust'];
+const METHODS: HbaRule['method'][] = ['scram-sha-256', 'reject', 'trust', 'cert'];
 
 /** Edit a cluster's pg_hba rules. Resolves to the full rule list, or
  * undefined on cancel. Order matters (first match wins), so rows keep the
