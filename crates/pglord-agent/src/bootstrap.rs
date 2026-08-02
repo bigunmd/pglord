@@ -46,6 +46,47 @@ fn is_bootstrapped(pgdata: &Path) -> bool {
     pgdata.join("PG_VERSION").exists()
 }
 
+/// Compare PGDATA's major (PG_VERSION file) with the running binary's.
+/// Some((data, binary)) on a definite mismatch; None when they match or
+/// either side is unreadable (postgres is the final authority).
+pub fn major_version_conflict(
+    pgdata_version: &str,
+    binary_version_output: &str,
+) -> Option<(String, String)> {
+    let data = pgdata_version.trim().split('.').next()?.to_string();
+    let binary = binary_version_output
+        .split_whitespace()
+        .find(|w| w.chars().next().is_some_and(|c| c.is_ascii_digit()))?
+        .split('.')
+        .next()?
+        .to_string();
+    if data.is_empty() || binary.is_empty() || data == binary {
+        None
+    } else {
+        Some((data, binary))
+    }
+}
+
+/// Refuse to start an existing PGDATA under a binary from a different major:
+/// postgres would refuse too, but deep in startup with a muddier error. The
+/// clear remedy — revert the cluster image — matters more than the check.
+async fn check_major_version(pgdata: &Path) -> anyhow::Result<()> {
+    let Ok(data_version) = std::fs::read_to_string(pgdata.join("PG_VERSION")) else {
+        return Ok(());
+    };
+    let Ok(out) = Command::new("postgres").arg("--version").output().await else {
+        return Ok(());
+    };
+    let binary_version = String::from_utf8_lossy(&out.stdout).to_string();
+    if let Some((data, binary)) = major_version_conflict(&data_version, &binary_version) {
+        bail!(
+            "PGDATA was created by PostgreSQL {data} but this image ships PostgreSQL {binary}; \
+             major upgrades are not supported — revert the cluster image to a PostgreSQL {data} build"
+        );
+    }
+    Ok(())
+}
+
 fn has_standby_signal(pgdata: &Path) -> bool {
     pgdata.join("standby.signal").exists()
 }
@@ -73,6 +114,7 @@ pub async fn ensure_bootstrapped(
         return bootstrap_restore(cfg, restore).await;
     }
     if is_bootstrapped(&cfg.pgdata) {
+        check_major_version(&cfg.pgdata).await?;
         if cfg.role == Role::Standby && !has_standby_signal(&cfg.pgdata) {
             tracing::warn!("ex-primary PGDATA with standby role: rewinding to new primary");
             return demote_to_standby(cfg).await;
@@ -350,6 +392,27 @@ fn append(path: &Path, content: &str) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn major_versions_compared_from_pgdata_and_binary() {
+        // PG_VERSION holds e.g. "16\n"; `postgres --version` prints
+        // "postgres (PostgreSQL) 16.4 (Debian ...)".
+        assert_eq!(
+            major_version_conflict("16\n", "postgres (PostgreSQL) 16.4"),
+            None
+        );
+        assert_eq!(
+            major_version_conflict("15\n", "postgres (PostgreSQL) 16.4 (Debian 16.4-1)"),
+            Some(("15".into(), "16".into()))
+        );
+        // Unparseable input must not block startup: postgres itself is the
+        // final authority and refuses a real mismatch anyway.
+        assert_eq!(major_version_conflict("16\n", "gibberish"), None);
+        assert_eq!(
+            major_version_conflict("", "postgres (PostgreSQL) 16.4"),
+            None
+        );
+    }
 
     #[test]
     fn conf_extra_contains_replication_settings() {
