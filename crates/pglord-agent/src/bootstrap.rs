@@ -174,8 +174,13 @@ fn stream_credentials(cfg: &Config) -> (&str, &str) {
 /// The primary_conninfo line a rejoining standby streams with.
 pub fn primary_conninfo(cfg: &Config, application_name: &str) -> String {
     let (user, password) = stream_credentials(cfg);
+    // connect_timeout matters after a primary pod restart: a walreceiver
+    // retrying the old pod IP would otherwise hang in TCP connect for minutes
+    // before re-resolving DNS — under synchronous replication that is minutes
+    // of blocked writes instead of seconds.
     format!(
-        "primary_conninfo = 'host={} port={} user={user} password={password} application_name={application_name}'\n",
+        "primary_conninfo = 'host={} port={} user={user} password={password} \
+         application_name={application_name} connect_timeout=5'\n",
         cfg.primary_host, cfg.primary_port,
     )
 }
@@ -395,6 +400,9 @@ mod tests {
         assert!(conninfo.contains("password=replsecret"));
         assert!(conninfo.contains("host=demo-1.demo-pods.ns.svc.cluster.local"));
         assert!(conninfo.contains("application_name=demo-0"));
+        // A hung connect to a stale pod IP must fail fast so the walreceiver
+        // re-resolves DNS; under sync replication writes block until it does.
+        assert!(conninfo.contains("connect_timeout=5"));
         assert!(conninfo.starts_with("primary_conninfo = '"));
     }
 
