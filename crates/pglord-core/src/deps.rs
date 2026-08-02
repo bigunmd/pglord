@@ -37,6 +37,8 @@ pub enum ResourcePurpose {
     InitScripts,
     /// Server certificate for TLS (kubernetes.io/tls Secret).
     Tls,
+    /// Password for a declared role.
+    RolePassword,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
@@ -122,6 +124,18 @@ pub fn required_resources(spec: &ClusterSpec) -> Vec<RequiredResource> {
                 name: secret.name.clone(),
                 kind: ResourceKind::Secret,
                 purpose: ResourcePurpose::CustomEnv,
+                keys: vec![secret.key.clone()],
+                managed: false,
+            });
+        }
+    }
+
+    for role in &spec.roles {
+        if let Some(secret) = &role.password_secret {
+            push(RequiredResource {
+                name: secret.name.clone(),
+                kind: ResourceKind::Secret,
+                purpose: ResourcePurpose::RolePassword,
                 keys: vec![secret.key.clone()],
                 managed: false,
             });
@@ -286,6 +300,28 @@ mod tests {
         // No TLS, no requirement.
         let r = required_resources(&spec(serde_json::json!({ "name": "demo" })));
         assert!(!r.iter().any(|x| x.purpose == ResourcePurpose::Tls));
+    }
+
+    #[test]
+    fn declared_role_password_secrets_are_required() {
+        let r = required_resources(&spec(serde_json::json!({
+            "name": "demo",
+            "roles": [
+                { "name": "app_rw", "password_secret": { "name": "app-creds", "key": "password" } },
+                { "name": "app_ro" }
+            ]
+        })));
+        let creds = r.iter().find(|x| x.name == "app-creds").expect("app-creds");
+        assert_eq!(creds.purpose, ResourcePurpose::RolePassword);
+        assert_eq!(creds.keys, vec!["password"]);
+        assert!(!creds.managed);
+        // A role without a reference demands nothing from the namespace.
+        assert_eq!(
+            r.iter()
+                .filter(|x| x.purpose == ResourcePurpose::RolePassword)
+                .count(),
+            1
+        );
     }
 
     #[test]
