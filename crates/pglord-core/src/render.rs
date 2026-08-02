@@ -1442,7 +1442,7 @@ mod tests {
         let pod = tmpl.spec.expect("pod");
         assert_eq!(
             pod.containers[0].image.as_deref(),
-            Some("pgbouncer/pgbouncer:1.24.1")
+            Some("ghcr.io/cloudnative-pg/pgbouncer:1.25.2")
         );
         let probe = pod.containers[0]
             .readiness_probe

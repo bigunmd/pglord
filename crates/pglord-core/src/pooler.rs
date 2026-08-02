@@ -82,7 +82,7 @@ fn default_pool_size() -> u32 {
     20
 }
 fn default_image() -> String {
-    "pgbouncer/pgbouncer:1.24.1".into()
+    "ghcr.io/cloudnative-pg/pgbouncer:1.25.2".into()
 }
 
 const MAX_POOLER_REPLICAS: u8 = 10;
@@ -200,7 +200,7 @@ mod tests {
         assert_eq!(p.pool_mode, PoolMode::Transaction);
         assert_eq!(p.max_client_conn, 100);
         assert_eq!(p.default_pool_size, 20);
-        assert_eq!(p.image, "pgbouncer/pgbouncer:1.24.1");
+        assert_eq!(p.image, "ghcr.io/cloudnative-pg/pgbouncer:1.25.2");
     }
 
     #[test]

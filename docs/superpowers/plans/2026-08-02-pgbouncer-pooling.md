@@ -6,7 +6,7 @@
 
 **Architecture:** New `pooler` feature block on `ClusterSpec` (backup-style `enabled` flag). `pglord-core` renders pgbouncer.ini/userlist + Deployment/Service/Secret purely; the reconciler applies them (deletes on disable — a first) and level-triggered-ensures the auth role via a new agent endpoint `POST /pooler/ensure`. Spec: `docs/superpowers/specs/2026-08-02-pgbouncer-design.md`.
 
-**Tech Stack:** Rust (axum, kube-rs, k8s-openapi, tokio-postgres), Angular + spartan hlm + Transloco, pgbouncer/pgbouncer:1.24.1 image.
+**Tech Stack:** Rust (axum, kube-rs, k8s-openapi, tokio-postgres), Angular + spartan hlm + Transloco, ghcr.io/cloudnative-pg/pgbouncer:1.25.2 image.
 
 ## Global Constraints
 
@@ -27,7 +27,7 @@
 - Modify: `crates/pglord-core/src/spec.rs` (field on `ClusterSpec`, `SpecChange`, `validate`, `apply_change`)
 
 **Interfaces:**
-- Produces: `pooler::PoolerSpec { enabled: bool, replicas: u8, pool_mode: PoolMode, max_client_conn: u32, default_pool_size: u32, image: String, resources: workload::Resources }` (serde defaults: false, 1, Transaction, 100, 20, `"pgbouncer/pgbouncer:1.24.1"`, empty). `PoolMode::{Transaction, Session}` (`rename_all = "lowercase"`). `pooler::validate(&PoolerSpec) -> Result<(), PoolerError>`; `PoolerError::{InvalidReplicas(u8), InvalidMaxClientConn(u32), InvalidPoolSize(u32), InvalidImage}` (thiserror). Constants `pooler::POOLER_ROLE: &str = "pglord_pooler"`.
+- Produces: `pooler::PoolerSpec { enabled: bool, replicas: u8, pool_mode: PoolMode, max_client_conn: u32, default_pool_size: u32, image: String, resources: workload::Resources }` (serde defaults: false, 1, Transaction, 100, 20, `"ghcr.io/cloudnative-pg/pgbouncer:1.25.2"`, empty). `PoolMode::{Transaction, Session}` (`rename_all = "lowercase"`). `pooler::validate(&PoolerSpec) -> Result<(), PoolerError>`; `PoolerError::{InvalidReplicas(u8), InvalidMaxClientConn(u32), InvalidPoolSize(u32), InvalidImage}` (thiserror). Constants `pooler::POOLER_ROLE: &str = "pglord_pooler"`.
 - `ClusterSpec` gains `#[serde(default)] pub pooler: crate::pooler::PoolerSpec`; `SpecChange` gains `#[serde(default, skip_serializing_if = "Option::is_none")] pub pooler: Option<crate::pooler::PoolerSpec>` with replace-wholesale semantics (mirror the existing `tls` arm); `ClusterSpec::validate` calls `pooler::validate`. `SpecError` gains `#[error(transparent)] Pooler(#[from] PoolerError)` (mirror how `WorkloadError` is wrapped).
 
 - [ ] **Step 1: Write failing tests** in `pooler.rs` `#[cfg(test)]` and `spec.rs` tests:
@@ -42,7 +42,7 @@ fn defaults_are_disabled_transaction_mode() {
     assert_eq!(p.pool_mode, PoolMode::Transaction);
     assert_eq!(p.max_client_conn, 100);
     assert_eq!(p.default_pool_size, 20);
-    assert_eq!(p.image, "pgbouncer/pgbouncer:1.24.1");
+    assert_eq!(p.image, "ghcr.io/cloudnative-pg/pgbouncer:1.25.2");
 }
 
 #[test]
@@ -254,7 +254,7 @@ fn pooler_objects_are_rendered_with_owner_and_hash() {
         "abc123"
     );
     let pod = tmpl.spec.expect("pod");
-    assert_eq!(pod.containers[0].image.as_deref(), Some("pgbouncer/pgbouncer:1.24.1"));
+    assert_eq!(pod.containers[0].image.as_deref(), Some("ghcr.io/cloudnative-pg/pgbouncer:1.25.2"));
     assert!(pod.volumes.expect("vols").iter().any(|v| v.secret.is_some()));
 
     let svc = render_pool_service(&spec, "ns", &owner);

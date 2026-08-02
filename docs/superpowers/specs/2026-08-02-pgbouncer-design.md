@@ -31,7 +31,7 @@ New feature block on `ClusterSpec` (`crates/pglord-core/src/pooler.rs`),
   "poolMode": "transaction",  // or "session"
   "maxClientConn": 100,       // 1..=100000
   "defaultPoolSize": 20,      // 1..=10000
-  "image": "pgbouncer/pgbouncer:1.24.1",   // default, overridable
+  "image": "ghcr.io/cloudnative-pg/pgbouncer:1.25.2",   // default, overridable
   "resources": { ... }        // same shape as workload resources
 }
 ```
