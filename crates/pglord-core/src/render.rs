@@ -736,6 +736,16 @@ pub fn render_pooler_deployment(
                     ..Default::default()
                 }),
                 spec: Some(PodSpec {
+                    // The cnpg pgbouncer image runs as uid 998 gid 996;
+                    // fsGroup makes the projected Secret files (0640, root
+                    // owned) group-readable to it — same reasoning as the
+                    // instances' fsGroup 999 for postgres. Without it the
+                    // pooler crashloops on "TLS setup failed" the moment a
+                    // cert is mounted.
+                    security_context: Some(PodSecurityContext {
+                        fs_group: Some(996),
+                        ..Default::default()
+                    }),
                     containers: vec![Container {
                         name: "pgbouncer".to_string(),
                         image: Some(spec.pooler.image.clone()),
@@ -1485,6 +1495,13 @@ mod tests {
             mounts
                 .iter()
                 .any(|m| m.mount_path == "/etc/pglord/tls" && m.read_only == Some(true))
+        );
+        // The cnpg pgbouncer image runs as uid 998 gid 996; without this
+        // fsGroup the projected 0640 root:root key is unreadable and the
+        // pooler crashloops on "TLS setup failed".
+        assert_eq!(
+            pod.security_context.expect("security context").fs_group,
+            Some(996)
         );
     }
 
