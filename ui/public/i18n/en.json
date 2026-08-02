@@ -130,6 +130,13 @@
     "off": "Off — replication is asynchronous.",
     "degraded": "No synchronous standby is connected — writes are blocked until one returns."
   },
+  "image": {
+    "title": "Change image of {{name}}?",
+    "label": "Image",
+    "edit": "Change image",
+    "apply": "Apply and roll",
+    "warning": "Every instance restarts on the new image, standbys first, the primary last. The image must ship the same PostgreSQL major version — an instance refuses to start otherwise, and reverting the image here rolls the cluster back."
+  },
   "hba": {
     "title": "Client access rules",
     "edit": "Edit access rules",

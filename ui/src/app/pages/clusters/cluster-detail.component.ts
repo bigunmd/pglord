@@ -1,4 +1,5 @@
-import { Component, OnDestroy, inject, input, signal } from '@angular/core';
+import { Component, OnDestroy, computed, inject, input, signal } from '@angular/core';
+import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
 import { TranslocoModule } from '@jsverse/transloco';
 import { NgIcon, provideIcons } from '@ng-icons/core';
@@ -23,6 +24,8 @@ import {
   HlmDialogTitle,
 } from '@spartan-ng/helm/dialog';
 import { HlmDropdownMenuImports } from '@spartan-ng/helm/dropdown-menu';
+import { HlmInput } from '@spartan-ng/helm/input';
+import { HlmLabel } from '@spartan-ng/helm/label';
 import { HlmTableImports } from '@spartan-ng/helm/table';
 import { firstValueFrom } from 'rxjs';
 
@@ -170,6 +173,63 @@ export class SyncDialogComponent {
   protected readonly enable = this.ctx.enable;
 }
 
+/** Change the instance image: a rolling upgrade, standbys first, primary
+ * last. Resolves to the new image, or undefined on cancel. */
+@Component({
+  selector: 'pg-image-dialog',
+  imports: [
+    FormsModule,
+    TranslocoModule,
+    HlmButton,
+    HlmDialogFooter,
+    HlmDialogHeader,
+    HlmDialogTitle,
+    HlmInput,
+    HlmLabel,
+  ],
+  template: `
+    <div hlmDialogHeader>
+      <h2 hlmDialogTitle>{{ 'image.title' | transloco: { name: name } }}</h2>
+    </div>
+    <div class="grid gap-2 py-1">
+      <label hlmLabel for="pg-image-input">{{ 'image.label' | transloco }}</label>
+      <input
+        hlmInput
+        id="pg-image-input"
+        class="font-mono"
+        data-testid="image-input"
+        [ngModel]="image()"
+        (ngModelChange)="image.set($event)"
+      />
+      <p class="text-muted-foreground text-xs leading-relaxed">
+        {{ 'image.warning' | transloco }}
+      </p>
+    </div>
+    <div hlmDialogFooter>
+      <button hlmBtn variant="ghost" (click)="ref.close(undefined)">
+        {{ 'common.cancel' | transloco }}
+      </button>
+      <button
+        hlmBtn
+        data-testid="confirm-image"
+        [disabled]="!canSave()"
+        (click)="ref.close(image().trim())"
+      >
+        {{ 'image.apply' | transloco }}
+      </button>
+    </div>
+  `,
+})
+export class ImageDialogComponent {
+  protected readonly ref = inject<BrnDialogRef<string | undefined>>(BrnDialogRef);
+  private readonly ctx = injectBrnDialogContext<{ name: string; image: string }>();
+  protected readonly name = this.ctx.name;
+  protected readonly image = signal(this.ctx.image);
+  protected readonly canSave = computed(
+    () => this.image().trim().length > 0 && this.image().trim() !== this.ctx.image,
+  );
+}
+
 @Component({
   selector: 'pg-cluster-detail',
   imports: [
@@ -224,8 +284,20 @@ export class SyncDialogComponent {
             {{ 'clusterDetail.edit' | transloco }}
           </button>
         </div>
-        <p class="text-muted-foreground mb-4 text-sm">
+        <p class="text-muted-foreground mb-4 flex items-center gap-1 text-sm">
           <span class="font-mono text-xs">{{ d.image }}</span>
+          <button
+            hlmBtn
+            variant="ghost"
+            size="sm"
+            class="h-6 px-1.5"
+            data-testid="open-image"
+            [disabled]="busy()"
+            [attr.aria-label]="'image.edit' | transloco"
+            (click)="openImage(d)"
+          >
+            <ng-icon name="lucidePencil" size="12" />
+          </button>
           · {{ d.storage_size }} · {{ 'clusterDetail.primaryIs' | transloco: { pod: d.primary } }}
         </p>
 
@@ -1000,6 +1072,21 @@ export class ClusterDetailComponent implements OnDestroy {
       return;
     }
     await this.run(() => this.api.invoke(patchCluster, { name: this.name(), body: change }));
+  }
+
+  async openImage(d: ClusterDetail): Promise<void> {
+    const next = await firstValueFrom(
+      this.dialog.open<string | undefined>(ImageDialogComponent, {
+        context: { name: this.name(), image: d.image },
+        contentClass: FORM_DIALOG_CLASS,
+      }).closed$,
+    );
+    if (!next) {
+      return;
+    }
+    await this.run(() =>
+      this.api.invoke(patchCluster, { name: this.name(), body: { image: next } }),
+    );
   }
 
   async openSwitchover(d: ClusterDetail, pod: string): Promise<void> {

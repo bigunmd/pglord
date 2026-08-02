@@ -8,9 +8,8 @@ import { InitSpec } from '../models/init-spec';
 import { WorkloadSpec } from '../models/workload-spec';
 
 /**
- * The fields a running cluster may change. Name and image are deliberately
- * absent: renaming would orphan every derived object, and image changes are a
- * rolling-upgrade concern with its own (future) workflow.
+ * The fields a running cluster may change. Name is deliberately absent:
+ * renaming would orphan every derived object.
  *
  * `credentials_secret` is absent for a subtler reason. Pointing a running
  * cluster at a different Secret would change the password the agent presents
@@ -27,6 +26,13 @@ export interface SpecChange {
    * instances, since the pod template changes.
    */
   env?: (Array<EnvVarSpec> | null);
+
+  /**
+   * Change the instance image. Rolls every instance, standbys first,
+   * primary last. Same-major images only — the agent refuses to start a
+   * data directory created by a different PostgreSQL major version.
+   */
+  image?: (string | null);
   init?: (null | InitSpec);
 
   /**
