@@ -17,8 +17,11 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, OwnerReference}
 use kube::api::{Api, Patch, PatchParams, PostParams};
 use kube::runtime::watcher;
 use pglord_core::render::{
-    OwnerRef, REPLICATION_PASSWORD_KEY, SUPERUSER_PASSWORD_KEY, credentials_secret_name, labels,
-    render_headless_service, render_instance_rbac, render_rw_service, render_statefulset,
+    AGENT_HTTP_PORT, OwnerRef, POOLER_PASSWORD_KEY, REPLICATION_PASSWORD_KEY,
+    SUPERUSER_PASSWORD_KEY, credentials_secret_for, credentials_secret_name, labels, pod_fqdn,
+    pool_service_name, pooler_config_secret_name, pooler_deployment_name, render_headless_service,
+    render_instance_rbac, render_pool_service, render_pooler_config_secret,
+    render_pooler_deployment, render_rw_service, render_statefulset,
 };
 use pglord_core::spec::ClusterSpec;
 use rand::RngExt;
@@ -45,6 +48,17 @@ pub fn desired_objects(
 }
 
 pub async fn run(client: kube::Client, ns: String, metrics: crate::metrics::Metrics) {
+    // For the best-effort pooler auth ensure against the primary's agent.
+    let http = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+    {
+        Ok(http) => http,
+        Err(err) => {
+            tracing::error!(%err, "reconciler http client failed to build; disabled");
+            return;
+        }
+    };
     let cms: Api<ConfigMap> = Api::namespaced(client.clone(), &ns);
     let watch_cfg = watcher::Config::default().labels(&spec_label_selector());
 
@@ -72,7 +86,7 @@ pub async fn run(client: kube::Client, ns: String, metrics: crate::metrics::Metr
 
     let mut known: std::collections::HashSet<String> = Default::default();
     loop {
-        if let Err(err) = sync_all(&client, &cms, &ns, &metrics, &mut known).await {
+        if let Err(err) = sync_all(&client, &http, &cms, &ns, &metrics, &mut known).await {
             tracing::warn!(%err, "reconcile pass failed");
             tokio::time::sleep(ERROR_BACKOFF).await;
         }
@@ -85,6 +99,7 @@ pub async fn run(client: kube::Client, ns: String, metrics: crate::metrics::Metr
 
 async fn sync_all(
     client: &kube::Client,
+    http: &reqwest::Client,
     cms: &Api<ConfigMap>,
     ns: &str,
     metrics: &crate::metrics::Metrics,
@@ -109,7 +124,7 @@ async fn sync_all(
             continue;
         }
         let primary_pod = recorded_primary(cm, &spec.name);
-        if let Err(err) = apply_cluster(client, ns, &spec, &owner, &primary_pod).await {
+        if let Err(err) = apply_cluster(client, http, ns, &spec, &owner, &primary_pod).await {
             metrics
                 .reconcile_total
                 .with_label_values(&[spec.name.as_str(), "error"])
@@ -243,8 +258,32 @@ async fn ensure_credentials(
     }
     let secrets: Api<Secret> = Api::namespaced(client.clone(), ns);
     let name = credentials_secret_name(&spec.name);
-    if secrets.get_opt(&name).await?.is_some() {
+    if let Some(existing) = secrets.get_opt(&name).await? {
+        // Create-only for the passwords that already exist — but a pooler
+        // enabled after the Secret was generated needs its credential to
+        // appear without a manual step. Existing keys are never touched.
+        if spec.pooler.enabled
+            && !existing
+                .data
+                .as_ref()
+                .is_some_and(|d| d.contains_key(POOLER_PASSWORD_KEY))
+        {
+            let patch = serde_json::json!({
+                "stringData": { POOLER_PASSWORD_KEY: generate_password() }
+            });
+            secrets
+                .patch(&name, &PatchParams::default(), &Patch::Merge(&patch))
+                .await?;
+            tracing::info!(cluster = %spec.name, "pooler password added to credentials secret");
+        }
         return Ok(());
+    }
+    let mut string_data = BTreeMap::from([
+        (SUPERUSER_PASSWORD_KEY.to_string(), generate_password()),
+        (REPLICATION_PASSWORD_KEY.to_string(), generate_password()),
+    ]);
+    if spec.pooler.enabled {
+        string_data.insert(POOLER_PASSWORD_KEY.to_string(), generate_password());
     }
     let secret = Secret {
         metadata: ObjectMeta {
@@ -261,10 +300,7 @@ async fn ensure_credentials(
             }]),
             ..Default::default()
         },
-        string_data: Some(BTreeMap::from([
-            (SUPERUSER_PASSWORD_KEY.to_string(), generate_password()),
-            (REPLICATION_PASSWORD_KEY.to_string(), generate_password()),
-        ])),
+        string_data: Some(string_data),
         ..Default::default()
     };
     match secrets.create(&PostParams::default(), &secret).await {
@@ -278,8 +314,138 @@ async fn ensure_credentials(
     }
 }
 
+/// Delete the pooler's children when the pooler is disabled. The reconciler
+/// otherwise only ever applies; these three are the exception because a
+/// disabled feature block must not leave a live Deployment behind. NotFound
+/// is success — the normal state for the many clusters with no pooler.
+async fn delete_pooler_objects(client: &kube::Client, ns: &str, cluster: &str) {
+    use k8s_openapi::api::apps::v1::Deployment;
+    let deployments: Api<Deployment> = Api::namespaced(client.clone(), ns);
+    let services: Api<Service> = Api::namespaced(client.clone(), ns);
+    let secrets: Api<Secret> = Api::namespaced(client.clone(), ns);
+    for (what, result) in [
+        (
+            "deployment",
+            deployments
+                .delete(&pooler_deployment_name(cluster), &Default::default())
+                .await
+                .map(|_| ()),
+        ),
+        (
+            "service",
+            services
+                .delete(&pool_service_name(cluster), &Default::default())
+                .await
+                .map(|_| ()),
+        ),
+        (
+            "secret",
+            secrets
+                .delete(&pooler_config_secret_name(cluster), &Default::default())
+                .await
+                .map(|_| ()),
+        ),
+    ] {
+        match result {
+            Ok(()) => tracing::info!(cluster, what, "pooler object deleted"),
+            Err(kube::Error::Api(e)) if e.code == 404 => {}
+            Err(err) => tracing::warn!(cluster, what, %err, "pooler object delete failed"),
+        }
+    }
+}
+
+/// Apply (or remove) the pooler's children, then best-effort ensure the auth
+/// role on the primary. A missing pooler password is logged and skipped
+/// rather than failing the pass: the postgres objects are already applied,
+/// and required-secrets is the surface that tells the user what to create.
+async fn apply_pooler(
+    client: &kube::Client,
+    http: &reqwest::Client,
+    ns: &str,
+    spec: &ClusterSpec,
+    owner: &OwnerRef,
+    primary_pod: &str,
+) -> anyhow::Result<()> {
+    use k8s_openapi::api::apps::v1::Deployment;
+    if !spec.pooler.enabled {
+        delete_pooler_objects(client, ns, &spec.name).await;
+        return Ok(());
+    }
+    let secrets: Api<Secret> = Api::namespaced(client.clone(), ns);
+    let secret_name = credentials_secret_for(spec);
+    let password = secrets
+        .get_opt(&secret_name)
+        .await?
+        .and_then(|s| s.data)
+        .and_then(|d| d.get(POOLER_PASSWORD_KEY).cloned())
+        .and_then(|v| String::from_utf8(v.0).ok());
+    let Some(password) = password else {
+        tracing::warn!(
+            cluster = %spec.name,
+            secret = %secret_name,
+            "no usable {POOLER_PASSWORD_KEY} key; pooler not applied this pass"
+        );
+        return Ok(());
+    };
+
+    let pp = PatchParams::apply(FIELD_MANAGER).force();
+    let config = render_pooler_config_secret(spec, ns, owner, &password);
+    secrets
+        .patch(
+            &pooler_config_secret_name(&spec.name),
+            &pp,
+            &Patch::Apply(&config),
+        )
+        .await?;
+    let hash = pglord_core::pooler::config_hash(
+        &pglord_core::pooler::pgbouncer_ini(spec),
+        &pglord_core::pooler::userlist(&password),
+    );
+    let deployments: Api<Deployment> = Api::namespaced(client.clone(), ns);
+    let deployment = render_pooler_deployment(spec, ns, owner, &hash);
+    deployments
+        .patch(
+            &pooler_deployment_name(&spec.name),
+            &pp,
+            &Patch::Apply(&deployment),
+        )
+        .await?;
+    let services: Api<Service> = Api::namespaced(client.clone(), ns);
+    let service = render_pool_service(spec, ns, owner);
+    services
+        .patch(&pool_service_name(&spec.name), &pp, &Patch::Apply(&service))
+        .await?;
+
+    // Level-triggered: refused (standby, booting) or unreachable just means
+    // the next pass retries — after create, enable, failover and restore
+    // alike. Clients fail auth through the pool until this lands once.
+    let url = format!(
+        "http://{}:{}/pooler/ensure",
+        pod_fqdn(primary_pod, &spec.name, ns),
+        AGENT_HTTP_PORT
+    );
+    match http
+        .post(&url)
+        .json(&serde_json::json!({ "password": password }))
+        .send()
+        .await
+    {
+        Ok(resp) if resp.status().is_success() => {}
+        Ok(resp) => tracing::warn!(
+            cluster = %spec.name, status = %resp.status(),
+            "pooler auth ensure refused; retrying next pass"
+        ),
+        Err(err) => tracing::warn!(
+            cluster = %spec.name, %err,
+            "pooler auth ensure unreachable; retrying next pass"
+        ),
+    }
+    Ok(())
+}
+
 pub async fn apply_cluster(
     client: &kube::Client,
+    http: &reqwest::Client,
     ns: &str,
     spec: &ClusterSpec,
     owner: &OwnerRef,
@@ -338,6 +504,7 @@ pub async fn apply_cluster(
         let name = svc.metadata.name.clone().unwrap_or_default();
         svc_api.patch(&name, &pp, &Patch::Apply(&svc)).await?;
     }
+    apply_pooler(client, http, ns, spec, owner, primary_pod).await?;
     Ok(())
 }
 

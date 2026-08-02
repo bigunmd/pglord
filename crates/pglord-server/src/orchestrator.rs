@@ -127,7 +127,8 @@ pub async fn run(client: kube::Client, ns: String, metrics: crate::metrics::Metr
                     }
                     // Repoint -rw immediately instead of waiting for resync.
                     if let Err(err) =
-                        reconciler::apply_cluster(&client, &ns, &spec, &owner, &candidate).await
+                        reconciler::apply_cluster(&client, &http, &ns, &spec, &owner, &candidate)
+                            .await
                     {
                         tracing::warn!(%err, "post-failover apply failed (resync will retry)");
                     }

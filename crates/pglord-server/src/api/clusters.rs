@@ -409,7 +409,7 @@ pub async fn patch_cluster(
         // The StatefulSet must carry the new template before any pod dies, or
         // a deleted pod would come back on the old one. Same field manager as
         // the reconciler, so the level-triggered loop stays idempotent on top.
-        crate::reconciler::apply_cluster(&ops.kube, &ops.ns, &next, &owner, &primary)
+        crate::reconciler::apply_cluster(&ops.kube, &ops.http, &ops.ns, &next, &owner, &primary)
             .await
             .map_err(ApiError::internal)?;
         let ops = ops.clone();
