@@ -64,6 +64,14 @@ pub const RESERVED: &[&str] = &[
     "archive_mode",
     "archive_command",
     "archive_timeout",
+    // Driven by the `tls` spec block; hand-set cert paths would break the
+    // managed mount contract, and a hand-set `ssl = on` without a mounted
+    // certificate would stop postgres from starting.
+    "ssl",
+    "ssl_cert_file",
+    "ssl_key_file",
+    "ssl_ca_file",
+    "ssl_crl_file",
 ];
 
 macro_rules! guc {
@@ -505,6 +513,9 @@ mod tests {
     fn reserved_settings_are_recognized() {
         assert!(is_reserved("wal_level"));
         assert!(is_reserved("listen_addresses"));
+        // TLS is driven by the spec block, never by hand-set parameters.
+        assert!(is_reserved("ssl"));
+        assert!(is_reserved("ssl_cert_file"));
         assert!(!is_reserved("work_mem"));
     }
 }
