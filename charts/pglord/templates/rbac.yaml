@@ -17,8 +17,10 @@ rules:
   - apiGroups: [""]
     resources: [persistentvolumeclaims]
     verbs: [get, list, watch, patch, delete]
+  # Deployments: the managed PgBouncer pooler (created, retuned and deleted
+  # with the pooler block of the cluster spec).
   - apiGroups: [apps]
-    resources: [statefulsets]
+    resources: [statefulsets, deployments]
     verbs: [get, list, watch, create, update, patch, delete]
   # The reconciler provisions a least-privilege Role/Binding per cluster so each
   # instance agent can read its own spec ConfigMap, and nothing else.

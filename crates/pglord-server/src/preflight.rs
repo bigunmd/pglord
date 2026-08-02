@@ -58,12 +58,16 @@ pub fn required() -> Vec<PermissionCheck> {
             verb,
         });
     }
-    for verb in WRITE {
-        out.push(PermissionCheck {
-            group: "apps",
-            resource: "statefulsets",
-            verb,
-        });
+    // Deployments carry the managed PgBouncer pooler; delete matters because
+    // disabling the pooler removes its objects.
+    for resource in ["statefulsets", "deployments"] {
+        for verb in WRITE {
+            out.push(PermissionCheck {
+                group: "apps",
+                resource,
+                verb,
+            });
+        }
     }
     // Per-cluster instance RBAC lets agents read their own primary record.
     for resource in ["roles", "rolebindings"] {
@@ -154,6 +158,7 @@ mod tests {
             "pods",
             "persistentvolumeclaims",
             "statefulsets",
+            "deployments",
             "roles",
             "rolebindings",
         ] {
