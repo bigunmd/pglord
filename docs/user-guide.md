@@ -168,11 +168,46 @@ From your application's side, a failover looks like a dropped connection.
 Applications should retry on connection errors and use a connection pool that
 reconnects — that is all that is needed to ride through a failover.
 
-Uncommitted transactions on the old primary are lost. This is asynchronous
-replication: a small window of recently-committed writes can be lost if the
-primary fails before the standby receives them.
+Uncommitted transactions on the old primary are lost. On an asynchronous
+cluster (the default), a small window of recently-committed writes can also be
+lost if the primary fails before a standby receives them — synchronous
+replication (below) closes that window.
 
-## 6. Day-2 operations
+## 6. Synchronous replication
+
+Turn on **Synchronous replication** on the cluster page (or set
+`synchronous: true` on the spec) and every commit waits until at least one
+standby confirms it has the WAL on disk. pglord manages
+`synchronous_standby_names` as a quorum — `ANY 1` over all of the cluster's
+standbys — so any one of them can acknowledge. The change applies with a
+reload: no restart, no rolling of instances, and it can be switched off the
+same way.
+
+What you gain: a primary failure no longer loses committed transactions. The
+promoted standby is the most advanced one, and with quorum sync every commit
+was confirmed by at least one standby — only the primary and that confirming
+standby failing together can lose the tail.
+
+What you trade: **if no standby is connected, writes block** until one
+returns. pglord is strict about this on purpose — it never silently falls
+back to asynchronous, because that would void the guarantee exactly when it
+matters. When commits are blocking, the cluster page shows a warning banner,
+the cluster detail reports `sync_degraded: true`, and the server exports
+`pglord_sync_degraded 1` for alerting.
+
+Practical notes:
+
+- Requires at least 2 instances; scaling a synchronous cluster down to 1 is
+  rejected.
+- With exactly 2 instances, a rolling restart briefly blocks writes while the
+  only standby restarts. Three or more instances keep a quorum standby
+  available through a roll.
+- `synchronous_commit` stays tunable, but `off` and `local` are rejected while
+  the flag is on (either would defeat it). Set `remote_apply` if you want
+  standbys to also have *applied* each commit before it returns —
+  read-your-writes on the `-ro` Service.
+
+## 7. Day-2 operations
 
 Open a cluster from the Clusters list to reach these.
 
@@ -465,7 +500,7 @@ Three things worth knowing:
   restarts, so nothing is silently half-applied. Write them to be repeatable
   (`CREATE ... IF NOT EXISTS`) if you want a retry to succeed.
 
-## 7. Delete a cluster
+## 8. Delete a cluster
 
 **Clusters → trash icon → Delete.** This removes the instances, their persistent
 volumes, and the generated credentials. It cannot be undone; take a dump first if
@@ -482,7 +517,7 @@ archived WAL, and only while the repository itself survives. Deleting the
 cluster does not delete its repository, so a restore stays possible afterwards;
 a dump is still the surer option when you want a single file in your own hands.
 
-## 8. Troubleshooting
+## 9. Troubleshooting
 
 | Symptom | Likely cause and fix |
 |---|---|
@@ -495,7 +530,7 @@ a dump is still the surer option when you want a single file in your own hands.
 | Pods stuck in `CreateContainerConfigError` or `ContainerCreating` | A Secret or ConfigMap the cluster references is missing, or lacks a key. Check *Secrets and initialisation* on the cluster page. |
 | Init scripts did not run | They run only when a cluster is first created, never on an existing or restored one. Check `kubectl -n pglord logs <name>-0` for `init script` lines. |
 
-## 9. Monitoring
+## 10. Monitoring
 
 pglord exposes Prometheus metrics in two places, and both are on by default —
 there is nothing to enable.
@@ -546,7 +581,6 @@ default because they require the monitoring.coreos.com CRDs; the raw
 ## Current limitations
 
 - No authentication in front of the UI — put it behind your ingress auth.
-- Asynchronous replication only (synchronous is not exposed yet).
 - A restore always creates a new cluster; restoring in place is not supported,
   and the restored cluster starts with backups switched off.
 - Custom images must be built on the pglord agent image; stock `postgres:NN`

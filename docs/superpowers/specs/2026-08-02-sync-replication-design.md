@@ -118,8 +118,8 @@ Surfacing strict-mode state (the promise that makes strict acceptable):
   bool` — true when the flag is on, the primary is reachable, and its
   `sync_standby_count` is 0: commits are blocking right now.
 - Metrics: the agent exports the count as a gauge on a primary
-  (`pglord_agent_sync_standbys`); the server exports `pglord_sync_degraded` per
-  cluster.
+  (`pglord_pg_sync_standbys`, following the agent's `pglord_pg_*` naming); the
+  server exports `pglord_sync_degraded` per cluster.
 
 After the DTO changes: `make openapi ui-client`, regenerated spec and client committed
 with the code.

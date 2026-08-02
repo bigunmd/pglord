@@ -123,6 +123,79 @@ done
 [ "$(field "['pending_restart']")" = "False" ] || { echo "FAIL: pending_restart set after a reload-safe change"; exit 1; }
 echo "OK applied live on both instances, no restarts"
 
+echo "==> synchronous replication: validation guard rails"
+code=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "$API/api/v1/clusters/cfg" \
+  -H 'content-type: application/json' \
+  -d '{"synchronous":true,"parameters":{"synchronous_commit":"off"}}')
+[ "$code" = "422" ] || { echo "FAIL: sync + synchronous_commit=off returned $code"; exit 1; }
+code=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "$API/api/v1/clusters/cfg" \
+  -H 'content-type: application/json' \
+  -d '{"parameters":{"synchronous_standby_names":"ANY 1 (x)"}}')
+[ "$code" = "422" ] || { echo "FAIL: reserved synchronous_standby_names returned $code"; exit 1; }
+echo "OK rejected as 422"
+
+echo "==> enabling synchronous replication"
+before0=$(restarts_of cfg-0); before1=$(restarts_of cfg-1)
+code=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "$API/api/v1/clusters/cfg" \
+  -H 'content-type: application/json' -d '{"synchronous":true}')
+[ "$code" = "200" ] || { echo "FAIL: enable sync returned $code"; exit 1; }
+# The rolling restart above may have ended in a failover, and the primary
+# record can lag the actual roles briefly — ask postgres itself who is
+# primary, and poll names + sync_state together (the walreceiver may still be
+# reconnecting when the setting lands).
+prim=""; stand=""; names=""; state=""
+for _ in $(seq 1 30); do
+  if [ "$(psql_on cfg-0 "SELECT pg_is_in_recovery()")" = "f" ]; then
+    prim=cfg-0; stand=cfg-1
+  elif [ "$(psql_on cfg-1 "SELECT pg_is_in_recovery()")" = "f" ]; then
+    prim=cfg-1; stand=cfg-0
+  else
+    sleep 2; continue
+  fi
+  names=$(psql_on "$prim" "SHOW synchronous_standby_names")
+  state=$(psql_on "$prim" "SELECT sync_state FROM pg_stat_replication LIMIT 1")
+  [ "$names" = "ANY 1 (\"$stand\")" ] && [ "$state" = "quorum" ] && break
+  sleep 2
+done
+if [ "$names" != "ANY 1 (\"$stand\")" ] || [ "$state" != "quorum" ]; then
+  echo "DIAG prim=$prim stand=$stand names='$names' state='$state'"
+  echo "DIAG recovery: cfg-0=$(psql_on cfg-0 'SELECT pg_is_in_recovery()') cfg-1=$(psql_on cfg-1 'SELECT pg_is_in_recovery()')"
+  echo "DIAG walreceiver on $stand: $(psql_on "$stand" 'SELECT status, sender_host FROM pg_stat_wal_receiver')"
+  echo "DIAG replication on $prim: $(psql_on "$prim" 'SELECT application_name, state, sync_state FROM pg_stat_replication')"
+  echo "DIAG pods:"; $KUBECTL -n pglord get pods -o wide | grep '^cfg-' || true
+  echo "DIAG $stand logs:"; $KUBECTL -n pglord logs "$stand" --tail=20 || true
+  echo "FAIL: sync not converged (names='$names' state='$state')"
+  exit 1
+fi
+# A commit must complete while the quorum standby is connected.
+psql_on "$prim" "CREATE TABLE IF NOT EXISTS sync_e2e(x int)" >/dev/null
+psql_on "$prim" "INSERT INTO sync_e2e VALUES (1)" >/dev/null
+[ "$(psql_on "$prim" "SELECT count(*) FROM sync_e2e")" = "1" ] \
+  || { echo "FAIL: sync write did not commit"; exit 1; }
+[ "$(field "['synchronous']")" = "True" ] || { echo "FAIL: detail synchronous not true"; exit 1; }
+[ "$(field "['sync_degraded']")" = "False" ] || { echo "FAIL: sync_degraded set with a healthy standby"; exit 1; }
+[ "$(restarts_of cfg-0)" = "$before0" ] && [ "$(restarts_of cfg-1)" = "$before1" ] \
+  || { echo "FAIL: instances restarted for a reload-safe change"; exit 1; }
+echo "OK quorum sync active, write committed, no restarts"
+
+echo "==> scaling a sync cluster to 1 replica is rejected"
+code=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "$API/api/v1/clusters/cfg" \
+  -H 'content-type: application/json' -d '{"replicas":1}')
+[ "$code" = "422" ] || { echo "FAIL: scale-to-1 with sync on returned $code"; exit 1; }
+echo "OK rejected as 422"
+
+echo "==> disabling synchronous replication"
+code=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "$API/api/v1/clusters/cfg" \
+  -H 'content-type: application/json' -d '{"synchronous":false}')
+[ "$code" = "200" ] || { echo "FAIL: disable sync returned $code"; exit 1; }
+for _ in $(seq 1 30); do
+  names=$(psql_on "$prim" "SHOW synchronous_standby_names")
+  [ "$names" = "" ] && break
+  sleep 2
+done
+[ "$names" = "" ] || { echo "FAIL: synchronous_standby_names not cleared ('$names')"; exit 1; }
+echo "OK cleared"
+
 echo "==> applying a restart-required setting (max_connections)"
 code=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "$API/api/v1/clusters/cfg" \
   -H 'content-type: application/json' -d '{"parameters":{"work_mem":"8MB","max_connections":"150"}}')
