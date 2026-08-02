@@ -16,6 +16,106 @@ fn test_app() -> axum::Router {
     router
 }
 
+fn test_app_with(cfg: pglord_server::config::Config) -> axum::Router {
+    let (router, _api) = pglord_server::app::build(
+        pglord_server::health::Readiness::default(),
+        &cfg,
+        None,
+        Default::default(),
+    );
+    router
+}
+
+async fn send(
+    app: axum::Router,
+    path: &str,
+    bearer: Option<&str>,
+) -> (StatusCode, serde_json::Value) {
+    let mut req = Request::get(path);
+    if let Some(token) = bearer {
+        req = req.header("authorization", format!("Bearer {token}"));
+    }
+    let resp = app
+        .oneshot(req.body(Body::empty()).expect("request"))
+        .await
+        .expect("response");
+    let status = resp.status();
+    let body = resp.into_body().collect().await.expect("body").to_bytes();
+    let json = serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
+    (status, json)
+}
+
+#[tokio::test]
+async fn auth_off_reports_both_modes_disabled_and_stays_open() {
+    let (status, body) = send(test_app(), "/api/v1/auth/config", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["static_tokens_enabled"], false);
+    assert_eq!(body["oidc"], serde_json::Value::Null);
+}
+
+#[tokio::test]
+async fn auth_on_locks_api_but_not_health_metrics_or_auth_config() {
+    let cfg = || pglord_server::config::Config {
+        auth_tokens: "s3cret".into(),
+        ..pglord_server::config::Config::test_default()
+    };
+
+    let (status, body) = send(test_app_with(cfg()), "/api/v1/ping", None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(body["code"], "auth_required");
+
+    let resp = test_app_with(cfg())
+        .oneshot(
+            Request::get("/api/v1/ping")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(resp.headers()["www-authenticate"], "Bearer");
+
+    let (status, _) = send(test_app_with(cfg()), "/api/v1/ping", Some("s3cret")).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, body) = send(test_app_with(cfg()), "/api/v1/ping", Some("wrong")).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(body["code"], "auth_invalid");
+
+    let (status, body) = send(test_app_with(cfg()), "/api/v1/auth/config", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["static_tokens_enabled"], true);
+    assert_eq!(body["oidc"], serde_json::Value::Null);
+
+    for open_path in ["/healthz", "/metrics"] {
+        let (status, _) = send(test_app_with(cfg()), open_path, None).await;
+        assert_eq!(status, StatusCode::OK, "{open_path} must stay open");
+    }
+}
+
+#[tokio::test]
+async fn auth_config_reports_oidc_when_configured() {
+    let cfg = pglord_server::config::Config {
+        auth_oidc_issuer: "https://idp.example.com/realms/x".into(),
+        auth_oidc_client_id: "pglord".into(),
+        ..pglord_server::config::Config::test_default()
+    };
+    let (status, body) = send(test_app_with(cfg), "/api/v1/auth/config", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["oidc"]["issuer"], "https://idp.example.com/realms/x");
+    assert_eq!(body["oidc"]["client_id"], "pglord");
+}
+
+#[tokio::test]
+async fn auth_config_is_in_the_openapi_contract() {
+    let (_router, api) = pglord_server::app::build(
+        pglord_server::health::Readiness::default(),
+        &pglord_server::config::Config::test_default(),
+        None,
+        Default::default(),
+    );
+    assert!(api.paths.paths.contains_key("/api/v1/auth/config"));
+}
+
 #[tokio::test]
 async fn clusters_without_kube_answer_503_problem() {
     let resp = test_app()

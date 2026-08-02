@@ -29,6 +29,13 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
+    if !cfg.auth_enabled() {
+        tracing::warn!(
+            "API authentication is DISABLED — anyone who can reach the server has full \
+             control. Set PGLORD_AUTH_TOKENS or PGLORD_AUTH_OIDC_ISSUER to enable it."
+        );
+    }
+
     let readiness = Readiness::default();
     let metrics = pglord_server::metrics::Metrics::new();
 

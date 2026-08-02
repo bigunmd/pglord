@@ -71,6 +71,7 @@ pub fn build(
     metrics: crate::metrics::Metrics,
 ) -> (Router, utoipa::openapi::OpenApi) {
     let api = OpenApiRouter::new()
+        .routes(routes!(crate::api::auth::auth_config))
         .routes(routes!(crate::api::ping::ping))
         .routes(routes!(crate::api::version::version))
         .routes(routes!(
@@ -107,6 +108,16 @@ pub fn build(
             crate::ui_assets::serve(uri.path())
         }
     });
+
+    // Authentication wraps every route added so far (API + fallback; the
+    // middleware itself lets non-/api paths and the public auth-config
+    // endpoint through). CORS is layered after so browser preflights are
+    // answered before auth sees them.
+    let auth_state = crate::auth::AuthState::from_config(cfg, reqwest::Client::new());
+    let api_router = api_router.layer(axum::middleware::from_fn_with_state(
+        auth_state,
+        crate::auth::middleware,
+    ));
 
     let api_router = if cfg.cors_origins().is_empty() {
         api_router
