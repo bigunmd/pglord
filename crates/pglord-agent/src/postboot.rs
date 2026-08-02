@@ -203,6 +203,137 @@ pub async fn ensure_pooler(cfg: &Config, password: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// One declared role with its password already resolved from the Secret by
+/// the server. Mirrors `pglord_core::provision::RoleSpec` minus the
+/// reference, plus the value.
+#[derive(serde::Deserialize)]
+pub struct ProvisionRole {
+    pub name: String,
+    #[serde(default)]
+    pub password: Option<String>,
+    #[serde(default = "default_true")]
+    pub login: bool,
+    #[serde(default)]
+    pub createdb: bool,
+    #[serde(default)]
+    pub createrole: bool,
+    #[serde(default)]
+    pub connection_limit: Option<i32>,
+    #[serde(default)]
+    pub in_roles: Vec<String>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(serde::Deserialize)]
+pub struct ProvisionDatabase {
+    pub name: String,
+    pub owner: String,
+}
+
+#[derive(serde::Deserialize)]
+pub struct ProvisionRequest {
+    #[serde(default)]
+    pub roles: Vec<ProvisionRole>,
+    #[serde(default)]
+    pub databases: Vec<ProvisionDatabase>,
+}
+
+/// Converge declared roles, memberships and databases on the primary.
+/// Idempotent; additive — nothing here drops anything. Ordering: roles,
+/// then memberships, then databases (owners must exist first).
+pub async fn apply_provisioning(cfg: &Config, req: &ProvisionRequest) -> anyhow::Result<()> {
+    use pglord_core::provision::{
+        database_ddl, grant_sql, membership_changes, revoke_sql, role_ddl,
+    };
+    let (client, conn_task) = connect_local(cfg).await?;
+
+    let mut declared: Vec<String> = Vec::with_capacity(req.roles.len());
+    for role in &req.roles {
+        let spec = pglord_core::provision::RoleSpec {
+            name: role.name.clone(),
+            password_secret: None,
+            login: role.login,
+            createdb: role.createdb,
+            createrole: role.createrole,
+            connection_limit: role.connection_limit,
+            in_roles: role.in_roles.clone(),
+        };
+        let exists: bool = client
+            .query_one(
+                "SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname = $1)",
+                &[&role.name],
+            )
+            .await?
+            .get(0);
+        client
+            .batch_execute(&role_ddl(&spec, exists, role.password.as_deref()))
+            .await?;
+        declared.push(role.name.clone());
+    }
+
+    // Current memberships where BOTH sides are declared: out-of-band grants
+    // to unmanaged roles are invisible here and thus never revoked.
+    let rows = client
+        .query(
+            "SELECT m.rolname, g.rolname
+             FROM pg_auth_members am
+             JOIN pg_roles m ON m.oid = am.member
+             JOIN pg_roles g ON g.oid = am.roleid
+             WHERE m.rolname = ANY($1) AND g.rolname = ANY($1)",
+            &[&declared],
+        )
+        .await?;
+    let current: Vec<(String, String)> = rows.iter().map(|r| (r.get(0), r.get(1))).collect();
+    let specs: Vec<pglord_core::provision::RoleSpec> = req
+        .roles
+        .iter()
+        .map(|r| pglord_core::provision::RoleSpec {
+            name: r.name.clone(),
+            password_secret: None,
+            login: r.login,
+            createdb: r.createdb,
+            createrole: r.createrole,
+            connection_limit: r.connection_limit,
+            in_roles: r.in_roles.clone(),
+        })
+        .collect();
+    let (grants, revokes) = membership_changes(&specs, &current);
+    for (member, group) in &grants {
+        client.batch_execute(&grant_sql(member, group)).await?;
+    }
+    for (member, group) in &revokes {
+        client.batch_execute(&revoke_sql(member, group)).await?;
+    }
+
+    for db in &req.databases {
+        let current_owner: Option<String> = client
+            .query_opt(
+                "SELECT r.rolname FROM pg_database d
+                 JOIN pg_roles r ON r.oid = d.datdba
+                 WHERE d.datname = $1",
+                &[&db.name],
+            )
+            .await?
+            .map(|row| row.get(0));
+        let spec = pglord_core::provision::DatabaseSpec {
+            name: db.name.clone(),
+            owner: db.owner.clone(),
+        };
+        // CREATE DATABASE cannot run in a transaction; each statement runs
+        // on its own connection command anyway (batch_execute autocommits).
+        if let Some(ddl) = database_ddl(&spec, current_owner.as_deref()) {
+            client.batch_execute(&ddl).await?;
+        }
+    }
+
+    drop(client);
+    conn_task.abort();
+    Ok(())
+}
+
 async fn try_ensure(cfg: &Config, reset_superuser: bool) -> anyhow::Result<()> {
     let (client, conn_task) = connect_local(cfg).await?;
     ensure_repl_role(&client, &cfg.repl_user, &cfg.repl_password).await?;

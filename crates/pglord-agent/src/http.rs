@@ -22,6 +22,7 @@ pub fn router(cfg: Arc<Config>) -> Router {
         .route("/promote", post(promote))
         .route("/roles/apply", post(apply_roles))
         .route("/pooler/ensure", post(ensure_pooler))
+        .route("/provision/apply", post(apply_provisioning))
         .route("/backup", post(take_backup))
         .route("/backups", get(list_backups))
         .with_state(cfg)
@@ -216,6 +217,55 @@ async fn ensure_pooler(
     }
 }
 
+/// Converge declared roles and databases. Primary only, same guard as the
+/// other DDL endpoints; every name and password is charset-checked before
+/// any postgres access so a bad request is 400 even when postgres is down.
+async fn apply_provisioning(
+    State(cfg): State<Arc<Config>>,
+    Json(req): Json<crate::postboot::ProvisionRequest>,
+) -> impl IntoResponse {
+    let names_ok = req
+        .roles
+        .iter()
+        .flat_map(|r| std::iter::once(r.name.as_str()).chain(r.in_roles.iter().map(String::as_str)))
+        .chain(
+            req.databases
+                .iter()
+                .flat_map(|d| [d.name.as_str(), d.owner.as_str()]),
+        )
+        .all(pglord_core::provision::is_valid_pg_name);
+    let passwords_ok = req
+        .roles
+        .iter()
+        .filter_map(|r| r.password.as_deref())
+        .all(crate::postboot::is_safe_password);
+    if !names_ok || !passwords_ok {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "names must match [a-z_][a-z0-9_]*; passwords may only contain [A-Za-z0-9_-]"
+            })),
+        );
+    }
+    let st = status::query_status(&cfg).await;
+    if st.in_recovery != Some(false) {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": "provisioning runs on the primary only" })),
+        );
+    }
+    match crate::postboot::apply_provisioning(&cfg, &req).await {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "status": "applied" })),
+        ),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": err.to_string() })),
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -268,6 +318,50 @@ mod tests {
                 Request::post("/pooler/ensure")
                     .header("content-type", "application/json")
                     .body(Body::from(r#"{"password":"aB3-x_9"}"#))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn provision_rejects_unsafe_input_without_touching_postgres() {
+        let resp = test_router()
+            .oneshot(
+                Request::post("/provision/apply")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"roles":[{"name":"app_rw","password":"has$pglord$end"}],"databases":[]}"#,
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let resp = test_router()
+            .oneshot(
+                Request::post("/provision/apply")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"roles":[{"name":"Bad-Name"}],"databases":[]}"#,
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn provision_refuses_when_not_provably_primary() {
+        let resp = test_router()
+            .oneshot(
+                Request::post("/provision/apply")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"roles":[{"name":"app_rw"}],"databases":[]}"#,
+                    ))
                     .expect("request"),
             )
             .await
