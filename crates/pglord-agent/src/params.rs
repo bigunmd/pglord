@@ -19,6 +19,12 @@ pub const SYNC_FILE: &str = "postgresql.pglord-sync.conf";
 /// Hot-standby GUC floor (see pglord_core::standby::render); included after
 /// the user parameter file so the clamp always wins.
 pub const STANDBY_FILE: &str = "postgresql.pglord-standby.conf";
+/// TLS settings (see pglord_core::tls::conf): ssl on/off and the cert paths
+/// under the mounted Secret.
+pub const TLS_FILE: &str = "postgresql.pglord-tls.conf";
+/// Digest of the mounted cert files, kept so a cert-manager renewal (kubelet
+/// swapping the projected files) is noticed and triggers exactly one reload.
+const TLS_HASH_FILE: &str = "postgresql.pglord-tls.hash";
 
 /// Rendered archiving settings: on with a pgBackRest archive_command when
 /// backups are configured, explicitly off when they are not.
@@ -68,6 +74,38 @@ pub fn write_standby_if_changed(pgdata: &Path, rendered: &str) -> std::io::Resul
 /// Write the rendered parameters, returning whether the content changed.
 pub fn write_if_changed(pgdata: &Path, rendered: &str) -> std::io::Result<bool> {
     write_file_if_changed(&pgdata.join(PARAMS_FILE), rendered)
+}
+
+/// Write the TLS settings file when it differs; returns whether it changed.
+pub fn write_tls_if_changed(pgdata: &Path, rendered: &str) -> std::io::Result<bool> {
+    write_file_if_changed(&pgdata.join(TLS_FILE), rendered)
+}
+
+/// Track the mounted cert files' contents; returns whether they changed since
+/// the last pass. Postgres re-reads its certificates on SIGHUP, so a `true`
+/// here rides the converge pass's single reload and a renewed certificate is
+/// served within one poll interval, with no restart.
+///
+/// `DefaultHasher` is change detection, not security: the worst a collision
+/// costs is a missed reload until the next content change, and the worst an
+/// unstable hash across agent upgrades costs is one spurious reload.
+pub fn write_tls_rotation_marker(pgdata: &Path, cert_dir: &Path) -> std::io::Result<bool> {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    for key in [
+        pglord_core::tls::TLS_CERT_KEY,
+        pglord_core::tls::TLS_KEY_KEY,
+        pglord_core::tls::TLS_CA_KEY,
+    ] {
+        match std::fs::read(cert_dir.join(key)) {
+            Ok(bytes) => {
+                key.hash(&mut h);
+                bytes.hash(&mut h);
+            }
+            Err(_) => "absent".hash(&mut h),
+        }
+    }
+    write_file_if_changed(&pgdata.join(TLS_HASH_FILE), &format!("{:x}\n", h.finish()))
 }
 
 /// Write the rendered pg_hba.conf when it differs; returns whether it changed.
@@ -176,6 +214,46 @@ mod tests {
             clamped
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tls_write_is_idempotent_and_targets_the_tls_file() {
+        let dir = tempdir("tls");
+        let on = pglord_core::tls::conf(true, false);
+        assert!(write_tls_if_changed(&dir, &on).expect("write"));
+        // Unchanged content must not report a change: a report triggers a
+        // reload, and this runs on every 5s poll.
+        assert!(!write_tls_if_changed(&dir, &on).expect("write"));
+        assert_eq!(std::fs::read_to_string(dir.join(TLS_FILE)).expect("read"), on);
+        let off = pglord_core::tls::conf(false, false);
+        assert!(write_tls_if_changed(&dir, &off).expect("write"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rotation_marker_fires_once_per_cert_change() {
+        let pgdata = tempdir("tls-rotate-pgdata");
+        let certs = tempdir("tls-rotate-certs");
+        std::fs::write(certs.join("tls.crt"), "CERT-A").expect("write");
+        std::fs::write(certs.join("tls.key"), "KEY-A").expect("write");
+
+        // First sighting of these certs registers as a change...
+        assert!(write_tls_rotation_marker(&pgdata, &certs).expect("marker"));
+        // ...and stays quiet on every following poll.
+        assert!(!write_tls_rotation_marker(&pgdata, &certs).expect("marker"));
+
+        // A renewal (kubelet swapping the projected files) fires exactly once.
+        std::fs::write(certs.join("tls.crt"), "CERT-B").expect("write");
+        assert!(write_tls_rotation_marker(&pgdata, &certs).expect("marker"));
+        assert!(!write_tls_rotation_marker(&pgdata, &certs).expect("marker"));
+
+        // A CA appearing later is a change too (the conf gains ssl_ca_file).
+        std::fs::write(certs.join("ca.crt"), "CA").expect("write");
+        assert!(write_tls_rotation_marker(&pgdata, &certs).expect("marker"));
+        assert!(!write_tls_rotation_marker(&pgdata, &certs).expect("marker"));
+
+        let _ = std::fs::remove_dir_all(&pgdata);
+        let _ = std::fs::remove_dir_all(&certs);
     }
 
     #[test]

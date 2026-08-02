@@ -29,6 +29,7 @@ pub fn postgresql_conf_extra(port: u16) -> String {
          include_if_exists = '{}'\n\
          include_if_exists = '{}'\n\
          include_if_exists = '{}'\n\
+         include_if_exists = '{}'\n\
          listen_addresses = '*'\n\
          port = {port}\n\
          wal_level = replica\n\
@@ -39,6 +40,7 @@ pub fn postgresql_conf_extra(port: u16) -> String {
         crate::params::ARCHIVE_FILE,
         crate::params::SYNC_FILE,
         crate::params::STANDBY_FILE,
+        crate::params::TLS_FILE,
     )
 }
 
@@ -447,6 +449,14 @@ mod tests {
             .expect("standby include present");
         assert!(params_at < standby_at);
         assert!(standby_at < managed_at);
+        // The tls include is managed (users cannot set ssl* at all — they are
+        // reserved), placed with the other managed includes before the fixed
+        // settings.
+        assert!(conf.contains("include_if_exists = 'postgresql.pglord-tls.conf'"));
+        let tls_at = conf
+            .find("postgresql.pglord-tls.conf")
+            .expect("tls include present");
+        assert!(tls_at < managed_at);
     }
 
     #[test]

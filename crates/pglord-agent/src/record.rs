@@ -186,6 +186,31 @@ async fn apply_parameters(reader: &RecordReader, cfg: &Config, me: &str, in_reco
         Err(err) => tracing::warn!(%err, "failed to write sync replication settings"),
     }
 
+    // ssl = on only when the cert files are actually on disk: a pod whose
+    // spec says TLS but whose template has not rolled to carry the mount yet
+    // must keep ssl off, or a crash-restart would leave postgres unable to
+    // start. The rotation marker turns a cert-manager renewal (kubelet
+    // swapping the projected files) into this pass's single reload —
+    // postgres re-reads its certificates on SIGHUP.
+    let cert_dir = std::path::Path::new(pglord_core::tls::TLS_MOUNT);
+    let tls_enabled = spec.tls.enabled()
+        && cert_dir.join(pglord_core::tls::TLS_CERT_KEY).exists()
+        && cert_dir.join(pglord_core::tls::TLS_KEY_KEY).exists();
+    let ca_present = tls_enabled && cert_dir.join(pglord_core::tls::TLS_CA_KEY).exists();
+    let tls = pglord_core::tls::conf(tls_enabled, ca_present);
+    match crate::params::write_tls_if_changed(&cfg.pgdata, &tls) {
+        Ok(true) => changed = true,
+        Ok(false) => {}
+        Err(err) => tracing::warn!(%err, "failed to write tls settings"),
+    }
+    if tls_enabled {
+        match crate::params::write_tls_rotation_marker(&cfg.pgdata, cert_dir) {
+            Ok(true) => changed = true,
+            Ok(false) => {}
+            Err(err) => tracing::warn!(%err, "failed to track tls cert rotation"),
+        }
+    }
+
     // Standbys clamp restart-required hot-standby GUCs to the primary's live
     // values (control file); a primary renders the header-only file, clearing
     // any clamp left over from before its promotion.
