@@ -58,6 +58,30 @@ metrics:
     # Scrape the pglord server itself.
     enabled: false
 
+auth:
+  # API authentication. With neither mode configured the API runs OPEN and the
+  # server logs a startup warning. Both modes may be enabled at once (static
+  # token for CI + OIDC for humans).
+  tokens:
+    # Name of an existing Secret holding comma-separated bearer tokens.
+    # Takes precedence over `value`. Two tokens make rotation zero-downtime:
+    # add the new one, roll clients, remove the old one.
+    existingSecret: ""
+    secretKey: tokens
+    # Dev convenience: renders a chart-managed Secret with this literal value.
+    # Prefer existingSecret for anything real.
+    value: ""
+  oidc:
+    # OIDC issuer URL (discovery is fetched from
+    # <issuer>/.well-known/openid-configuration). Empty = OIDC off.
+    issuer: ""
+    # Public client ID the UI uses for the authorization-code + PKCE flow.
+    # Required when issuer is set; the redirect URI to register at the IdP is
+    # <ui-origin>/login/callback.
+    clientId: ""
+    # Expected `aud` claim; defaults to clientId when empty.
+    audience: ""
+
 config:
   # tracing-subscriber directive, e.g. "info" or "pglord_server=debug,info".
   logLevel: info

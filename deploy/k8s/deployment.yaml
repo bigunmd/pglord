@@ -27,6 +27,16 @@ spec:
             # has to be something the nodes can pull; here it is the tag
             # `minikube image load` puts in place.
             - { name: PGLORD_DEFAULT_AGENT_IMAGE, value: "pglord-agent:dev" }
+            # --- API authentication (off by default on the dev stand) ---
+            # Static bearer tokens, comma-separated, from a Secret you manage:
+            #   kubectl -n pglord create secret generic pglord-auth --from-literal=tokens=<token>
+            # - name: PGLORD_AUTH_TOKENS
+            #   valueFrom:
+            #     secretKeyRef: { name: pglord-auth, key: tokens }
+            # OIDC resource-server mode (register redirect URI <ui-origin>/login/callback):
+            # - { name: PGLORD_AUTH_OIDC_ISSUER, value: "https://idp.example.com/realms/x" }
+            # - { name: PGLORD_AUTH_OIDC_CLIENT_ID, value: "pglord" }
+            # - { name: PGLORD_AUTH_OIDC_AUDIENCE, value: "pglord" } # defaults to client id
           livenessProbe:
             httpGet: { path: /healthz, port: http }
           readinessProbe:

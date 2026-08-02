@@ -54,6 +54,28 @@ spec:
               value: {{ .Values.config.shutdownTimeoutSeconds | quote }}
             - name: PGLORD_DEFAULT_AGENT_IMAGE
               value: {{ .Values.agentImage | quote }}
+            {{- if or .Values.auth.tokens.existingSecret .Values.auth.tokens.value }}
+            - name: PGLORD_AUTH_TOKENS
+              valueFrom:
+                secretKeyRef:
+                  {{- if .Values.auth.tokens.existingSecret }}
+                  name: {{ .Values.auth.tokens.existingSecret }}
+                  key: {{ .Values.auth.tokens.secretKey }}
+                  {{- else }}
+                  name: {{ include "pglord.fullname" . }}-auth
+                  key: tokens
+                  {{- end }}
+            {{- end }}
+            {{- if .Values.auth.oidc.issuer }}
+            - name: PGLORD_AUTH_OIDC_ISSUER
+              value: {{ .Values.auth.oidc.issuer | quote }}
+            - name: PGLORD_AUTH_OIDC_CLIENT_ID
+              value: {{ .Values.auth.oidc.clientId | quote }}
+            {{- with .Values.auth.oidc.audience }}
+            - name: PGLORD_AUTH_OIDC_AUDIENCE
+              value: {{ . | quote }}
+            {{- end }}
+            {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
