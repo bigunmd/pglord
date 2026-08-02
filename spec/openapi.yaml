@@ -646,6 +646,8 @@ components:
       - synchronous
       - sync_degraded
       - pooler
+      - roles
+      - databases
       - instances
       properties:
         backup:
@@ -658,6 +660,11 @@ components:
           description: |-
             Secret the passwords come from when the user supplied their own; null
             when pglord generates them.
+        databases:
+          type: array
+          items:
+            $ref: '#/components/schemas/DatabaseSpec'
+          description: Declared databases.
         env:
           type: array
           items:
@@ -711,6 +718,11 @@ components:
             description: |-
               Where this cluster's data came from, when it was created by a restore.
               Null for clusters that started empty.
+        roles:
+          type: array
+          items:
+            $ref: '#/components/schemas/RoleSpec'
+          description: Declared roles (references only — never password values).
         storage_size:
           type: string
         sync_degraded:
@@ -747,6 +759,11 @@ components:
             Secret holding the superuser and replication passwords. When set,
             pglord uses it instead of generating one — so the cluster has a single
             source of truth for its credentials rather than two.
+        databases:
+          type: array
+          items:
+            $ref: '#/components/schemas/DatabaseSpec'
+          description: Declared databases, converged after the roles that own them.
         env:
           type: array
           items:
@@ -798,6 +815,13 @@ components:
               Where this cluster's data came from, when it was created by restoring
               someone's backup. A one-shot bootstrap source: it is consumed the first
               time PGDATA is created and has no effect on a running cluster.
+        roles:
+          type: array
+          items:
+            $ref: '#/components/schemas/RoleSpec'
+          description: |-
+            Declared roles, converged on the primary. Additive: removing an entry
+            stops managing it, nothing is dropped.
         storage_size:
           type: string
           description: PVC size per instance, e.g. "1Gi".
@@ -837,6 +861,17 @@ components:
           type: integer
           format: int32
           minimum: 0
+    DatabaseSpec:
+      type: object
+      required:
+      - name
+      - owner
+      properties:
+        name:
+          type: string
+        owner:
+          type: string
+          description: Owning role; must be declared above.
     EnvVarSpec:
       type: object
       required:
@@ -1171,6 +1206,7 @@ components:
       - custom_env
       - init_scripts
       - tls
+      - role_password
     ResourceStatus:
       allOf:
       - $ref: '#/components/schemas/RequiredResource'
@@ -1260,6 +1296,43 @@ components:
           - string
           - 'null'
           description: Recover to this instant (RFC3339, UTC) instead of the end of the WAL.
+    RoleSpec:
+      type: object
+      required:
+      - name
+      properties:
+        connection_limit:
+          type:
+          - integer
+          - 'null'
+          format: int32
+          description: Absent = unlimited (postgres -1).
+        createdb:
+          type: boolean
+        createrole:
+          type: boolean
+        in_roles:
+          type: array
+          items:
+            type: string
+          description: |-
+            Memberships. Only declared roles can be named, which keeps ensure
+            ordering trivial and revocation scoped to what pglord manages.
+        login:
+          type: boolean
+        name:
+          type: string
+          description: |-
+            Strict lowercase identifier — interpolated into DDL as a quoted
+            identifier, so the charset is the injection contract.
+        password_secret:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/SecretKeyRefSpec'
+            description: |-
+              Where the role's password comes from. Absent = the role is created
+              without a password and an existing password is left untouched.
+              Rotation is: edit the Secret; the next ensure re-applies it.
     RunState:
       type: string
       enum:
@@ -1296,6 +1369,13 @@ components:
           - type: 'null'
           - $ref: '#/components/schemas/BackupSpec'
             description: Full replacement of the backup block.
+        databases:
+          type:
+          - array
+          - 'null'
+          items:
+            $ref: '#/components/schemas/DatabaseSpec'
+          description: Full replacement of the declared databases; same semantics as roles.
         env:
           type:
           - array
@@ -1354,6 +1434,15 @@ components:
           - 'null'
           format: int32
           minimum: 0
+        roles:
+          type:
+          - array
+          - 'null'
+          items:
+            $ref: '#/components/schemas/RoleSpec'
+          description: |-
+            Full replacement of the declared roles: absent leaves them untouched,
+            an empty list stops managing (nothing is dropped).
         storage_size:
           type:
           - string

@@ -12,5 +12,6 @@ export const RESOURCE_PURPOSE: ResourcePurpose[] = [
   'restore_repository',
   'custom_env',
   'init_scripts',
-  'tls'
+  'tls',
+  'role_password'
 ];
