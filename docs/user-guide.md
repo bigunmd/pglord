@@ -107,6 +107,7 @@ Every cluster publishes two in-cluster addresses:
 |---|---|
 | `<name>-rw.<namespace>.svc.cluster.local:5432` | Reads and writes. Always points at the current primary, including after a failover. |
 | `<name>-pods.<namespace>.svc.cluster.local:5432` | All instances (headless). Individual instances are `<name>-0.<name>-pods…`, useful for read-only queries against a specific standby. |
+| `<name>-pool.<namespace>.svc.cluster.local:5432` | Pooled reads and writes through PgBouncer, when the pooler is enabled (see [Connection pooling](#connection-pooling-pgbouncer)). |
 
 Credentials are generated per cluster and stored in a Secret named
 `<name>-credentials`, with keys `superuser-password` and `replication-password`.
@@ -495,6 +496,58 @@ A restored cluster inherits its source's TLS block along with its pg_hba
 rules. The certificate's DNS names still name the source's services, so
 `verify-full` clients need a certificate issued for the new name — the wire
 stays encrypted in the meantime.
+
+### Connection pooling (PgBouncer)
+
+**Configure pooling** on the cluster page (or the pooler block of the create
+form) runs a managed PgBouncer deployment in front of the primary.
+Applications switch their host from `<name>-rw` to `<name>-pool` — same port
+5432, same credentials — and connection-hungry apps stop exhausting
+`max_connections`.
+
+```
+<name>-pool.<namespace>.svc.cluster.local:5432
+```
+
+Any database role connects through the pool with its own password — including
+roles created by your init scripts. PgBouncer looks passwords up live in
+PostgreSQL (`auth_query` through a dedicated `pglord_pooler` role that pglord
+provisions and rotates); no role list to maintain, and no password ever lands
+in the pooler's configuration except its own.
+
+The knobs, all pglord-curated (everything else in pgbouncer.ini is managed):
+
+| Knob | Default | Meaning |
+|---|---|---|
+| Pooler pods | 1 | PgBouncer replicas, independent of postgres instances |
+| Pool mode | transaction | `transaction` returns a server connection at each transaction end; `session` keeps one per client |
+| Max client connections | 100 | Client connections PgBouncer accepts |
+| Pool size per database/user | 20 | Server connections per database/user pair |
+
+**Transaction mode caveat:** session state — prepared statements, advisory
+locks, `SET` without `LOCAL` — does not survive across transactions. Apps
+that rely on it should use session mode.
+
+Changing pooler knobs rolls only the pooler pods; the postgres instances are
+never touched. Disabling the pooler deletes its Deployment, Service and
+config Secret (the `pglord_pooler` role stays in PostgreSQL — harmless, and
+dropping it would break in-flight connections). On failover the pool follows
+`<name>-rw` automatically; in-flight connections break once, exactly as they
+do for direct clients.
+
+**With TLS enabled** the pooler serves the same certificate as the instances
+and connects upstream with TLS required, so `hostnossl … reject` setups keep
+working through the pool. Two notes: add `<name>-pool` to the certificate's
+DNS names (`verify-full` clients check it), and PgBouncer does not hot-reload
+certificates — after a cert renewal, restart the pooler pods:
+
+```bash
+kubectl -n pglord rollout restart deployment/<name>-pooler
+```
+
+If you supply your own credentials Secret, add a `pooler-password` key before
+enabling the pooler — the Secrets table on the cluster page lists it as
+required.
 
 ### Grow storage
 

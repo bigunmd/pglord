@@ -97,6 +97,24 @@ done
 [ "$(all_ssl)" = "True" ] || { echo "FAIL: detail does not report ssl on every instance"; exit 1; }
 echo "OK tls served, pg_stat_ssl and detail agree"
 
+echo "==> the pooler follows cluster tls"
+code=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "$API/api/v1/clusters/tlse" \
+  -H 'content-type: application/json' -d '{"pooler":{"enabled":true}}')
+[ "$code" = "200" ] || { echo "FAIL: enable pooler returned $code"; exit 1; }
+$KUBECTL -n pglord rollout status deploy/tlse-pooler --timeout=120s >/dev/null \
+  || { echo "FAIL: tls pooler deployment never became ready"; exit 1; }
+pool_tls_psql() { $KUBECTL -n pglord exec tlse-1 -- env PGPASSWORD="$SU_PW" PGSSLMODE=require psql -h tlse-pool -U postgres -tAc "$1" 2>/dev/null || echo "DENIED"; }
+# Auth-role ensure and the pooler's first upstream connection both converge on
+# the reconciler's cadence.
+for _ in $(seq 1 45); do
+  [ "$(pool_tls_psql 'SELECT 1')" = "1" ] && break
+  sleep 2
+done
+[ "$(pool_tls_psql 'SELECT 1')" = "1" ] || { echo "FAIL: sslmode=require via the pool cannot connect"; exit 1; }
+curl -s -o /dev/null -X PATCH "$API/api/v1/clusters/tlse" \
+  -H 'content-type: application/json' -d '{"pooler":{"enabled":false}}'
+echo "OK pooled tls connection served"
+
 echo "==> cert hba rules are gated"
 # cert on a plain host line can never match and is rejected outright.
 code=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "$API/api/v1/clusters/tlse" \
