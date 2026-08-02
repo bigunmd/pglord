@@ -241,26 +241,59 @@ pub struct ProvisionRequest {
     pub databases: Vec<ProvisionDatabase>,
 }
 
+impl ProvisionRequest {
+    /// The core spec types this request describes, for running the same
+    /// validation the server runs. The agent must not trust its caller:
+    /// anything on the pod network can reach this port, and without the
+    /// reserved-name checks a request could ALTER `postgres` itself.
+    pub fn to_specs(
+        &self,
+    ) -> (
+        Vec<pglord_core::provision::RoleSpec>,
+        Vec<pglord_core::provision::DatabaseSpec>,
+    ) {
+        let roles = self
+            .roles
+            .iter()
+            .map(|r| pglord_core::provision::RoleSpec {
+                name: r.name.clone(),
+                password_secret: None,
+                login: r.login,
+                createdb: r.createdb,
+                createrole: r.createrole,
+                connection_limit: r.connection_limit,
+                in_roles: r.in_roles.clone(),
+            })
+            .collect();
+        let databases = self
+            .databases
+            .iter()
+            .map(|d| pglord_core::provision::DatabaseSpec {
+                name: d.name.clone(),
+                owner: d.owner.clone(),
+            })
+            .collect();
+        (roles, databases)
+    }
+}
+
 /// Converge declared roles, memberships and databases on the primary.
 /// Idempotent; additive — nothing here drops anything. Ordering: roles,
 /// then memberships, then databases (owners must exist first).
+///
+/// Defense in depth: the full spec validation (reserved names, `pg_*`,
+/// dangling references, duplicates, limits) runs here as well as in the
+/// handler — never rely on the server having validated.
 pub async fn apply_provisioning(cfg: &Config, req: &ProvisionRequest) -> anyhow::Result<()> {
     use pglord_core::provision::{
         database_ddl, grant_sql, membership_changes, revoke_sql, role_ddl,
     };
+    let (specs, db_specs) = req.to_specs();
+    pglord_core::provision::validate(&specs, &db_specs)?;
     let (client, conn_task) = connect_local(cfg).await?;
 
     let mut declared: Vec<String> = Vec::with_capacity(req.roles.len());
-    for role in &req.roles {
-        let spec = pglord_core::provision::RoleSpec {
-            name: role.name.clone(),
-            password_secret: None,
-            login: role.login,
-            createdb: role.createdb,
-            createrole: role.createrole,
-            connection_limit: role.connection_limit,
-            in_roles: role.in_roles.clone(),
-        };
+    for (role, spec) in req.roles.iter().zip(&specs) {
         let exists: bool = client
             .query_one(
                 "SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname = $1)",
@@ -269,7 +302,7 @@ pub async fn apply_provisioning(cfg: &Config, req: &ProvisionRequest) -> anyhow:
             .await?
             .get(0);
         client
-            .batch_execute(&role_ddl(&spec, exists, role.password.as_deref()))
+            .batch_execute(&role_ddl(spec, exists, role.password.as_deref()))
             .await?;
         declared.push(role.name.clone());
     }
@@ -287,19 +320,6 @@ pub async fn apply_provisioning(cfg: &Config, req: &ProvisionRequest) -> anyhow:
         )
         .await?;
     let current: Vec<(String, String)> = rows.iter().map(|r| (r.get(0), r.get(1))).collect();
-    let specs: Vec<pglord_core::provision::RoleSpec> = req
-        .roles
-        .iter()
-        .map(|r| pglord_core::provision::RoleSpec {
-            name: r.name.clone(),
-            password_secret: None,
-            login: r.login,
-            createdb: r.createdb,
-            createrole: r.createrole,
-            connection_limit: r.connection_limit,
-            in_roles: r.in_roles.clone(),
-        })
-        .collect();
     let (grants, revokes) = membership_changes(&specs, &current);
     for (member, group) in &grants {
         client.batch_execute(&grant_sql(member, group)).await?;
@@ -308,23 +328,19 @@ pub async fn apply_provisioning(cfg: &Config, req: &ProvisionRequest) -> anyhow:
         client.batch_execute(&revoke_sql(member, group)).await?;
     }
 
-    for db in &req.databases {
+    for spec in &db_specs {
         let current_owner: Option<String> = client
             .query_opt(
                 "SELECT r.rolname FROM pg_database d
                  JOIN pg_roles r ON r.oid = d.datdba
                  WHERE d.datname = $1",
-                &[&db.name],
+                &[&spec.name],
             )
             .await?
             .map(|row| row.get(0));
-        let spec = pglord_core::provision::DatabaseSpec {
-            name: db.name.clone(),
-            owner: db.owner.clone(),
-        };
         // CREATE DATABASE cannot run in a transaction; each statement runs
         // on its own connection command anyway (batch_execute autocommits).
-        if let Some(ddl) = database_ddl(&spec, current_owner.as_deref()) {
+        if let Some(ddl) = database_ddl(spec, current_owner.as_deref()) {
             client.batch_execute(&ddl).await?;
         }
     }

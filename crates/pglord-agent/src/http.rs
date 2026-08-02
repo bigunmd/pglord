@@ -224,27 +224,25 @@ async fn apply_provisioning(
     State(cfg): State<Arc<Config>>,
     Json(req): Json<crate::postboot::ProvisionRequest>,
 ) -> impl IntoResponse {
-    let names_ok = req
-        .roles
-        .iter()
-        .flat_map(|r| std::iter::once(r.name.as_str()).chain(r.in_roles.iter().map(String::as_str)))
-        .chain(
-            req.databases
-                .iter()
-                .flat_map(|d| [d.name.as_str(), d.owner.as_str()]),
-        )
-        .all(pglord_core::provision::is_valid_pg_name);
+    // Full spec validation, not just charsets: without the reserved-name
+    // checks, anything on the pod network could ask this endpoint to ALTER
+    // `postgres` or `replicator`. Never trust the caller to have validated.
+    let (role_specs, db_specs) = req.to_specs();
+    if let Err(err) = pglord_core::provision::validate(&role_specs, &db_specs) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": err.to_string() })),
+        );
+    }
     let passwords_ok = req
         .roles
         .iter()
         .filter_map(|r| r.password.as_deref())
         .all(crate::postboot::is_safe_password);
-    if !names_ok || !passwords_ok {
+    if !passwords_ok {
         return (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({
-                "error": "names must match [a-z_][a-z0-9_]*; passwords may only contain [A-Za-z0-9_-]"
-            })),
+            Json(serde_json::json!({ "error": "passwords may only contain [A-Za-z0-9_-]" })),
         );
     }
     let st = status::query_status(&cfg).await;
@@ -351,6 +349,31 @@ mod tests {
             .await
             .expect("response");
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn provision_rejects_reserved_and_dangling_names_agent_side() {
+        // Defense in depth: `postgres` passes the identifier charset, so a
+        // charset-only check would let a pod-network caller ALTER the
+        // superuser. The full validation must run here, not just on the
+        // server.
+        for body in [
+            r#"{"roles":[{"name":"postgres","password":"pw-1"}],"databases":[]}"#,
+            r#"{"roles":[{"name":"replicator"}],"databases":[]}"#,
+            r#"{"roles":[{"name":"pg_sneaky"}],"databases":[]}"#,
+            r#"{"roles":[],"databases":[{"name":"appdb","owner":"ghost"}]}"#,
+        ] {
+            let resp = test_router()
+                .oneshot(
+                    Request::post("/provision/apply")
+                        .header("content-type", "application/json")
+                        .body(Body::from(body))
+                        .expect("request"),
+                )
+                .await
+                .expect("response");
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "accepted: {body}");
+        }
     }
 
     #[tokio::test]
