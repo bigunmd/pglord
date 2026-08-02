@@ -22,6 +22,8 @@ pub struct MetricsSample {
     pub max_connections: Option<f64>,
     pub database_size_bytes: Vec<(String, f64)>,
     pub pending_restart: Option<bool>,
+    /// Primary only: standbys eligible to confirm a synchronous commit.
+    pub sync_standbys: Option<f64>,
 }
 
 fn gauge(reg: &Registry, name: &str, help: &str, value: f64) {
@@ -112,6 +114,14 @@ pub fn render(sample: &MetricsSample) -> String {
             if v { 1.0 } else { 0.0 },
         );
     }
+    if let Some(v) = sample.sync_standbys {
+        gauge(
+            &reg,
+            "pglord_pg_sync_standbys",
+            "Primary only: connected standbys with sync_state sync/quorum.",
+            v,
+        );
+    }
     let mut buf = Vec::new();
     if TextEncoder::new().encode(&reg.gather(), &mut buf).is_err() {
         return String::new();
@@ -183,6 +193,16 @@ async fn try_collect(cfg: &Config) -> anyhow::Result<MetricsSample> {
                 .standby_replay_lag_bytes
                 .push((row.get(0), row.get(1)));
         }
+        sample.sync_standbys = Some(
+            client
+                .query_one(
+                    "SELECT count(*)::float8 FROM pg_stat_replication \
+                     WHERE sync_state IN ('sync', 'quorum')",
+                    &[],
+                )
+                .await?
+                .get(0),
+        );
     }
     for row in client
         .query(
@@ -224,6 +244,7 @@ mod tests {
             max_connections: Some(100.0),
             database_size_bytes: vec![("postgres".to_string(), 8_192_000.0)],
             pending_restart: Some(false),
+            sync_standbys: Some(1.0),
         }
     }
 
@@ -238,6 +259,7 @@ mod tests {
         assert!(out.contains("pglord_pg_max_connections 100"));
         assert!(out.contains("pglord_pg_database_size_bytes{database=\"postgres\"} 8192000"));
         assert!(out.contains("pglord_pg_pending_restart 0"));
+        assert!(out.contains("pglord_pg_sync_standbys 1"));
     }
 
     #[test]
@@ -252,6 +274,7 @@ mod tests {
         assert!(out.contains("pglord_instance_primary 0"));
         assert!(out.contains("pglord_pg_replication_lag_seconds 1.5"));
         assert!(!out.contains("pglord_pg_standby_replay_lag_bytes"));
+        assert!(!out.contains("pglord_pg_sync_standbys"));
     }
 
     #[test]
