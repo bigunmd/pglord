@@ -33,6 +33,8 @@ pub enum ResourcePurpose {
     CustomEnv,
     /// Holds initialisation scripts.
     InitScripts,
+    /// Server certificate for TLS (kubernetes.io/tls Secret).
+    Tls,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
@@ -138,6 +140,29 @@ pub fn required_resources(spec: &ClusterSpec) -> Vec<RequiredResource> {
         });
     }
 
+    if let Some(name) = spec.tls.server_secret() {
+        let mut keys = vec![
+            crate::tls::TLS_CERT_KEY.to_string(),
+            crate::tls::TLS_KEY_KEY.to_string(),
+        ];
+        // The CA bundle is optional for plain TLS but load-bearing for cert
+        // auth: postgres cannot verify a client certificate without it.
+        if spec
+            .pg_hba
+            .iter()
+            .any(|r| r.method == crate::hba::HbaMethod::Cert)
+        {
+            keys.push(crate::tls::TLS_CA_KEY.to_string());
+        }
+        push(RequiredResource {
+            name: name.to_string(),
+            kind: ResourceKind::Secret,
+            purpose: ResourcePurpose::Tls,
+            keys,
+            managed: false,
+        });
+    }
+
     out
 }
 
@@ -228,6 +253,32 @@ mod tests {
         assert_eq!(app[0].keys, vec!["user", "password"]);
         // A literal value needs nothing from the namespace.
         assert_eq!(r.len(), 2);
+    }
+
+    #[test]
+    fn a_tls_cluster_needs_its_cert_secret_and_cert_rules_add_the_ca() {
+        let r = required_resources(&spec(serde_json::json!({
+            "name": "demo",
+            "tls": { "server_secret": "demo-tls" }
+        })));
+        let tls = r.iter().find(|x| x.name == "demo-tls").expect("demo-tls");
+        assert_eq!(tls.kind, ResourceKind::Secret);
+        assert_eq!(tls.purpose, ResourcePurpose::Tls);
+        assert_eq!(tls.keys, vec!["tls.crt", "tls.key"]);
+        assert!(!tls.managed);
+
+        let r = required_resources(&spec(serde_json::json!({
+            "name": "demo",
+            "tls": { "server_secret": "demo-tls" },
+            "pg_hba": [{ "conn": "hostssl", "database": "app", "user": "app_rw",
+                         "address": "10.0.0.0/8", "method": "cert" }]
+        })));
+        let tls = r.iter().find(|x| x.name == "demo-tls").expect("demo-tls");
+        assert_eq!(tls.keys, vec!["tls.crt", "tls.key", "ca.crt"]);
+
+        // No TLS, no requirement.
+        let r = required_resources(&spec(serde_json::json!({ "name": "demo" })));
+        assert!(!r.iter().any(|x| x.purpose == ResourcePurpose::Tls));
     }
 
     #[test]
