@@ -113,7 +113,7 @@ pub async fn follow(reader: RecordReader, cfg: std::sync::Arc<Config>, me: Strin
         if !st.ready {
             continue;
         }
-        apply_parameters(&reader, &cfg).await;
+        apply_parameters(&reader, &cfg, &me).await;
         let i_am_recorded = recorded == me;
         match st.in_recovery {
             // A restoring instance is in recovery *and* recorded as primary,
@@ -145,7 +145,7 @@ pub async fn follow(reader: RecordReader, cfg: std::sync::Arc<Config>, me: Strin
 /// Apply everything the spec drives on this instance: user parameters,
 /// archiving, pg_hba rules, and the backup repository config. Reload-safe
 /// settings take effect at once; the rest surface as pending_restart.
-async fn apply_parameters(reader: &RecordReader, cfg: &Config) {
+async fn apply_parameters(reader: &RecordReader, cfg: &Config, me: &str) {
     let Some(spec) = reader.spec().await else {
         return;
     };
@@ -177,6 +177,13 @@ async fn apply_parameters(reader: &RecordReader, cfg: &Config) {
         Ok(true) => changed = true,
         Ok(false) => {}
         Err(err) => tracing::warn!(%err, "failed to write pg_hba.conf"),
+    }
+
+    let sync = pglord_core::sync::render(&cfg.cluster, spec.replicas, me, spec.synchronous);
+    match crate::params::write_sync_if_changed(&cfg.pgdata, &sync) {
+        Ok(true) => changed = true,
+        Ok(false) => {}
+        Err(err) => tracing::warn!(%err, "failed to write sync replication settings"),
     }
 
     if spec.backup.enabled {

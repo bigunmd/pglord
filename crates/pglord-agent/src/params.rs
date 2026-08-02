@@ -12,6 +12,10 @@ pub const PARAMS_FILE: &str = "postgresql.pglord.conf";
 /// Archiving settings, written separately so enabling backups does not touch
 /// the user's parameter file (and so it can be cleared independently).
 pub const ARCHIVE_FILE: &str = "postgresql.pglord-archive.conf";
+/// Synchronous-replication settings, one file per instance: each instance's
+/// peer list excludes itself, so a promoted standby already carries the right
+/// value (see pglord_core::sync::render).
+pub const SYNC_FILE: &str = "postgresql.pglord-sync.conf";
 
 /// Rendered archiving settings: on with a pgBackRest archive_command when
 /// backups are configured, explicitly off when they are not.
@@ -46,6 +50,11 @@ fn write_file_if_changed(path: &Path, rendered: &str) -> std::io::Result<bool> {
 /// Write the archiving file when it differs; returns whether it changed.
 pub fn write_archive_if_changed(pgdata: &Path, rendered: &str) -> std::io::Result<bool> {
     write_file_if_changed(&pgdata.join(ARCHIVE_FILE), rendered)
+}
+
+/// Write the sync-replication file when it differs; returns whether it changed.
+pub fn write_sync_if_changed(pgdata: &Path, rendered: &str) -> std::io::Result<bool> {
+    write_file_if_changed(&pgdata.join(SYNC_FILE), rendered)
 }
 
 /// Write the rendered parameters, returning whether the content changed.
@@ -121,6 +130,23 @@ mod tests {
             std::fs::read_to_string(dir.join(PARAMS_FILE)).expect("read"),
             ""
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sync_write_is_idempotent_and_targets_the_sync_file() {
+        let dir = tempdir("sync");
+        let on = pglord_core::sync::render("demo", 2, "demo-0", true);
+        assert!(write_sync_if_changed(&dir, &on).expect("write"));
+        // Unchanged content must not report a change: a report triggers a
+        // reload, and this runs on every 5s poll.
+        assert!(!write_sync_if_changed(&dir, &on).expect("write"));
+        assert_eq!(
+            std::fs::read_to_string(dir.join(SYNC_FILE)).expect("read"),
+            on
+        );
+        let off = pglord_core::sync::render("demo", 2, "demo-0", false);
+        assert!(write_sync_if_changed(&dir, &off).expect("write"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

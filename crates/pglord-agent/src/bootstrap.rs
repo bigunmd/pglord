@@ -27,6 +27,7 @@ pub fn postgresql_conf_extra(port: u16) -> String {
         "\n# --- managed by pglord-agent ---\n\
          include_if_exists = '{}'\n\
          include_if_exists = '{}'\n\
+         include_if_exists = '{}'\n\
          listen_addresses = '*'\n\
          port = {port}\n\
          wal_level = replica\n\
@@ -35,6 +36,7 @@ pub fn postgresql_conf_extra(port: u16) -> String {
          wal_log_hints = on\n",
         crate::params::PARAMS_FILE,
         crate::params::ARCHIVE_FILE,
+        crate::params::SYNC_FILE,
     )
 }
 
@@ -310,6 +312,11 @@ async fn bootstrap_standby(cfg: &Config) -> anyhow::Result<()> {
             .await
             .context("spawn pg_basebackup")?;
         if status.success() {
+            // -R writes primary_conninfo without application_name; rewrite it
+            // now so the standby is a nameable sync peer from its first start.
+            let me = std::env::var("HOSTNAME").unwrap_or_default();
+            refresh_conninfo(&cfg.pgdata, &primary_conninfo(cfg, &me))
+                .context("set application_name in primary_conninfo")?;
             tracing::info!("standby bootstrap complete");
             return Ok(());
         }
@@ -351,6 +358,14 @@ mod tests {
         let include_at = conf.find("include_if_exists").expect("include line");
         let wal_level_at = conf.find("wal_level").expect("wal_level line");
         assert!(include_at < wal_level_at);
+        // The sync include follows the same rule as params/archive: included
+        // before the managed settings so it can never override HA settings.
+        assert!(conf.contains("include_if_exists = 'postgresql.pglord-sync.conf'"));
+        let sync_at = conf
+            .find("postgresql.pglord-sync.conf")
+            .expect("sync include present");
+        let managed_at = conf.find("listen_addresses").expect("managed settings");
+        assert!(sync_at < managed_at);
     }
 
     #[test]
