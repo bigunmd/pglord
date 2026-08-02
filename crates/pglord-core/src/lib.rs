@@ -9,6 +9,7 @@ pub mod init;
 pub mod render;
 pub mod restore;
 pub mod spec;
+pub mod sync;
 pub mod workload;
 
 /// Version of the pglord workspace, surfaced by the `/api/v1/version` endpoint.
