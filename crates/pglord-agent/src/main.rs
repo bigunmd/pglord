@@ -82,6 +82,15 @@ async fn main() -> anyhow::Result<()> {
     if let Err(err) = pglord_agent::params::write_standby_if_changed(&cfg.pgdata, &standby_conf) {
         tracing::warn!(%err, "failed to write hot-standby floor settings");
     }
+    // fsGroup ownership fixes add group bits to the data directory, and
+    // postgres refuses to start with them (it demands 0700/0750). Restore the
+    // strict mode after every bootstrap path, right before the check runs.
+    if let Err(err) = std::fs::set_permissions(
+        &cfg.pgdata,
+        std::os::unix::fs::PermissionsExt::from_mode(0o700),
+    ) {
+        tracing::warn!(%err, "failed to set PGDATA permissions");
+    }
     let child = supervisor::spawn_postgres(&cfg)?;
 
     if cfg.role == Role::Primary {

@@ -10,10 +10,10 @@ use k8s_openapi::api::apps::v1::{
 use k8s_openapi::api::core::v1::{
     Affinity, ConfigMapVolumeSource, Container, ContainerPort, EnvVar, EnvVarSource, HTTPGetAction,
     LocalObjectReference, ObjectFieldSelector, PersistentVolumeClaim, PersistentVolumeClaimSpec,
-    PodAffinityTerm, PodAntiAffinity, PodSpec, PodTemplateSpec, Probe, ResourceRequirements,
-    SecretKeySelector, SecretVolumeSource, Service, ServiceAccount, ServicePort, ServiceSpec,
-    Toleration as K8sToleration, Volume, VolumeMount, VolumeResourceRequirements,
-    WeightedPodAffinityTerm,
+    PodAffinityTerm, PodAntiAffinity, PodSecurityContext, PodSpec, PodTemplateSpec, Probe,
+    ResourceRequirements, SecretKeySelector, SecretVolumeSource, Service, ServiceAccount,
+    ServicePort, ServiceSpec, Toleration as K8sToleration, Volume, VolumeMount,
+    VolumeResourceRequirements, WeightedPodAffinityTerm,
 };
 use k8s_openapi::api::rbac::v1::{PolicyRule, Role, RoleBinding, RoleRef, Subject};
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
@@ -494,6 +494,17 @@ pub fn render_statefulset(spec: &ClusterSpec, ns: &str, owner: &OwnerRef) -> Sta
                 }),
                 spec: Some(PodSpec {
                     service_account_name: Some(instance_sa_name(&spec.name)),
+                    // Freshly provisioned volumes are often root-owned; the
+                    // postgres uid/gid in the agent image is 999. fsGroup
+                    // makes the mount writable, OnRootMismatch keeps the
+                    // kubelet from re-chowning a whole database on every
+                    // start. (The agent restores 0700 on PGDATA itself —
+                    // postgres refuses the group bits this adds.)
+                    security_context: Some(PodSecurityContext {
+                        fs_group: Some(999),
+                        fs_group_change_policy: Some("OnRootMismatch".to_string()),
+                        ..Default::default()
+                    }),
                     containers: vec![container],
                     affinity: anti_affinity(spec),
                     node_selector: (!spec.workload.node_selector.is_empty())
@@ -1073,6 +1084,24 @@ mod tests {
             .expect("retention policy");
         assert_eq!(policy.when_deleted.as_deref(), Some("Delete"));
         assert_eq!(policy.when_scaled.as_deref(), Some("Delete"));
+    }
+
+    #[test]
+    fn pods_run_with_the_postgres_fs_group() {
+        // Freshly provisioned volumes are often root-owned; without fsGroup
+        // a standby rebuild cannot even create PGDATA. OnRootMismatch keeps
+        // the kubelet from re-chowning a whole database on every start.
+        let (spec, owner) = demo();
+        let sc = render_statefulset(&spec, "ns", &owner)
+            .spec
+            .expect("spec")
+            .template
+            .spec
+            .expect("pod")
+            .security_context
+            .expect("security context");
+        assert_eq!(sc.fs_group, Some(999));
+        assert_eq!(sc.fs_group_change_policy.as_deref(), Some("OnRootMismatch"));
     }
 
     #[test]
