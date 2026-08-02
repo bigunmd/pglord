@@ -140,6 +140,88 @@ pub fn validate(roles: &[RoleSpec], databases: &[DatabaseSpec]) -> Result<(), Pr
     Ok(())
 }
 
+/// CREATE or ALTER for one role. Identifiers were validated by
+/// [`validate`], passwords by the agent's charset check; both charsets make
+/// plain interpolation safe. `password: Some` appends the PASSWORD clause
+/// (re-applied every ensure — that is what makes Secret edits converge);
+/// `None` leaves any existing password untouched.
+pub fn role_ddl(role: &RoleSpec, exists: bool, password: Option<&str>) -> String {
+    let verb = if exists { "ALTER" } else { "CREATE" };
+    let mut ddl = format!(
+        "{verb} ROLE \"{name}\" WITH {login} {createdb} {createrole} CONNECTION LIMIT {limit}",
+        name = role.name,
+        login = if role.login { "LOGIN" } else { "NOLOGIN" },
+        createdb = if role.createdb {
+            "CREATEDB"
+        } else {
+            "NOCREATEDB"
+        },
+        createrole = if role.createrole {
+            "CREATEROLE"
+        } else {
+            "NOCREATEROLE"
+        },
+        limit = role.connection_limit.unwrap_or(-1),
+    );
+    if let Some(pw) = password {
+        ddl.push_str(&format!(" PASSWORD $pglord${pw}$pglord$"));
+    }
+    ddl
+}
+
+/// A role membership as a (member, group) pair.
+pub type Membership = (String, String);
+
+/// Membership diff among *declared* roles: (grants, revokes) of
+/// (member, group) pairs. `current` must already be filtered to pairs where
+/// both sides are declared — the agent's query does that — so a membership
+/// granted out-of-band to an unmanaged role is never revoked. Sorted for
+/// deterministic DDL order.
+pub fn membership_changes(
+    roles: &[RoleSpec],
+    current: &[Membership],
+) -> (Vec<Membership>, Vec<Membership>) {
+    use std::collections::BTreeSet;
+    let desired: BTreeSet<(String, String)> = roles
+        .iter()
+        .flat_map(|r| {
+            r.in_roles
+                .iter()
+                .map(|g| (r.name.clone(), g.clone()))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let current: BTreeSet<(String, String)> = current.iter().cloned().collect();
+    let grants = desired.difference(&current).cloned().collect();
+    let revokes = current.difference(&desired).cloned().collect();
+    (grants, revokes)
+}
+
+pub fn grant_sql(member: &str, group: &str) -> String {
+    format!("GRANT \"{group}\" TO \"{member}\"")
+}
+
+pub fn revoke_sql(member: &str, group: &str) -> String {
+    format!("REVOKE \"{group}\" FROM \"{member}\"")
+}
+
+/// What to run for one database, given who owns it right now (`None` =
+/// absent). CREATE DATABASE cannot run inside a transaction, so the caller
+/// executes each statement on its own.
+pub fn database_ddl(db: &DatabaseSpec, current_owner: Option<&str>) -> Option<String> {
+    match current_owner {
+        None => Some(format!(
+            "CREATE DATABASE \"{}\" OWNER \"{}\"",
+            db.name, db.owner
+        )),
+        Some(owner) if owner != db.owner => Some(format!(
+            "ALTER DATABASE \"{}\" OWNER TO \"{}\"",
+            db.name, db.owner
+        )),
+        Some(_) => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -234,6 +316,76 @@ mod tests {
             validate(&[r], &[]).is_ok(),
             "-1 is postgres's own unlimited"
         );
+    }
+
+    #[test]
+    fn role_ddl_renders_all_attributes() {
+        let r: RoleSpec = serde_json::from_value(serde_json::json!({
+            "name": "app_rw", "createdb": true, "connection_limit": 5
+        }))
+        .expect("role");
+        let ddl = role_ddl(&r, false, Some("pw-1"));
+        assert!(ddl.starts_with("CREATE ROLE \"app_rw\""));
+        assert!(ddl.contains("LOGIN"));
+        assert!(ddl.contains("CREATEDB"));
+        assert!(ddl.contains("NOCREATEROLE"));
+        assert!(ddl.contains("CONNECTION LIMIT 5"));
+        assert!(ddl.contains("PASSWORD $pglord$pw-1$pglord$"));
+        let alter = role_ddl(&r, true, None);
+        assert!(alter.starts_with("ALTER ROLE \"app_rw\""));
+        assert!(!alter.contains("PASSWORD"), "no clause without a value");
+        let r2: RoleSpec =
+            serde_json::from_value(serde_json::json!({ "name": "a", "login": false }))
+                .expect("role");
+        let ddl2 = role_ddl(&r2, false, None);
+        assert!(ddl2.contains("NOLOGIN"));
+        assert!(ddl2.contains("CONNECTION LIMIT -1"));
+    }
+
+    #[test]
+    fn membership_diff_grants_and_revokes_only_among_declared() {
+        let roles: Vec<RoleSpec> = serde_json::from_value(serde_json::json!([
+            { "name": "reporting" },
+            { "name": "app_rw", "in_roles": ["reporting"] },
+            { "name": "app_ro" }
+        ]))
+        .expect("roles");
+        // current: app_ro is in reporting (stale), app_rw not yet granted.
+        let current = vec![("app_ro".to_string(), "reporting".to_string())];
+        let (grants, revokes) = membership_changes(&roles, &current);
+        assert_eq!(
+            grants,
+            vec![("app_rw".to_string(), "reporting".to_string())]
+        );
+        assert_eq!(
+            revokes,
+            vec![("app_ro".to_string(), "reporting".to_string())]
+        );
+        assert_eq!(
+            grant_sql("app_rw", "reporting"),
+            "GRANT \"reporting\" TO \"app_rw\""
+        );
+        assert_eq!(
+            revoke_sql("app_ro", "reporting"),
+            "REVOKE \"reporting\" FROM \"app_ro\""
+        );
+    }
+
+    #[test]
+    fn database_ddl_creates_then_converges_owner() {
+        let db = DatabaseSpec {
+            name: "appdb".into(),
+            owner: "app_rw".into(),
+        };
+        assert_eq!(
+            database_ddl(&db, None).as_deref(),
+            Some("CREATE DATABASE \"appdb\" OWNER \"app_rw\"")
+        );
+        assert_eq!(
+            database_ddl(&db, Some("old_owner")).as_deref(),
+            Some("ALTER DATABASE \"appdb\" OWNER TO \"app_rw\"")
+        );
+        assert_eq!(database_ddl(&db, Some("app_rw")), None, "converged no-op");
     }
 
     #[test]
