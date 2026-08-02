@@ -29,9 +29,11 @@ impl HbaConn {
     }
 }
 
-/// Deliberately small: cert needs TLS (not built), ldap/radius need auth
-/// options this schema does not carry, md5 is deprecated. Growing the list
-/// later is backwards-compatible; shrinking it is not.
+/// Deliberately small: ldap/radius need auth options this schema does not
+/// carry, md5 is deprecated. Growing the list later is backwards-compatible;
+/// shrinking it is not. `cert` authenticates by client certificate (CN =
+/// role name, verify-full); it is only meaningful over TLS, so it is valid
+/// only on `hostssl` rules and only when the cluster has TLS enabled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub enum HbaMethod {
     #[serde(rename = "scram-sha-256")]
@@ -40,6 +42,8 @@ pub enum HbaMethod {
     Reject,
     #[serde(rename = "trust")]
     Trust,
+    #[serde(rename = "cert")]
+    Cert,
 }
 
 impl HbaMethod {
@@ -48,6 +52,7 @@ impl HbaMethod {
             HbaMethod::ScramSha256 => "scram-sha-256",
             HbaMethod::Reject => "reject",
             HbaMethod::Trust => "trust",
+            HbaMethod::Cert => "cert",
         }
     }
 }
@@ -81,6 +86,8 @@ pub enum HbaError {
          or one of all, samehost, samenet (hostnames are not supported)"
     )]
     BadAddress(String),
+    #[error("pg_hba method 'cert' requires connection type 'hostssl'")]
+    CertRequiresHostSsl,
 }
 
 pub fn validate_rules(rules: &[HbaRule]) -> Result<(), HbaError> {
@@ -91,6 +98,11 @@ pub fn validate_rules(rules: &[HbaRule]) -> Result<(), HbaError> {
         check_token("database", &rule.database, &["all", "replication"])?;
         check_token("user", &rule.user, &["all"])?;
         check_address(&rule.address)?;
+        // cert auth happens during the TLS handshake; on a plain `host` line
+        // it could never succeed and would read as a silent lockout.
+        if rule.method == HbaMethod::Cert && rule.conn != HbaConn::HostSsl {
+            return Err(HbaError::CertRequiresHostSsl);
+        }
     }
     Ok(())
 }
@@ -265,6 +277,41 @@ mod tests {
                 "expected BadAddress for '{addr}'"
             );
         }
+    }
+
+    #[test]
+    fn cert_is_valid_only_on_hostssl_rules() {
+        let ok = vec![rule(
+            HbaConn::HostSsl,
+            "app",
+            "app_rw",
+            "10.0.0.0/8",
+            HbaMethod::Cert,
+        )];
+        assert_eq!(validate_rules(&ok), Ok(()));
+        for conn in [HbaConn::Host, HbaConn::HostNoSsl] {
+            let bad = vec![rule(conn, "all", "all", "all", HbaMethod::Cert)];
+            assert_eq!(validate_rules(&bad), Err(HbaError::CertRequiresHostSsl));
+        }
+    }
+
+    #[test]
+    fn cert_renders_with_its_pg_hba_spelling() {
+        let rules = vec![rule(
+            HbaConn::HostSsl,
+            "app",
+            "app_rw",
+            "10.0.0.0/8",
+            HbaMethod::Cert,
+        )];
+        let out = render(&rules, "replicator", true);
+        assert!(out.contains("hostssl app app_rw 10.0.0.0/8 cert\n"));
+        let parsed: HbaRule = serde_json::from_str(
+            r#"{"conn":"hostssl","database":"app","user":"app_rw",
+                "address":"10.0.0.0/8","method":"cert"}"#,
+        )
+        .expect("deserialize");
+        assert_eq!(parsed.method, HbaMethod::Cert);
     }
 
     #[test]
