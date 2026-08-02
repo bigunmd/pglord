@@ -82,6 +82,8 @@ pub enum SpecError {
     InvalidReplicas(u8),
     #[error("invalid storage size '{0}': expected e.g. '1Gi', '500Mi'")]
     InvalidStorage(String),
+    #[error("image must not be empty")]
+    InvalidImage,
     #[error("storage cannot shrink: {from} -> {to}")]
     StorageShrink { from: String, to: String },
     #[error("unknown PostgreSQL setting '{0}'")]
@@ -113,9 +115,8 @@ pub enum SpecError {
     InvalidCredentialsSecret(String),
 }
 
-/// The fields a running cluster may change. Name and image are deliberately
-/// absent: renaming would orphan every derived object, and image changes are a
-/// rolling-upgrade concern with its own (future) workflow.
+/// The fields a running cluster may change. Name is deliberately absent:
+/// renaming would orphan every derived object.
 ///
 /// `credentials_secret` is absent for a subtler reason. Pointing a running
 /// cluster at a different Secret would change the password the agent presents
@@ -129,6 +130,11 @@ pub struct SpecChange {
     pub replicas: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub storage_size: Option<String>,
+    /// Change the instance image. Rolls every instance, standbys first,
+    /// primary last. Same-major images only — the agent refuses to start a
+    /// data directory created by a different PostgreSQL major version.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
     /// Toggle synchronous replication. Reload-only: no restart, no roll.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub synchronous: Option<bool>,
@@ -195,6 +201,9 @@ impl ClusterSpec {
             }
             next.storage_size = storage.clone();
         }
+        if let Some(image) = &change.image {
+            next.image = image.clone();
+        }
         if let Some(synchronous) = change.synchronous {
             next.synchronous = synchronous;
         }
@@ -227,6 +236,9 @@ impl ClusterSpec {
         }
         if self.replicas < 1 || self.replicas > MAX_REPLICAS {
             return Err(SpecError::InvalidReplicas(self.replicas));
+        }
+        if self.image.trim().is_empty() {
+            return Err(SpecError::InvalidImage);
         }
         if !is_quantity(&self.storage_size) {
             return Err(SpecError::InvalidStorage(self.storage_size.clone()));
@@ -388,6 +400,33 @@ mod tests {
                 ..Default::default()
             }),
             Err(SpecError::InvalidReplicas(9))
+        ));
+    }
+
+    #[test]
+    fn image_change_is_applied() {
+        let s = spec("demo");
+        let next = s
+            .apply_change(&SpecChange {
+                image: Some("pglord-agent:v2".into()),
+                ..Default::default()
+            })
+            .expect("apply");
+        assert_eq!(next.image, "pglord-agent:v2");
+    }
+
+    #[test]
+    fn empty_image_is_rejected() {
+        let mut s = spec("demo");
+        s.image = "  ".into();
+        assert!(matches!(s.validate(), Err(SpecError::InvalidImage)));
+        // And via a change on a valid spec, so the patch path rejects too.
+        assert!(matches!(
+            spec("demo").apply_change(&SpecChange {
+                image: Some(String::new()),
+                ..Default::default()
+            }),
+            Err(SpecError::InvalidImage)
         ));
     }
 

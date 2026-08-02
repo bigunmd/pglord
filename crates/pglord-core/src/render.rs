@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 
 use k8s_openapi::api::apps::v1::{
     StatefulSet, StatefulSetPersistentVolumeClaimRetentionPolicy, StatefulSetSpec,
+    StatefulSetUpdateStrategy,
 };
 use k8s_openapi::api::core::v1::{
     Affinity, ConfigMapVolumeSource, Container, ContainerPort, EnvVar, EnvVarSource, HTTPGetAction,
@@ -467,6 +468,12 @@ pub fn render_statefulset(spec: &ClusterSpec, ns: &str, owner: &OwnerRef) -> Sta
         spec: Some(StatefulSetSpec {
             replicas: Some(i32::from(spec.replicas)),
             service_name: Some(headless_service_name(&spec.name)),
+            // pglord owns rolls (standbys first, primary last, ready-gated);
+            // the controller must not race it on template changes.
+            update_strategy: Some(StatefulSetUpdateStrategy {
+                type_: Some("OnDelete".to_string()),
+                rolling_update: None,
+            }),
             // PVCs created from volumeClaimTemplates carry no ownerReferences,
             // so without this they outlive the cluster as orphaned storage.
             persistent_volume_claim_retention_policy: Some(
@@ -1066,6 +1073,19 @@ mod tests {
             .expect("retention policy");
         assert_eq!(policy.when_deleted.as_deref(), Some("Delete"));
         assert_eq!(policy.when_scaled.as_deref(), Some("Delete"));
+    }
+
+    #[test]
+    fn statefulset_updates_only_on_delete() {
+        // pglord owns rolls (standbys first, primary last); the controller
+        // rolling highest-ordinal-first on template changes would race it.
+        let (spec, owner) = demo();
+        let strategy = render_statefulset(&spec, "ns", &owner)
+            .spec
+            .expect("spec")
+            .update_strategy
+            .expect("update strategy");
+        assert_eq!(strategy.type_.as_deref(), Some("OnDelete"));
     }
 
     #[test]
