@@ -6,6 +6,7 @@ pub mod env;
 pub mod guc;
 pub mod hba;
 pub mod init;
+pub mod pooler;
 pub mod render;
 pub mod restore;
 pub mod spec;

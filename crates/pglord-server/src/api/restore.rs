@@ -59,6 +59,10 @@ pub fn restored_spec(source: &ClusterSpec, req: &RestoreRequest) -> ClusterSpec 
         // The certificate's DNS names still name the source, so clients doing
         // verify-full need a new cert — but the wire stays encrypted meanwhile.
         tls: source.tls.clone(),
+        // Carried over: the restored copy serves the same clients, so it needs
+        // the same pooling shape. The pooler role is re-ensured by the
+        // reconciler once the new primary is up.
+        pooler: source.pooler.clone(),
         workload: source.workload.clone(),
         // Carried over: whatever ran against the source's data expects these.
         env: source.env.clone(),

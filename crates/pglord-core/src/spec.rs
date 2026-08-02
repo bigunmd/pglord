@@ -67,6 +67,10 @@ pub struct ClusterSpec {
     /// (the cert mount changes the pod template).
     #[serde(default)]
     pub tls: crate::tls::TlsSpec,
+    /// Managed PgBouncer in front of the primary. Pooler changes never touch
+    /// the postgres instances.
+    #[serde(default)]
+    pub pooler: crate::pooler::PoolerSpec,
 }
 
 fn default_image() -> String {
@@ -122,6 +126,8 @@ pub enum SpecError {
     InvalidTls(#[from] crate::tls::TlsError),
     #[error("pg_hba method 'cert' requires TLS to be enabled on the cluster")]
     CertRequiresTls,
+    #[error("{0}")]
+    InvalidPooler(#[from] crate::pooler::PoolerError),
 }
 
 /// The fields a running cluster may change. Name is deliberately absent:
@@ -175,6 +181,10 @@ pub struct SpecChange {
     /// Either direction rolls the instances.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tls: Option<crate::tls::TlsSpec>,
+    /// Full replacement of the pooler block. An empty block disables the
+    /// pooler and deletes its objects; instances are unaffected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pooler: Option<crate::pooler::PoolerSpec>,
 }
 
 /// Size in bytes for comparison; None when the quantity is malformed.
@@ -242,6 +252,9 @@ impl ClusterSpec {
         if let Some(tls) = &change.tls {
             next.tls = tls.clone();
         }
+        if let Some(pooler) = &change.pooler {
+            next.pooler = pooler.clone();
+        }
         next.validate()?;
         Ok(next)
     }
@@ -295,6 +308,7 @@ impl ClusterSpec {
         crate::env::validate(&self.env)?;
         crate::init::validate(&self.init)?;
         crate::tls::validate(&self.tls)?;
+        crate::pooler::validate(&self.pooler)?;
         if !self.tls.enabled()
             && self
                 .pg_hba
@@ -368,6 +382,34 @@ mod tests {
         let clear: SpecChange =
             serde_json::from_value(serde_json::json!({ "tls": {} })).expect("change");
         assert!(!with_tls.apply_change(&clear).expect("apply").tls.enabled());
+    }
+
+    #[test]
+    fn pooler_block_is_replace_wholesale() {
+        let base = spec("demo");
+        let change: SpecChange = serde_json::from_value(serde_json::json!({
+            "pooler": { "enabled": true, "replicas": 2 }
+        }))
+        .expect("change");
+        let with = base.apply_change(&change).expect("apply");
+        assert!(with.pooler.enabled);
+        assert_eq!(with.pooler.replicas, 2);
+        // Absent leaves untouched; an explicit default block disables.
+        assert!(
+            with.apply_change(&SpecChange::default())
+                .expect("apply")
+                .pooler
+                .enabled
+        );
+        let clear: SpecChange =
+            serde_json::from_value(serde_json::json!({ "pooler": {} })).expect("change");
+        assert!(!with.apply_change(&clear).expect("apply").pooler.enabled);
+        // apply_change validates: out-of-bounds knobs are rejected.
+        let bad: SpecChange = serde_json::from_value(serde_json::json!({
+            "pooler": { "enabled": true, "replicas": 0 }
+        }))
+        .expect("change");
+        assert!(base.apply_change(&bad).is_err());
     }
 
     #[test]
