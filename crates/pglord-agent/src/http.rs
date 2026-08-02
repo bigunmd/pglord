@@ -21,6 +21,7 @@ pub fn router(cfg: Arc<Config>) -> Router {
         .route("/metrics", get(metrics))
         .route("/promote", post(promote))
         .route("/roles/apply", post(apply_roles))
+        .route("/pooler/ensure", post(ensure_pooler))
         .route("/backup", post(take_backup))
         .route("/backups", get(list_backups))
         .with_state(cfg)
@@ -179,6 +180,42 @@ async fn apply_roles(
     }
 }
 
+#[derive(serde::Deserialize)]
+struct PoolerEnsureRequest {
+    password: String,
+}
+
+/// Ensure the pooler auth role and lookup function. Primary only, same guard
+/// as `/roles/apply`: role and function DDL replicate to standbys.
+async fn ensure_pooler(
+    State(cfg): State<Arc<Config>>,
+    Json(req): Json<PoolerEnsureRequest>,
+) -> impl IntoResponse {
+    if !crate::postboot::is_safe_password(&req.password) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "passwords may only contain [A-Za-z0-9_-]" })),
+        );
+    }
+    let st = status::query_status(&cfg).await;
+    if st.in_recovery != Some(false) {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": "pooler setup runs on the primary only" })),
+        );
+    }
+    match crate::postboot::ensure_pooler(&cfg, &req.password).await {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "status": "applied" })),
+        ),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": err.to_string() })),
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,6 +243,36 @@ mod tests {
             .await
             .expect("response");
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn pooler_ensure_rejects_unsafe_passwords_without_touching_postgres() {
+        let resp = test_router()
+            .oneshot(
+                Request::post("/pooler/ensure")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"password":"has$pglord$end"}"#))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn pooler_ensure_refuses_when_not_provably_primary() {
+        // No postgres in unit tests: status.in_recovery is None, which must
+        // read as "not the primary" and refuse.
+        let resp = test_router()
+            .oneshot(
+                Request::post("/pooler/ensure")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"password":"aB3-x_9"}"#))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
     }
 
     #[tokio::test]

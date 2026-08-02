@@ -162,6 +162,47 @@ pub async fn apply_passwords(
     Ok(())
 }
 
+/// Idempotently ensure everything PgBouncer's `auth_query` needs, in the
+/// `postgres` database (`connect_local` targets it — matching the pooler's
+/// `auth_dbname = postgres`): the `pglord_pooler` role with the given
+/// password, the `pglord` schema, and a SECURITY DEFINER lookup over
+/// `pg_shadow` that only that role may execute.
+pub async fn ensure_pooler(cfg: &Config, password: &str) -> anyhow::Result<()> {
+    if !is_safe_password(password) {
+        anyhow::bail!("pooler password may only contain [A-Za-z0-9_-]");
+    }
+    let (client, conn_task) = connect_local(cfg).await?;
+    let exists: bool = client
+        .query_one(
+            "SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname = 'pglord_pooler')",
+            &[],
+        )
+        .await?
+        .get(0);
+    let verb = if exists { "ALTER" } else { "CREATE" };
+    client
+        .batch_execute(&format!(
+            "{verb} ROLE \"pglord_pooler\" WITH LOGIN PASSWORD $pglord${password}$pglord$"
+        ))
+        .await?;
+    client
+        .batch_execute(
+            "CREATE SCHEMA IF NOT EXISTS pglord;\n\
+             REVOKE ALL ON SCHEMA pglord FROM PUBLIC;\n\
+             GRANT USAGE ON SCHEMA pglord TO \"pglord_pooler\";\n\
+             CREATE OR REPLACE FUNCTION pglord.pooler_lookup(uname text)\n\
+             RETURNS TABLE (usename name, passwd text)\n\
+             LANGUAGE sql SECURITY DEFINER AS\n\
+             $fn$ SELECT usename, passwd FROM pg_shadow WHERE usename = uname $fn$;\n\
+             REVOKE ALL ON FUNCTION pglord.pooler_lookup(text) FROM PUBLIC;\n\
+             GRANT EXECUTE ON FUNCTION pglord.pooler_lookup(text) TO \"pglord_pooler\";",
+        )
+        .await?;
+    drop(client);
+    conn_task.abort();
+    Ok(())
+}
+
 async fn try_ensure(cfg: &Config, reset_superuser: bool) -> anyhow::Result<()> {
     let (client, conn_task) = connect_local(cfg).await?;
     ensure_repl_role(&client, &cfg.repl_user, &cfg.repl_password).await?;
