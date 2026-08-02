@@ -118,6 +118,18 @@
     "restartTitle": "Restart {{name}}?",
     "restartWarning": "Instances restart one at a time, standbys first and the primary last. Connections drop briefly as each instance comes back."
   },
+  "sync": {
+    "title": "Synchronous replication",
+    "enable": "Enable",
+    "disable": "Disable",
+    "enableTitle": "Enable synchronous replication on {{name}}?",
+    "enableWarning": "Every commit will wait until a standby confirms it. If no standby is connected, writes block until one returns. Applies with a reload — no restart.",
+    "disableTitle": "Disable synchronous replication on {{name}}?",
+    "disableWarning": "Commits will no longer wait for a standby. A primary failure can lose the most recent commits.",
+    "on": "On — commits wait for any one standby ({{count}} connected).",
+    "off": "Off — replication is asynchronous.",
+    "degraded": "No synchronous standby is connected — writes are blocked until one returns."
+  },
   "hba": {
     "title": "Client access rules",
     "edit": "Edit access rules",

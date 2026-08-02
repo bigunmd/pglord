@@ -139,6 +139,37 @@ export class RotateCredentialsDialogComponent {
   protected readonly name = injectBrnDialogContext<{ name: string }>().name;
 }
 
+/** Confirm toggling synchronous replication; the warning states the
+ * strict-blocking trade-off plainly. */
+@Component({
+  selector: 'pg-sync-dialog',
+  imports: [TranslocoModule, HlmButton, HlmDialogFooter, HlmDialogHeader, HlmDialogTitle],
+  template: `
+    <div hlmDialogHeader>
+      <h2 hlmDialogTitle>
+        {{ (enable ? 'sync.enableTitle' : 'sync.disableTitle') | transloco: { name: name } }}
+      </h2>
+    </div>
+    <p class="text-muted-foreground py-2 text-sm">
+      {{ (enable ? 'sync.enableWarning' : 'sync.disableWarning') | transloco }}
+    </p>
+    <div hlmDialogFooter>
+      <button hlmBtn variant="ghost" (click)="ref.close(false)">
+        {{ 'common.cancel' | transloco }}
+      </button>
+      <button hlmBtn data-testid="confirm-sync" (click)="ref.close(true)">
+        {{ (enable ? 'sync.enable' : 'sync.disable') | transloco }}
+      </button>
+    </div>
+  `,
+})
+export class SyncDialogComponent {
+  protected readonly ref = inject<BrnDialogRef<boolean>>(BrnDialogRef);
+  private readonly ctx = injectBrnDialogContext<{ name: string; enable: boolean }>();
+  protected readonly name = this.ctx.name;
+  protected readonly enable = this.ctx.enable;
+}
+
 @Component({
   selector: 'pg-cluster-detail',
   imports: [
@@ -633,6 +664,40 @@ export class RotateCredentialsDialogComponent {
           <p class="text-muted-foreground mt-2 text-sm">{{ 'config.usingDefaults' | transloco }}</p>
         }
 
+        <!-- Synchronous replication -->
+        <div class="mt-6 flex items-center justify-between">
+          <h2 class="font-medium">{{ 'sync.title' | transloco }}</h2>
+          <button
+            hlmBtn
+            variant="outline"
+            size="sm"
+            data-testid="toggle-sync"
+            [disabled]="busy()"
+            (click)="openSync(d)"
+          >
+            <ng-icon name="lucideRefreshCw" size="14" />
+            {{ (d.synchronous ? 'sync.disable' : 'sync.enable') | transloco }}
+          </button>
+        </div>
+
+        @if (d.sync_degraded) {
+          <div
+            class="border-warning mt-2 flex items-center gap-2 rounded-lg border p-3 text-sm"
+            data-testid="sync-degraded-banner"
+          >
+            <ng-icon name="lucideTriangleAlert" size="18" class="text-warning" />
+            <span>{{ 'sync.degraded' | transloco }}</span>
+          </div>
+        }
+
+        <p class="text-muted-foreground mt-2 text-sm" data-testid="sync-state">
+          {{
+            d.synchronous
+              ? ('sync.on' | transloco: { count: syncStandbys(d) ?? '?' })
+              : ('sync.off' | transloco)
+          }}
+        </p>
+
         <!-- Client access rules -->
         <div class="mt-6 flex items-center justify-between">
           <h2 class="font-medium">{{ 'hba.title' | transloco }}</h2>
@@ -877,6 +942,27 @@ export class ClusterDetailComponent implements OnDestroy {
     }
     await this.run(() =>
       this.api.invoke(patchCluster, { name: this.name(), body: { pg_hba: rules } }),
+    );
+  }
+
+  /** The primary's connected-sync-standby count, if it is reporting one. */
+  protected syncStandbys(d: ClusterDetail): number | null {
+    const p = d.instances?.find((i) => i.pod === d.primary);
+    return p?.sync_standby_count ?? null;
+  }
+
+  async openSync(d: ClusterDetail): Promise<void> {
+    const enable = !d.synchronous;
+    const confirmed = await firstValueFrom(
+      this.dialog.open<boolean>(SyncDialogComponent, {
+        context: { name: this.name(), enable },
+      }).closed$,
+    );
+    if (!confirmed) {
+      return;
+    }
+    await this.run(() =>
+      this.api.invoke(patchCluster, { name: this.name(), body: { synchronous: enable } }),
     );
   }
 
