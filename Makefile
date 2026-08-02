@@ -82,6 +82,9 @@ config-e2e: ## Minikube e2e: live settings, pending restart, rolling restart
 pooler-e2e: ## Minikube e2e: pgbouncer pool, auth_query, failover, disable
 	./scripts/pooler-e2e.sh
 
+provision-e2e: ## Minikube e2e: declared roles/databases converge and survive
+	./scripts/provision-e2e.sh
+
 workload-e2e: ## Minikube e2e: labels, resources and anti-affinity on pods
 	./scripts/workload-e2e.sh
 

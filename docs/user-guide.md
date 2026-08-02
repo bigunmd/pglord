@@ -549,6 +549,48 @@ If you supply your own credentials Secret, add a `pooler-password` key before
 enabling the pooler — the Secrets table on the cluster page lists it as
 required.
 
+### Roles and databases
+
+**Edit roles & databases** on the cluster page declares application roles and
+databases that pglord creates and keeps in line on the primary — after
+failovers and restores too. Unlike init scripts, declarations converge:
+edit them any time and the change lands within a reconcile pass, with no
+restarts.
+
+```jsonc
+"roles": [
+  { "name": "reporting", "login": false },
+  { "name": "app_rw",
+    "password_secret": { "name": "app-creds", "key": "password" },
+    "in_roles": ["reporting"] }
+],
+"databases": [
+  { "name": "appdb", "owner": "app_rw" }
+]
+```
+
+Passwords come from Secrets you own — the spec never carries one. Create the
+Secret first (it appears in the cluster's Secrets table as required):
+
+```bash
+kubectl -n pglord create secret generic app-creds --from-literal=password='s3cret'
+```
+
+To rotate a role's password, edit the Secret; the next reconcile pass applies
+it. Roles may set `login`, `createdb`, `createrole`, `connection_limit` and
+`in_roles` (memberships to other declared roles). Databases name a declared
+role as owner. Names must be lowercase identifiers; `postgres`, `replicator`,
+`pglord_pooler`, `pg_*` and the template databases are reserved.
+
+**The spec is additive.** Removing an entry stops managing it — the role or
+database stays, with its data. pglord never drops anything; deletions remain a
+deliberate manual operation. Declared roles authenticate through the
+[connection pooler](#connection-pooling-pgbouncer) with no extra
+configuration.
+
+For anything beyond roles and databases — schemas, grants, extensions, seed
+data — use init scripts or run SQL directly.
+
 ### Grow storage
 
 **Edit → Storage per instance.** Storage can only grow — Kubernetes cannot
@@ -627,7 +669,10 @@ directory.
 first created. Put `.sql` files in a ConfigMap and name it on the cluster; they
 run in filename order, so name them `01-…`, `02-…`. Use a Secret instead (or as
 well) for SQL containing passwords — a ConfigMap is readable by anyone with
-namespace read access. Secret scripts run after ConfigMap ones.
+namespace read access. Secret scripts run after ConfigMap ones. For roles and
+databases specifically, prefer [declared roles and
+databases](#roles-and-databases) — unlike init scripts, they keep converging
+after creation.
 
 Custom environment variables are available to scripts as psql variables, which
 is how a script uses a password without it ever being written down:
