@@ -8,7 +8,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::backup::{ACCESS_KEY_KEY, SECRET_KEY_KEY};
-use crate::render::{REPLICATION_PASSWORD_KEY, SUPERUSER_PASSWORD_KEY, credentials_secret_name};
+use crate::render::{
+    POOLER_PASSWORD_KEY, REPLICATION_PASSWORD_KEY, SUPERUSER_PASSWORD_KEY, credentials_secret_name,
+};
 use crate::spec::ClusterSpec;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
@@ -70,18 +72,23 @@ pub fn required_resources(spec: &ClusterSpec) -> Vec<RequiredResource> {
     };
 
     // Credentials: generated unless the user pointed the cluster at their own,
-    // in which case they own it and must supply both keys.
+    // in which case they own it and must supply every key. The pooler key is
+    // only demanded when the pooler actually reads it.
     let custom = spec.credentials_secret();
+    let mut credential_keys = vec![
+        SUPERUSER_PASSWORD_KEY.to_string(),
+        REPLICATION_PASSWORD_KEY.to_string(),
+    ];
+    if spec.pooler.enabled {
+        credential_keys.push(POOLER_PASSWORD_KEY.to_string());
+    }
     push(RequiredResource {
         name: custom
             .map(str::to_string)
             .unwrap_or_else(|| credentials_secret_name(&spec.name)),
         kind: ResourceKind::Secret,
         purpose: ResourcePurpose::Credentials,
-        keys: vec![
-            SUPERUSER_PASSWORD_KEY.to_string(),
-            REPLICATION_PASSWORD_KEY.to_string(),
-        ],
+        keys: credential_keys,
         managed: custom.is_none(),
     });
 
@@ -279,6 +286,20 @@ mod tests {
         // No TLS, no requirement.
         let r = required_resources(&spec(serde_json::json!({ "name": "demo" })));
         assert!(!r.iter().any(|x| x.purpose == ResourcePurpose::Tls));
+    }
+
+    #[test]
+    fn an_enabled_pooler_requires_the_pooler_password_key() {
+        let r = required_resources(&spec(serde_json::json!({
+            "name": "demo",
+            "credentials_secret": "my-creds",
+            "pooler": { "enabled": true }
+        })));
+        assert!(r[0].keys.contains(&"pooler-password".to_string()));
+
+        // No pooler, no extra key to send someone off to create.
+        let r = required_resources(&spec(serde_json::json!({ "name": "demo" })));
+        assert!(!r[0].keys.contains(&"pooler-password".to_string()));
     }
 
     #[test]
