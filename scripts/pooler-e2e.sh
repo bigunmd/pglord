@@ -105,15 +105,19 @@ echo "OK auth_query authenticates app roles, wrong password rejected"
 
 echo "==> transaction pooling shares server connections (pool_size=2)"
 prim=$(field "['primary']")
+# Collect the client PIDs: a bare `wait` would also wait for the port-forward
+# background job, which never exits.
+client_pids=()
 for _ in $(seq 1 6); do
   $KUBECTL -n pglord exec ${CL}-0 -- env PGPASSWORD="$SU_PW" \
     psql -h ${CL}-pool -U postgres -tAc "SELECT pg_sleep(6)" >/dev/null 2>&1 &
+  client_pids+=($!)
 done
 sleep 3
 # Network backends as postgres on the primary = pooled server connections
 # (the local-socket harness connections have no client_addr).
 server_conns=$(psql_on "$prim" "SELECT count(*) FROM pg_stat_activity WHERE usename='postgres' AND client_addr IS NOT NULL")
-wait
+wait "${client_pids[@]}" 2>/dev/null || true
 [ -n "$server_conns" ] || { echo "FAIL: could not read pg_stat_activity"; exit 1; }
 [ "$server_conns" -ge 1 ] && [ "$server_conns" -le 2 ] \
   || { echo "FAIL: 6 pooled clients used $server_conns server connections (expected 1..2)"; exit 1; }
