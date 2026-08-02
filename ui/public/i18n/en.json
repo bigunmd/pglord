@@ -183,6 +183,24 @@
     "off": "Off — connections are not encrypted.",
     "instanceOn": "Accepting TLS connections"
   },
+  "pooler": {
+    "title": "Connection pooling",
+    "edit": "Configure pooling",
+    "editTitle": "PgBouncer connection pooling",
+    "explainer": "A managed PgBouncer deployment in front of the primary. Applications connect through the pool service with their usual credentials; pooler changes never restart the postgres instances.",
+    "enable": "Enable PgBouncer",
+    "replicas": "Pooler pods",
+    "poolMode": "Pool mode",
+    "modeTransaction": "Transaction (recommended)",
+    "modeSession": "Session",
+    "modeHelp": "Transaction mode returns server connections to the pool at each transaction end — best for connection-hungry apps, but session state such as prepared statements does not survive between transactions. Session mode keeps one server connection per client.",
+    "maxClientConn": "Max client connections",
+    "defaultPoolSize": "Pool size per database/user",
+    "apply": "Apply",
+    "on": "On — {{ready}}/{{total}} pooler pods ready, {{mode}} mode.",
+    "off": "Off — clients connect directly to the instances.",
+    "connectVia": "Connect via {{service}}:5432"
+  },
   "preflight": {
     "title": "Cluster permissions",
     "intro": "What pglord is allowed to do in its namespace, as reported by the Kubernetes API server.",

@@ -192,6 +192,20 @@ const REPLICA_CHOICES = [1, 2, 3, 4, 5] as const;
               {{ 'tls.serverSecretHelp' | transloco }}
             </p>
           </div>
+
+          <label hlmLabel class="flex items-center gap-2">
+            <input
+              type="checkbox"
+              class="accent-primary"
+              data-testid="create-pooler-enabled"
+              [ngModel]="poolerEnabled()"
+              (ngModelChange)="poolerEnabled.set($event)"
+            />
+            {{ 'pooler.enable' | transloco }}
+          </label>
+          <p class="text-muted-foreground -mt-2 text-xs leading-relaxed">
+            {{ 'pooler.explainer' | transloco }}
+          </p>
         </div>
       }
     </div>
@@ -221,6 +235,7 @@ export class ClusterCreateDialogComponent {
   protected readonly initConfigMap = signal('');
   protected readonly initSecret = signal('');
   protected readonly tlsSecret = signal('');
+  protected readonly poolerEnabled = signal(false);
   protected readonly rows = signal<EnvRow[]>([]);
 
   protected readonly nameValid = computed(() => NAME_RE.test(this.name()));
@@ -244,6 +259,7 @@ export class ClusterCreateDialogComponent {
         scripts_secret: trimmed(this.initSecret()),
       },
       tls: { server_secret: trimmed(this.tlsSecret()) },
+      ...(this.poolerEnabled() ? { pooler: { enabled: true } } : {}),
     });
   }
 }

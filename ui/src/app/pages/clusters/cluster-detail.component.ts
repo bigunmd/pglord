@@ -7,6 +7,7 @@ import {
   lucideArrowLeft,
   lucideCrown,
   lucideLock,
+  lucideNetwork,
   lucidePencil,
   lucidePower,
   lucideRefreshCw,
@@ -63,6 +64,8 @@ import { HbaRule } from '../../api/models/hba-rule';
 import { ClusterWorkloadDialogComponent } from './cluster-workload-dialog.component';
 import { ClusterTlsDialogComponent } from './cluster-tls-dialog.component';
 import { TlsSpec } from '../../api/models/tls-spec';
+import { ClusterPoolerDialogComponent } from './cluster-pooler-dialog.component';
+import { PoolerSpec } from '../../api/models/pooler-spec';
 
 const REFRESH_MS = 5000;
 
@@ -248,6 +251,7 @@ export class ImageDialogComponent {
       lucideArrowLeft,
       lucideCrown,
       lucideLock,
+      lucideNetwork,
       lucidePencil,
       lucidePower,
       lucideRefreshCw,
@@ -850,6 +854,42 @@ export class ImageDialogComponent {
               : ('tls.off' | transloco)
           }}
         </p>
+
+        <!-- Pooler -->
+        <div class="mt-6 flex items-center justify-between">
+          <h2 class="font-medium">{{ 'pooler.title' | transloco }}</h2>
+          <button
+            hlmBtn
+            variant="outline"
+            size="sm"
+            data-testid="open-pooler"
+            [disabled]="busy()"
+            (click)="openPooler(d)"
+          >
+            <ng-icon name="lucideNetwork" size="14" />
+            {{ 'pooler.edit' | transloco }}
+          </button>
+        </div>
+        @if (d.pooler.spec.enabled) {
+          <p class="text-muted-foreground mt-2 text-sm" data-testid="pooler-state">
+            {{
+              'pooler.on'
+                | transloco
+                  : {
+                      ready: d.pooler.ready_replicas,
+                      total: d.pooler.spec.replicas,
+                      mode: d.pooler.spec.pool_mode,
+                    }
+            }}
+          </p>
+          <p class="text-muted-foreground mt-1 font-mono text-xs" data-testid="pooler-connect">
+            {{ 'pooler.connectVia' | transloco: { service: d.pooler.service } }}
+          </p>
+        } @else {
+          <p class="text-muted-foreground mt-2 text-sm" data-testid="pooler-state">
+            {{ 'pooler.off' | transloco }}
+          </p>
+        }
       } @else if (!error()) {
         <p class="text-muted-foreground text-sm">{{ 'common.loading' | transloco }}</p>
       }
@@ -1050,6 +1090,21 @@ export class ClusterDetailComponent implements OnDestroy {
     }
     await this.run(() =>
       this.api.invoke(patchCluster, { name: this.name(), body: { tls: result } }),
+    );
+  }
+
+  async openPooler(d: ClusterDetail): Promise<void> {
+    const result = await firstValueFrom(
+      this.dialog.open<PoolerSpec | undefined>(ClusterPoolerDialogComponent, {
+        context: { pooler: d.pooler?.spec ?? {} },
+        contentClass: FORM_DIALOG_CLASS,
+      }).closed$,
+    );
+    if (!result) {
+      return;
+    }
+    await this.run(() =>
+      this.api.invoke(patchCluster, { name: this.name(), body: { pooler: result } }),
     );
   }
 
