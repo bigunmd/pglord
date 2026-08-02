@@ -76,7 +76,21 @@ pub struct ClusterDetail {
     /// Synchronous replication is on but the primary sees no connected sync
     /// standby: commits are blocking until one reconnects.
     pub sync_degraded: bool,
+    /// Managed PgBouncer in front of the primary.
+    pub pooler: PoolerStatus,
     pub instances: Vec<InstanceDto>,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct PoolerStatus {
+    /// The pooler block as configured (disabled poolers report their inert
+    /// knobs too).
+    pub spec: pglord_core::pooler::PoolerSpec,
+    /// Ready pooler pods, from the Deployment status; 0 when the Deployment
+    /// is absent.
+    pub ready_replicas: i32,
+    /// Service clients connect to, port 5432.
+    pub service: String,
 }
 
 /// Map an agent observation to the user-facing role string.
@@ -260,6 +274,25 @@ pub async fn get_cluster(
         && observations
             .iter()
             .any(|o| o.pod == primary && o.ready && o.sync_standby_count == Some(0));
+    // Deployment status only — never the pooler config Secret's contents.
+    let pooler_ready = if spec.pooler.enabled {
+        let deployments: kube::api::Api<k8s_openapi::api::apps::v1::Deployment> =
+            kube::api::Api::namespaced(ops.kube.clone(), &ops.ns);
+        deployments
+            .get_opt(&pglord_core::render::pooler_deployment_name(&spec.name))
+            .await
+            .map_err(ApiError::internal)?
+            .and_then(|d| d.status)
+            .and_then(|s| s.ready_replicas)
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    let pooler = PoolerStatus {
+        spec: spec.pooler.clone(),
+        ready_replicas: pooler_ready,
+        service: pglord_core::render::pool_service_name(&spec.name),
+    };
     let instances = observations
         .into_iter()
         .map(|o| InstanceDto {
@@ -291,6 +324,7 @@ pub async fn get_cluster(
         pending_restart,
         synchronous: spec.synchronous,
         sync_degraded,
+        pooler,
         instances,
     }))
 }
@@ -338,6 +372,7 @@ fn spec_error(e: SpecError) -> ApiError {
         SpecError::InvalidBackup(_) => "invalid_backup",
         SpecError::InvalidTls(_) => "invalid_tls",
         SpecError::CertRequiresTls => "hba_cert_requires_tls",
+        SpecError::InvalidPooler(_) => "invalid_pooler",
         _ => "invalid_spec",
     };
     ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, code).with_detail(e.to_string())
