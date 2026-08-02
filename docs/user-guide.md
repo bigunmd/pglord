@@ -608,9 +608,71 @@ run prometheus-operator, the Helm chart can create the objects for you:
 default because they require the monitoring.coreos.com CRDs; the raw
 `deploy/k8s/` manifests ship annotations only.
 
+## 11. Authentication
+
+Out of the box the API and UI are **open**: anyone who can reach the server
+has full control, and the server says so loudly in its startup log. Two
+authentication modes can be enabled, separately or together; both arrive as
+`Authorization: Bearer <credential>` headers, so `curl` and CI work the same
+way the UI does. `/healthz`, `/readyz` and `/metrics` always stay open.
+
+### Static API tokens
+
+Set `PGLORD_AUTH_TOKENS` to one or more comma-separated tokens. With the Helm
+chart, point it at a Secret you manage:
+
+```bash
+kubectl -n pglord create secret generic pglord-auth \
+  --from-literal=tokens="$(openssl rand -hex 32)"
+helm upgrade pglord charts/pglord --reuse-values \
+  --set auth.tokens.existingSecret=pglord-auth
+```
+
+The UI shows a token prompt on its sign-in screen; scripts send the header
+directly:
+
+```bash
+curl -H "Authorization: Bearer <token>" http://pglord.example.com/api/v1/clusters
+```
+
+**Rotation without downtime:** add a second token to the Secret
+(`tokens: "new-token,old-token"`), roll every client to the new token, then
+remove the old one. Both are valid while the migration runs.
+
+### OIDC single sign-on
+
+pglord validates JWT access tokens issued by your identity provider
+(Keycloak, Dex, Auth0, Entra ID, …); the UI runs the standard
+authorization-code + PKCE flow as a public client. The server never talks to
+the IdP except to fetch its published signing keys, needs no client secret,
+and stays stateless.
+
+At the IdP, register a **public** client (no secret) with redirect URI
+`<ui-origin>/login/callback` — for Keycloak: client type *OpenID Connect*,
+*Standard flow* on, *Client authentication* off, and the pglord origin in
+*Web origins* (the UI calls the token endpoint from the browser).
+
+Then configure the server:
+
+```bash
+helm upgrade pglord charts/pglord --reuse-values \
+  --set auth.oidc.issuer=https://keycloak.example.com/realms/infra \
+  --set auth.oidc.clientId=pglord
+```
+
+`auth.oidc.audience` defaults to the client ID; set it when your IdP puts a
+different `aud` claim into access tokens. Tokens are accepted when their
+signature matches the issuer's JWKS and `exp`, `iss` and `aud` check out.
+Any valid credential has full admin access — there are no roles yet.
+
+For non-interactive API access with OIDC, either configure a static token
+alongside it, or use your IdP's client-credentials grant and send the
+resulting access token as the bearer.
+
 ## Current limitations
 
-- No authentication in front of the UI — put it behind your ingress auth.
+- Authentication is all-or-nothing: any valid credential is a full admin.
+  There are no viewer/operator roles yet.
 - A restore always creates a new cluster; restoring in place is not supported,
   and the restored cluster starts with backups switched off.
 - Custom images must be built on the pglord agent image; stock `postgres:NN`
