@@ -49,6 +49,7 @@ pub fn restored_spec(source: &ClusterSpec, req: &RestoreRequest) -> ClusterSpec 
         // silent one here would be a nasty surprise.
         image: source.image.clone(),
         storage_size: source.storage_size.clone(),
+        synchronous: source.synchronous,
         parameters: source.parameters.clone(),
         // Same data, same audience: the rules that guarded the source guard
         // its restored copy.

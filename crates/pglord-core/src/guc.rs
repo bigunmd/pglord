@@ -54,6 +54,9 @@ pub const RESERVED: &[&str] = &[
     "hot_standby",
     "wal_log_hints",
     "primary_conninfo",
+    // Driven by the `synchronous` spec flag; a hand-set list would fight the
+    // agent's render and break the strict quorum guarantee.
+    "synchronous_standby_names",
     "hba_file",
     "data_directory",
     // Archiving is driven by the backup configuration, not tuned by hand:

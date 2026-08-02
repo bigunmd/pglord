@@ -23,6 +23,12 @@ pub struct ClusterSpec {
     /// PVC size per instance, e.g. "1Gi".
     #[serde(default = "default_storage_size")]
     pub storage_size: String,
+    /// Every commit waits until any one standby confirms the WAL flush
+    /// (quorum `ANY 1` over all standbys). Strict: with no standby connected,
+    /// writes block rather than silently falling back to async. Requires
+    /// `replicas >= 2`. Applied with a reload — no restart.
+    #[serde(default)]
+    pub synchronous: bool,
     /// PostgreSQL settings applied on top of the defaults. Only settings in the
     /// GUC catalog are accepted; pglord-managed settings are rejected.
     #[serde(default)]
@@ -84,6 +90,13 @@ pub enum SpecError {
     ReservedParameter(String),
     #[error("invalid value for '{name}': {reason}")]
     InvalidParameterValue { name: String, reason: String },
+    #[error("synchronous replication requires at least 2 replicas")]
+    SyncRequiresReplicas,
+    #[error(
+        "synchronous replication conflicts with synchronous_commit = '{0}'; \
+         use 'on', 'remote_write' or 'remote_apply'"
+    )]
+    SyncConflictsSynchronousCommit(String),
     #[error("{0}")]
     InvalidHba(#[from] crate::hba::HbaError),
     #[error("{0}")]
@@ -116,6 +129,9 @@ pub struct SpecChange {
     pub replicas: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub storage_size: Option<String>,
+    /// Toggle synchronous replication. Reload-only: no restart, no roll.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub synchronous: Option<bool>,
     /// Full replacement of the parameter map: settings absent from it are
     /// removed, which is how the UI clears a setting back to its default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -179,6 +195,9 @@ impl ClusterSpec {
             }
             next.storage_size = storage.clone();
         }
+        if let Some(synchronous) = change.synchronous {
+            next.synchronous = synchronous;
+        }
         if let Some(parameters) = &change.parameters {
             next.parameters = parameters.clone();
         }
@@ -223,6 +242,16 @@ impl ClusterSpec {
                 name: name.clone(),
                 reason,
             })?;
+        }
+        if self.synchronous {
+            if self.replicas < 2 {
+                return Err(SpecError::SyncRequiresReplicas);
+            }
+            if let Some(v) = self.parameters.get("synchronous_commit")
+                && matches!(v.as_str(), "off" | "local")
+            {
+                return Err(SpecError::SyncConflictsSynchronousCommit(v.clone()));
+            }
         }
         crate::hba::validate_rules(&self.pg_hba)?;
         crate::workload::validate(&self.workload)?;
@@ -610,6 +639,93 @@ mod tests {
             })
             .expect("apply");
         assert!(cleared.pg_hba.is_empty());
+    }
+
+    #[test]
+    fn sync_requires_at_least_two_replicas() {
+        let mut s = spec("demo");
+        s.synchronous = true;
+        assert_eq!(s.validate(), Err(SpecError::SyncRequiresReplicas));
+        s.replicas = 2;
+        assert_eq!(s.validate(), Ok(()));
+
+        // Scaling a sync cluster down to a single instance would block every
+        // write forever; the same rule catches it on the change path.
+        assert_eq!(
+            s.apply_change(&SpecChange {
+                replicas: Some(1),
+                ..Default::default()
+            }),
+            Err(SpecError::SyncRequiresReplicas)
+        );
+    }
+
+    #[test]
+    fn sync_rejects_parameters_that_defeat_it() {
+        let mut s = spec("demo");
+        s.replicas = 2;
+        s.synchronous = true;
+        for bad in ["off", "local"] {
+            s.parameters = BTreeMap::from([("synchronous_commit".into(), bad.into())]);
+            assert!(
+                matches!(
+                    s.validate(),
+                    Err(SpecError::SyncConflictsSynchronousCommit(_))
+                ),
+                "expected rejection for synchronous_commit={bad}"
+            );
+        }
+        // Stronger-or-equal levels stay legal tuning.
+        for ok in ["on", "remote_write", "remote_apply"] {
+            s.parameters = BTreeMap::from([("synchronous_commit".into(), ok.into())]);
+            assert_eq!(s.validate(), Ok(()), "expected ok for synchronous_commit={ok}");
+        }
+        // With the flag off, 'off' remains an allowed durability trade.
+        s.synchronous = false;
+        s.parameters = BTreeMap::from([("synchronous_commit".into(), "off".into())]);
+        assert_eq!(s.validate(), Ok(()));
+    }
+
+    #[test]
+    fn synchronous_standby_names_is_reserved() {
+        let mut s = spec("demo");
+        s.parameters =
+            BTreeMap::from([("synchronous_standby_names".into(), "ANY 1 (x)".into())]);
+        assert!(matches!(s.validate(), Err(SpecError::ReservedParameter(_))));
+    }
+
+    #[test]
+    fn sync_flag_is_a_day2_toggle() {
+        let mut s = spec("demo");
+        s.replicas = 2;
+        let on = s
+            .apply_change(&SpecChange {
+                synchronous: Some(true),
+                ..Default::default()
+            })
+            .expect("enable");
+        assert!(on.synchronous);
+        // Absent leaves it untouched.
+        let scaled = on
+            .apply_change(&SpecChange {
+                replicas: Some(3),
+                ..Default::default()
+            })
+            .expect("scale");
+        assert!(scaled.synchronous);
+        let off = on
+            .apply_change(&SpecChange {
+                synchronous: Some(false),
+                ..Default::default()
+            })
+            .expect("disable");
+        assert!(!off.synchronous);
+    }
+
+    #[test]
+    fn specs_without_the_sync_flag_parse_as_async() {
+        // Every spec ConfigMap written before this feature lacks the field.
+        assert!(!spec("demo").synchronous);
     }
 
     #[test]
