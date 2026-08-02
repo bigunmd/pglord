@@ -122,6 +122,72 @@ pub fn validate(p: &PoolerSpec) -> Result<(), PoolerError> {
     Ok(())
 }
 
+/// Port PgBouncer listens on inside the pooler pod. The `<name>-pool`
+/// Service still exposes 5432, so client connection strings only change host.
+pub const PGBOUNCER_PORT: i32 = 6432;
+
+/// The managed pgbouncer.ini. Fully pglord-owned: the spec contributes the
+/// curated knobs, nothing else. `auth_dbname = postgres` pins `auth_query`
+/// to the one database where the agent maintains the lookup function,
+/// whatever database the client targets. On TLS clusters the pooler
+/// terminates TLS with the same mounted cert as the instances and requires
+/// TLS upstream, so `hostssl`-only clusters keep working through the pool.
+pub fn pgbouncer_ini(spec: &crate::spec::ClusterSpec) -> String {
+    let p = &spec.pooler;
+    let mut ini = format!(
+        "[databases]\n\
+         * = host={name}-rw port={pg} auth_user={role}\n\
+         \n\
+         [pgbouncer]\n\
+         listen_addr = *\n\
+         listen_port = {port}\n\
+         auth_type = scram-sha-256\n\
+         auth_file = /etc/pgbouncer/userlist.txt\n\
+         auth_user = {role}\n\
+         auth_query = SELECT usename, passwd FROM pglord.pooler_lookup($1)\n\
+         auth_dbname = postgres\n\
+         pool_mode = {mode}\n\
+         max_client_conn = {mcc}\n\
+         default_pool_size = {dps}\n\
+         ignore_startup_parameters = extra_float_digits,options\n",
+        name = spec.name,
+        pg = crate::render::PG_PORT,
+        role = POOLER_ROLE,
+        port = PGBOUNCER_PORT,
+        mode = p.pool_mode.as_ini(),
+        mcc = p.max_client_conn,
+        dps = p.default_pool_size,
+    );
+    if spec.tls.enabled() {
+        ini.push_str(
+            "client_tls_sslmode = allow\n\
+             client_tls_cert_file = /etc/pglord/tls/tls.crt\n\
+             client_tls_key_file = /etc/pglord/tls/tls.key\n\
+             server_tls_sslmode = require\n",
+        );
+    }
+    ini
+}
+
+/// The auth_file. Exactly one entry — the pooler's own role. App roles never
+/// land in a file; they are looked up live via `auth_query`.
+pub fn userlist(password: &str) -> String {
+    format!("\"{POOLER_ROLE}\" \"{password}\"\n")
+}
+
+/// Content hash stamped on the pooler pod template, so any config or
+/// password change rolls the pooler pods. sha256 rather than a std hasher:
+/// the value must be stable across server versions and restarts, or every
+/// server upgrade would churn the pooler.
+pub fn config_hash(ini: &str, userlist: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(ini.as_bytes());
+    hasher.update([0u8]);
+    hasher.update(userlist.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,5 +236,73 @@ mod tests {
         let mut p: PoolerSpec = serde_json::from_value(serde_json::json!({})).expect("p");
         p.replicas = 0;
         assert!(validate(&p).is_ok());
+    }
+
+    #[test]
+    fn ini_targets_rw_service_with_auth_query() {
+        let spec: crate::spec::ClusterSpec = serde_json::from_value(
+            serde_json::json!({ "name": "demo", "pooler": { "enabled": true } }),
+        )
+        .expect("spec");
+        let ini = pgbouncer_ini(&spec);
+        assert!(ini.contains("* = host=demo-rw port=5432 auth_user=pglord_pooler"));
+        assert!(ini.contains("listen_port = 6432"));
+        assert!(ini.contains("auth_type = scram-sha-256"));
+        assert!(ini.contains("auth_query = SELECT usename, passwd FROM pglord.pooler_lookup($1)"));
+        assert!(ini.contains("auth_dbname = postgres"));
+        assert!(ini.contains("pool_mode = transaction"));
+        assert!(ini.contains("max_client_conn = 100"));
+        assert!(ini.contains("default_pool_size = 20"));
+        assert!(
+            !ini.contains("client_tls"),
+            "no tls lines on a plain cluster"
+        );
+    }
+
+    #[test]
+    fn session_mode_and_knobs_reach_the_ini() {
+        let spec: crate::spec::ClusterSpec = serde_json::from_value(serde_json::json!({
+            "name": "demo",
+            "pooler": {
+                "enabled": true,
+                "pool_mode": "session",
+                "max_client_conn": 500,
+                "default_pool_size": 7
+            }
+        }))
+        .expect("spec");
+        let ini = pgbouncer_ini(&spec);
+        assert!(ini.contains("pool_mode = session"));
+        assert!(ini.contains("max_client_conn = 500"));
+        assert!(ini.contains("default_pool_size = 7"));
+    }
+
+    #[test]
+    fn tls_cluster_gets_client_and_server_tls_lines() {
+        let spec: crate::spec::ClusterSpec = serde_json::from_value(serde_json::json!({
+            "name": "demo",
+            "pooler": { "enabled": true },
+            "tls": { "server_secret": "demo-tls" }
+        }))
+        .expect("spec");
+        let ini = pgbouncer_ini(&spec);
+        assert!(ini.contains("client_tls_sslmode = allow"));
+        assert!(ini.contains("client_tls_cert_file = /etc/pglord/tls/tls.crt"));
+        assert!(ini.contains("client_tls_key_file = /etc/pglord/tls/tls.key"));
+        assert!(ini.contains("server_tls_sslmode = require"));
+    }
+
+    #[test]
+    fn userlist_holds_exactly_the_pooler_role() {
+        assert_eq!(userlist("pw-123"), "\"pglord_pooler\" \"pw-123\"\n");
+    }
+
+    #[test]
+    fn config_hash_changes_with_content() {
+        let a = config_hash("ini-a", "ul");
+        assert_eq!(a, config_hash("ini-a", "ul"), "deterministic");
+        assert_ne!(a, config_hash("ini-b", "ul"));
+        assert_ne!(a, config_hash("ini-a", "ul2"));
+        assert_eq!(a.len(), 64);
     }
 }
