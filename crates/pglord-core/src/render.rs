@@ -268,6 +268,44 @@ fn init_script_volumes(spec: &ClusterSpec) -> Vec<Volume> {
     volumes
 }
 
+/// Read-only mount for the server certificate Secret.
+///
+/// Not marked optional, same reasoning as init scripts: a missing Secret must
+/// leave the pod unstarted with the reason in its events, not produce a
+/// cluster that came up "healthy" without the TLS it was told to serve.
+fn tls_mounts(spec: &ClusterSpec) -> Vec<VolumeMount> {
+    if !spec.tls.enabled() {
+        return Vec::new();
+    }
+    vec![VolumeMount {
+        name: crate::tls::TLS_VOLUME.to_string(),
+        mount_path: crate::tls::TLS_MOUNT.to_string(),
+        read_only: Some(true),
+        ..Default::default()
+    }]
+}
+
+fn tls_volumes(spec: &ClusterSpec) -> Vec<Volume> {
+    let Some(name) = spec.tls.server_secret() else {
+        return Vec::new();
+    };
+    vec![Volume {
+        name: crate::tls::TLS_VOLUME.to_string(),
+        secret: Some(SecretVolumeSource {
+            secret_name: Some(name.to_string()),
+            // 0640, not 0600 and not 0444. The kubelet projects the files as
+            // root:<fsGroup 999>; postgres requires the key be non-world-
+            // readable and accepts a root-owned key with group read — group
+            // read is exactly what lets the postgres process (gid 999) use
+            // it without an init-container copy that would go stale when
+            // cert-manager rotates the Secret.
+            default_mode: Some(0o640),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }]
+}
+
 /// The user's own environment variables.
 ///
 /// Deliberately *not* optional: a missing key leaves the pod unstarted with a
@@ -458,6 +496,7 @@ pub fn render_statefulset(spec: &ClusterSpec, ns: &str, owner: &OwnerRef) -> Sta
                 ..Default::default()
             })
             .chain(init_script_mounts(spec))
+            .chain(tls_mounts(spec))
             .collect(),
         ),
         ..Default::default()
@@ -519,7 +558,8 @@ pub fn render_statefulset(spec: &ClusterSpec, ns: &str, owner: &OwnerRef) -> Sta
                             .collect()
                     }),
                     volumes: {
-                        let volumes = init_script_volumes(spec);
+                        let mut volumes = init_script_volumes(spec);
+                        volumes.extend(tls_volumes(spec));
                         (!volumes.is_empty()).then_some(volumes)
                     },
                     ..Default::default()
@@ -742,6 +782,41 @@ mod tests {
             .position(|e| e.name == "APP_USER")
             .expect("custom env");
         assert!(agent_at < custom_at);
+    }
+
+    #[test]
+    fn tls_secret_is_mounted_read_only_with_group_readable_key() {
+        let (mut spec, owner) = demo();
+        // TLS off: no cert volume, and (with nothing else configured) no
+        // volumes at all.
+        assert!(pod_of(&spec, &owner).volumes.is_none());
+
+        spec.tls.server_secret = Some("demo-tls".into());
+        let pod = pod_of(&spec, &owner);
+        let volumes = pod.volumes.expect("volumes");
+        let vol = volumes
+            .iter()
+            .find(|v| v.name == crate::tls::TLS_VOLUME)
+            .expect("tls volume");
+        let source = vol.secret.as_ref().expect("secret source");
+        assert_eq!(source.secret_name.as_deref(), Some("demo-tls"));
+        // root:999 with group read: what lets postgres (gid 999 via fsGroup)
+        // read a root-owned key that must not be world-readable.
+        assert_eq!(source.default_mode, Some(0o640));
+        // Deliberately not optional: a missing cert Secret must block the pod
+        // visibly, not produce a cluster serving plaintext.
+        assert_eq!(source.optional, None);
+
+        let mounts = pod.containers[0]
+            .volume_mounts
+            .clone()
+            .expect("volume mounts");
+        let mount = mounts
+            .iter()
+            .find(|m| m.name == crate::tls::TLS_VOLUME)
+            .expect("tls mount");
+        assert_eq!(mount.mount_path, crate::tls::TLS_MOUNT);
+        assert_eq!(mount.read_only, Some(true));
     }
 
     #[test]
