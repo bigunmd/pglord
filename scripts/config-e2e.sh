@@ -28,6 +28,14 @@ for img in pglord-server:dev pglord-agent:dev; do
   minikube -p pglord image rm "docker.io/library/$img" >/dev/null 2>&1 || true
   minikube -p pglord image load "$img"
 done
+# The rm above fails silently while any pod still runs the image (leftover
+# clusters do this), and kubelet then keeps serving the stale build. Verify
+# the stand really runs what was just built before trusting any result.
+for img in pglord-server:dev pglord-agent:dev; do
+  want=$(docker image inspect "$img" -f '{{.Id}}')
+  have=$(minikube -p pglord ssh -- docker image inspect -f '{{.Id}}' "docker.io/library/$img" 2>/dev/null | tr -d '\r')
+  [ "$want" = "$have" ] || { echo "FAIL: minikube kept a stale $img (have $have, want $want) — delete leftover clusters and retry"; exit 1; }
+done
 $KUBECTL apply -f deploy/k8s/ >/dev/null
 $KUBECTL -n pglord scale deploy/pglord-server --replicas=1 >/dev/null
 $KUBECTL -n pglord rollout status deploy/pglord-server --timeout=120s >/dev/null
@@ -237,6 +245,71 @@ for _ in $(seq 1 30); do
 done
 [ "$(psql_on cfg-0 "SHOW work_mem")" = "4MB" ] || { echo "FAIL: work_mem did not return to default"; exit 1; }
 echo "OK settings cleared"
+
+echo "==> hot-standby clamp: rebuild survives a lowered restart GUC"
+# Precondition from the sections above: max_connections was rolled to 150,
+# then the spec was cleared — so the primary keeps 150 live (pending_restart)
+# while the spec says default. Rebuilding a standby now used to crashloop with
+# "recovery aborted because of insufficient parameter settings"; the agent's
+# control-file clamp must keep it startable.
+prim=""; stand=""
+for _ in $(seq 1 30); do
+  if [ "$(psql_on cfg-0 "SELECT pg_is_in_recovery()")" = "f" ]; then
+    prim=cfg-0; stand=cfg-1; break
+  elif [ "$(psql_on cfg-1 "SELECT pg_is_in_recovery()")" = "f" ]; then
+    prim=cfg-1; stand=cfg-0; break
+  fi
+  sleep 2
+done
+[ -n "$prim" ] || { echo "FAIL: no primary found before rebuild"; exit 1; }
+[ "$(psql_on "$prim" "SHOW max_connections")" = "150" ] \
+  || { echo "FAIL: precondition lost, primary not live at 150"; exit 1; }
+# Wiping PGDATA (not the PVC) forces the same basebackup rebuild. Deleting
+# the PVC would too on a real storage driver, but minikube's hostpath
+# provisioner keys directories by PVC name: the old PV's deletion races the
+# replacement's creation on the same path and leaves a root-owned mount that
+# fsGroup cannot fix (fsGroup is ignored for hostPath volumes).
+$KUBECTL -n pglord exec "$stand" -- rm -rf /var/lib/postgresql/data/pgdata
+$KUBECTL -n pglord delete pod "$stand" >/dev/null
+for _ in $(seq 1 120); do
+  [ "$(psql_on "$stand" 'SELECT 1')" = "1" ] && break
+  sleep 2
+done
+if [ "$(psql_on "$stand" 'SELECT 1')" != "1" ]; then
+  echo "DIAG pods:"; $KUBECTL -n pglord get pods -o wide | grep '^cfg-' || true
+  echo "DIAG $stand logs:"; $KUBECTL -n pglord logs "$stand" --tail=30 || true
+  echo "FAIL: rebuilt standby never came back"
+  exit 1
+fi
+# The clamp must hold the standby at the primary's live value, not the spec's.
+[ "$(psql_on "$stand" "SHOW max_connections")" = "150" ] \
+  || { echo "FAIL: standby not clamped to the primary's live max_connections"; exit 1; }
+[ "$(psql_on "$stand" "SELECT pg_is_in_recovery()")" = "t" ] \
+  || { echo "FAIL: rebuilt instance is not a standby"; exit 1; }
+echo "OK rebuilt standby healthy while primary still runs the higher value"
+
+# Rolls converge everyone back to the spec (default 100). One roll is not
+# always enough: the rebuilt standby restarts before the primary, while 150
+# is still live, so it re-clamps; only after the primary drops does the
+# watch loop clear the clamp, and the next roll lands the standby on the
+# spec value. Poll values directly rather than guessing roll boundaries.
+converged=""
+for roll in 1 2 3; do
+  code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API/api/v1/clusters/cfg/restart")
+  [ "$code" = "202" ] || { echo "FAIL: restart #$roll returned $code"; exit 1; }
+  for _ in $(seq 1 75); do
+    v0=$(psql_on cfg-0 "SHOW max_connections"); v1=$(psql_on cfg-1 "SHOW max_connections")
+    [ "$v0" = "100" ] && [ "$v1" = "100" ] && { converged=yes; break; }
+    sleep 2
+  done
+  [ "$converged" = "yes" ] && break
+  # Not yet: give the watch loop a couple of 5s passes to clear the clamp
+  # before rolling again.
+  sleep 12
+done
+[ "$converged" = "yes" ] \
+  || { echo "FAIL: cluster did not converge to the default (cfg-0='$v0' cfg-1='$v1')"; exit 1; }
+echo "OK rolls converged every instance back to the spec value"
 
 echo "==> cleanup"
 curl -s -X DELETE "$API/api/v1/clusters/cfg" >/dev/null
