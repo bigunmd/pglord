@@ -1,11 +1,12 @@
 import { Component, inject } from '@angular/core';
-import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
+import { Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { TranslocoModule } from '@jsverse/transloco';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { lucideCheck, lucideMonitor, lucideMoon, lucideSun } from '@ng-icons/lucide';
+import { lucideCheck, lucideLogOut, lucideMonitor, lucideMoon, lucideSun } from '@ng-icons/lucide';
 import { HlmButtonImports } from '@spartan-ng/helm/button';
 import { HlmDropdownMenuImports } from '@spartan-ng/helm/dropdown-menu';
 
+import { AuthService } from '../core/auth/auth.service';
 import { ThemeMode, ThemeService } from '../core/theme/theme.service';
 import { PglordLogoComponent } from './pglord-logo.component';
 
@@ -21,7 +22,7 @@ import { PglordLogoComponent } from './pglord-logo.component';
     HlmDropdownMenuImports,
     PglordLogoComponent,
   ],
-  providers: [provideIcons({ lucideCheck, lucideMonitor, lucideMoon, lucideSun })],
+  providers: [provideIcons({ lucideCheck, lucideLogOut, lucideMonitor, lucideMoon, lucideSun })],
   template: `
     <div class="flex min-h-svh flex-col">
       <header class="border-border bg-card flex h-14 items-center gap-3 border-b px-4 lg:px-6">
@@ -76,6 +77,17 @@ import { PglordLogoComponent } from './pglord-logo.component';
               }
             </hlm-dropdown-menu>
           </ng-template>
+          @if (auth.current()) {
+            <button
+              hlmBtn
+              variant="ghost"
+              size="icon"
+              [attr.aria-label]="'auth.logout' | transloco"
+              (click)="logout()"
+            >
+              <ng-icon name="lucideLogOut" size="18" />
+            </button>
+          }
         </div>
       </header>
       <main class="flex-1 p-4 lg:p-6">
@@ -86,6 +98,13 @@ import { PglordLogoComponent } from './pglord-logo.component';
 })
 export class ShellComponent {
   protected readonly theme = inject(ThemeService);
+  protected readonly auth = inject(AuthService);
+  private readonly router = inject(Router);
+
+  protected logout(): void {
+    this.auth.logout();
+    void this.router.navigate(['/login']);
+  }
 
   protected readonly themeModes: { mode: ThemeMode; icon: string; labelKey: string }[] = [
     { mode: 'system', icon: 'lucideMonitor', labelKey: 'theme.system' },

@@ -3,6 +3,20 @@
     "title": "pglord",
     "tagline": "PostgreSQL clusters on Kubernetes"
   },
+  "auth": {
+    "title": "Sign in to manage your clusters",
+    "tokenLabel": "API token",
+    "tokenHelp": "Paste a token configured on the server (PGLORD_AUTH_TOKENS).",
+    "signIn": "Sign in",
+    "signInWith": "Sign in with {{host}}",
+    "or": "or",
+    "badToken": "That token was not accepted.",
+    "configUnreachable": "Could not reach the server to check sign-in options.",
+    "oidcUnreachable": "Could not reach the identity provider.",
+    "completing": "Completing sign-in…",
+    "backToLogin": "Back to sign-in",
+    "logout": "Sign out"
+  },
   "nav": {
     "home": "Home",
     "clusters": "Clusters",
