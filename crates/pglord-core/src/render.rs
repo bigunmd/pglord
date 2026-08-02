@@ -4,15 +4,15 @@
 use std::collections::BTreeMap;
 
 use k8s_openapi::api::apps::v1::{
-    StatefulSet, StatefulSetPersistentVolumeClaimRetentionPolicy, StatefulSetSpec,
-    StatefulSetUpdateStrategy,
+    Deployment, DeploymentSpec, StatefulSet, StatefulSetPersistentVolumeClaimRetentionPolicy,
+    StatefulSetSpec, StatefulSetUpdateStrategy,
 };
 use k8s_openapi::api::core::v1::{
     Affinity, ConfigMapVolumeSource, Container, ContainerPort, EnvVar, EnvVarSource, HTTPGetAction,
     LocalObjectReference, ObjectFieldSelector, PersistentVolumeClaim, PersistentVolumeClaimSpec,
     PodAffinityTerm, PodAntiAffinity, PodSecurityContext, PodSpec, PodTemplateSpec, Probe,
     ResourceRequirements, SecretKeySelector, SecretVolumeSource, Service, ServiceAccount,
-    ServicePort, ServiceSpec, Toleration as K8sToleration, Volume, VolumeMount,
+    ServicePort, ServiceSpec, TCPSocketAction, Toleration as K8sToleration, Volume, VolumeMount,
     VolumeResourceRequirements, WeightedPodAffinityTerm,
 };
 use k8s_openapi::api::rbac::v1::{PolicyRule, Role, RoleBinding, RoleRef, Subject};
@@ -637,6 +637,153 @@ pub fn render_rw_service(
     }
 }
 
+pub const POOLER_PASSWORD_KEY: &str = "pooler-password";
+
+pub fn pooler_deployment_name(cluster: &str) -> String {
+    format!("{cluster}-pooler")
+}
+
+pub fn pool_service_name(cluster: &str) -> String {
+    format!("{cluster}-pool")
+}
+
+pub fn pooler_config_secret_name(cluster: &str) -> String {
+    format!("{cluster}-pooler-config")
+}
+
+/// Cluster labels plus a role marker. The pooler Deployment selects on the
+/// full set, so it can never adopt instance pods; instance selectors don't
+/// use the role key, so they are unaffected.
+pub fn pooler_labels(cluster: &str) -> BTreeMap<String, String> {
+    let mut l = labels(cluster);
+    l.insert("pglord.dev/role".to_string(), "pooler".to_string());
+    l
+}
+
+/// The pooler's config Secret. Pure: the caller (reconciler) reads the
+/// pooler password out of the credentials Secret and passes it in.
+pub fn render_pooler_config_secret(
+    spec: &ClusterSpec,
+    ns: &str,
+    owner: &OwnerRef,
+    pooler_password: &str,
+) -> k8s_openapi::api::core::v1::Secret {
+    k8s_openapi::api::core::v1::Secret {
+        metadata: meta(
+            &pooler_config_secret_name(&spec.name),
+            ns,
+            &spec.name,
+            owner,
+        ),
+        string_data: Some(BTreeMap::from([
+            (
+                "pgbouncer.ini".to_string(),
+                crate::pooler::pgbouncer_ini(spec),
+            ),
+            (
+                "userlist.txt".to_string(),
+                crate::pooler::userlist(pooler_password),
+            ),
+        ])),
+        ..Default::default()
+    }
+}
+
+/// The PgBouncer Deployment. `config_hash` covers the rendered ini and
+/// userlist, so any knob or password change rolls the pooler pods — PgBouncer
+/// never needs an in-place reload.
+pub fn render_pooler_deployment(
+    spec: &ClusterSpec,
+    ns: &str,
+    owner: &OwnerRef,
+    config_hash: &str,
+) -> Deployment {
+    let mut volumes = vec![Volume {
+        name: "pooler-config".to_string(),
+        secret: Some(SecretVolumeSource {
+            secret_name: Some(pooler_config_secret_name(&spec.name)),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }];
+    let mut mounts = vec![VolumeMount {
+        name: "pooler-config".to_string(),
+        mount_path: "/etc/pgbouncer".to_string(),
+        read_only: Some(true),
+        ..Default::default()
+    }];
+    // Same cert, same reasoning as the instance mount: non-optional, so a
+    // missing Secret blocks the pod with a clear event instead of silently
+    // serving plaintext.
+    volumes.extend(tls_volumes(spec));
+    mounts.extend(tls_mounts(spec));
+
+    Deployment {
+        metadata: meta(&pooler_deployment_name(&spec.name), ns, &spec.name, owner),
+        spec: Some(DeploymentSpec {
+            replicas: Some(i32::from(spec.pooler.replicas)),
+            selector: LabelSelector {
+                match_labels: Some(pooler_labels(&spec.name)),
+                ..Default::default()
+            },
+            template: PodTemplateSpec {
+                metadata: Some(ObjectMeta {
+                    labels: Some(pooler_labels(&spec.name)),
+                    annotations: Some(BTreeMap::from([(
+                        "pglord.dev/config-hash".to_string(),
+                        config_hash.to_string(),
+                    )])),
+                    ..Default::default()
+                }),
+                spec: Some(PodSpec {
+                    containers: vec![Container {
+                        name: "pgbouncer".to_string(),
+                        image: Some(spec.pooler.image.clone()),
+                        ports: Some(vec![ContainerPort {
+                            container_port: crate::pooler::PGBOUNCER_PORT,
+                            name: Some("pgbouncer".to_string()),
+                            ..Default::default()
+                        }]),
+                        readiness_probe: Some(Probe {
+                            tcp_socket: Some(TCPSocketAction {
+                                port: IntOrString::Int(crate::pooler::PGBOUNCER_PORT),
+                                ..Default::default()
+                            }),
+                            ..Default::default()
+                        }),
+                        resources: resource_requirements(&spec.pooler.resources),
+                        volume_mounts: Some(mounts),
+                        ..Default::default()
+                    }],
+                    volumes: Some(volumes),
+                    ..Default::default()
+                }),
+            },
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
+}
+
+/// The Service clients connect to. Exposes 5432 whatever PgBouncer listens
+/// on, so switching from `<name>-rw` is a host change only.
+pub fn render_pool_service(spec: &ClusterSpec, ns: &str, owner: &OwnerRef) -> Service {
+    Service {
+        metadata: meta(&pool_service_name(&spec.name), ns, &spec.name, owner),
+        spec: Some(ServiceSpec {
+            selector: Some(pooler_labels(&spec.name)),
+            ports: Some(vec![ServicePort {
+                name: Some("postgres".to_string()),
+                port: PG_PORT,
+                target_port: Some(IntOrString::Int(crate::pooler::PGBOUNCER_PORT)),
+                ..Default::default()
+            }]),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1246,12 +1393,16 @@ mod tests {
 
     #[test]
     fn every_object_carries_owner_and_labels() {
-        let (spec, owner) = demo();
+        let (mut spec, owner) = demo();
+        spec.pooler.enabled = true;
         for meta in [
             render_statefulset(&spec, "ns", &owner).metadata,
             render_headless_service(&spec, "ns", &owner).metadata,
             render_rw_service(&spec, "ns", &owner, "demo-0").metadata,
             render_instance_rbac(&spec, "ns", &owner).0.metadata,
+            render_pooler_config_secret(&spec, "ns", &owner, "pw").metadata,
+            render_pooler_deployment(&spec, "ns", &owner, "h").metadata,
+            render_pool_service(&spec, "ns", &owner).metadata,
         ] {
             let refs = meta.owner_references.expect("owner refs");
             assert_eq!(refs[0].uid, "uid-123");
@@ -1260,5 +1411,97 @@ mod tests {
                 "pglord"
             );
         }
+    }
+
+    #[test]
+    fn pooler_objects_are_rendered_with_owner_and_hash() {
+        let owner = demo().1;
+        let spec: ClusterSpec = serde_json::from_value(serde_json::json!({
+            "name": "demo", "pooler": { "enabled": true, "replicas": 2 }
+        }))
+        .expect("spec");
+        let secret = render_pooler_config_secret(&spec, "ns", &owner, "pw");
+        assert_eq!(secret.metadata.name.as_deref(), Some("demo-pooler-config"));
+        let data = secret.string_data.expect("string_data");
+        assert!(data["pgbouncer.ini"].contains("host=demo-rw"));
+        assert_eq!(data["userlist.txt"], "\"pglord_pooler\" \"pw\"\n");
+
+        let dep = render_pooler_deployment(&spec, "ns", &owner, "abc123");
+        assert_eq!(dep.metadata.name.as_deref(), Some("demo-pooler"));
+        let dspec = dep.spec.expect("spec");
+        assert_eq!(dspec.replicas, Some(2));
+        assert_eq!(
+            dspec.selector.match_labels.expect("selector")["pglord.dev/role"],
+            "pooler"
+        );
+        let tmpl = dspec.template;
+        assert_eq!(
+            tmpl.metadata.expect("meta").annotations.expect("ann")["pglord.dev/config-hash"],
+            "abc123"
+        );
+        let pod = tmpl.spec.expect("pod");
+        assert_eq!(
+            pod.containers[0].image.as_deref(),
+            Some("pgbouncer/pgbouncer:1.24.1")
+        );
+        let probe = pod.containers[0]
+            .readiness_probe
+            .as_ref()
+            .and_then(|p| p.tcp_socket.as_ref())
+            .expect("tcp probe");
+        assert_eq!(probe.port, IntOrString::Int(6432));
+        assert!(
+            pod.volumes.expect("vols").iter().any(|v| v
+                .secret
+                .as_ref()
+                .and_then(|s| s.secret_name.as_deref())
+                == Some("demo-pooler-config"))
+        );
+
+        let svc = render_pool_service(&spec, "ns", &owner);
+        assert_eq!(svc.metadata.name.as_deref(), Some("demo-pool"));
+        let sspec = svc.spec.expect("spec");
+        assert_eq!(sspec.selector.expect("sel")["pglord.dev/role"], "pooler");
+        let port = &sspec.ports.expect("ports")[0];
+        assert_eq!(port.port, 5432);
+        assert_eq!(port.target_port, Some(IntOrString::Int(6432)));
+    }
+
+    #[test]
+    fn tls_pooler_mounts_the_cert_secret() {
+        let spec: ClusterSpec = serde_json::from_value(serde_json::json!({
+            "name": "demo", "pooler": { "enabled": true },
+            "tls": { "server_secret": "demo-tls" }
+        }))
+        .expect("spec");
+        let dep = render_pooler_deployment(&spec, "ns", &demo().1, "h");
+        let pod = dep.spec.expect("s").template.spec.expect("pod");
+        let vols = pod.volumes.expect("vols");
+        assert!(vols.iter().any(|v| {
+            v.secret.as_ref().and_then(|s| s.secret_name.as_deref()) == Some("demo-tls")
+        }));
+        let mounts = pod.containers[0].volume_mounts.clone().expect("mounts");
+        assert!(
+            mounts
+                .iter()
+                .any(|m| m.mount_path == "/etc/pglord/tls" && m.read_only == Some(true))
+        );
+    }
+
+    #[test]
+    fn pooler_resources_reach_the_container() {
+        let spec: ClusterSpec = serde_json::from_value(serde_json::json!({
+            "name": "demo",
+            "pooler": { "enabled": true, "resources": { "cpu_request": "50m" } }
+        }))
+        .expect("spec");
+        let dep = render_pooler_deployment(&spec, "ns", &demo().1, "h");
+        let pod = dep.spec.expect("s").template.spec.expect("pod");
+        let req = pod.containers[0]
+            .resources
+            .as_ref()
+            .and_then(|r| r.requests.as_ref())
+            .expect("requests");
+        assert_eq!(req["cpu"].0, "50m");
     }
 }
