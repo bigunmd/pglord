@@ -9,5 +9,6 @@ import { HbaMethod } from './hba-method';
 export const HBA_METHOD: HbaMethod[] = [
   'scram-sha-256',
   'reject',
-  'trust'
+  'trust',
+  'cert'
 ];

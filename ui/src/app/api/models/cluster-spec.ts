@@ -6,6 +6,7 @@ import { EnvVarSpec } from '../models/env-var-spec';
 import { HbaRule } from '../models/hba-rule';
 import { InitSpec } from '../models/init-spec';
 import { RestoreSpec } from '../models/restore-spec';
+import { TlsSpec } from '../models/tls-spec';
 import { WorkloadSpec } from '../models/workload-spec';
 export interface ClusterSpec {
 
@@ -76,6 +77,13 @@ export interface ClusterSpec {
    * `replicas >= 2`. Applied with a reload — no restart.
    */
   synchronous?: boolean;
+
+  /**
+   * TLS for client and replication connections, from a referenced
+   * kubernetes.io/tls Secret. Enabling or disabling rolls the instances
+   * (the cert mount changes the pod template).
+   */
+  tls?: TlsSpec;
 
   /**
    * Scheduling, resources and Kubernetes metadata for the instances.

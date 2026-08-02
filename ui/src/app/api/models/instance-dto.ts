@@ -25,6 +25,11 @@ export interface InstanceDto {
   role: string;
 
   /**
+   * This instance is accepting TLS connections. Null when unreachable.
+   */
+  ssl?: (boolean | null);
+
+  /**
    * Primary only: connected standbys eligible to confirm a synchronous
    * commit. Null on standbys and unreachable instances.
    */

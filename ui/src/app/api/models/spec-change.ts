@@ -5,6 +5,7 @@ import { BackupSpec } from '../models/backup-spec';
 import { EnvVarSpec } from '../models/env-var-spec';
 import { HbaRule } from '../models/hba-rule';
 import { InitSpec } from '../models/init-spec';
+import { TlsSpec } from '../models/tls-spec';
 import { WorkloadSpec } from '../models/workload-spec';
 
 /**
@@ -55,5 +56,6 @@ export interface SpecChange {
    * Toggle synchronous replication. Reload-only: no restart, no roll.
    */
   synchronous?: (boolean | null);
+  tls?: (null | TlsSpec);
   workload?: (null | WorkloadSpec);
 }

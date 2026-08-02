@@ -3,9 +3,11 @@
 
 
 /**
- * Deliberately small: cert needs TLS (not built), ldap/radius need auth
- * options this schema does not carry, md5 is deprecated. Growing the list
- * later is backwards-compatible; shrinking it is not.
+ * Deliberately small: ldap/radius need auth options this schema does not
+ * carry, md5 is deprecated. Growing the list later is backwards-compatible;
+ * shrinking it is not. `cert` authenticates by client certificate (CN =
+ * role name, verify-full); it is only meaningful over TLS, so it is valid
+ * only on `hostssl` rules and only when the cluster has TLS enabled.
  */
-export type HbaMethod = 'scram-sha-256' | 'reject' | 'trust';
+export type HbaMethod = 'scram-sha-256' | 'reject' | 'trust' | 'cert';
 

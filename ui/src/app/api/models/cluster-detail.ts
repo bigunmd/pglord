@@ -7,6 +7,7 @@ import { HbaRule } from '../models/hba-rule';
 import { InitSpec } from '../models/init-spec';
 import { InstanceDto } from '../models/instance-dto';
 import { RestoreSpec } from '../models/restore-spec';
+import { TlsSpec } from '../models/tls-spec';
 import { WorkloadSpec } from '../models/workload-spec';
 export interface ClusterDetail {
 
@@ -71,6 +72,12 @@ export interface ClusterDetail {
    * Commits wait for any one standby to confirm the WAL flush.
    */
   synchronous: boolean;
+
+  /**
+   * TLS from a referenced kubernetes.io/tls Secret (name only — never its
+   * contents).
+   */
+  tls: TlsSpec;
 
   /**
    * Scheduling, resources and Kubernetes metadata for the instances.

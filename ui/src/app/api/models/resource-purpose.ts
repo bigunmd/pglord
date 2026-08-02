@@ -6,5 +6,5 @@
  * Why a cluster needs this object. The UI translates these; keeping them
  * machine-readable means the reason survives translation.
  */
-export type ResourcePurpose = 'credentials' | 'backup_repository' | 'restore_repository' | 'custom_env' | 'init_scripts';
+export type ResourcePurpose = 'credentials' | 'backup_repository' | 'restore_repository' | 'custom_env' | 'init_scripts' | 'tls';
 

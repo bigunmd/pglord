@@ -36,6 +36,7 @@ export type { RunState } from './models/run-state';
 export type { SecretKeyRefSpec } from './models/secret-key-ref-spec';
 export type { SpecChange } from './models/spec-change';
 export type { SwitchoverRequest } from './models/switchover-request';
+export type { TlsSpec } from './models/tls-spec';
 export type { Toleration } from './models/toleration';
 export type { VersionResponse } from './models/version-response';
 export type { WorkloadSpec } from './models/workload-spec';

@@ -641,6 +641,7 @@ components:
       - backup
       - env
       - init
+      - tls
       - pending_restart
       - synchronous
       - sync_degraded
@@ -716,6 +717,11 @@ components:
         synchronous:
           type: boolean
           description: Commits wait for any one standby to confirm the WAL flush.
+        tls:
+          $ref: '#/components/schemas/TlsSpec'
+          description: |-
+            TLS from a referenced kubernetes.io/tls Secret (name only — never its
+            contents).
         workload:
           $ref: '#/components/schemas/WorkloadSpec'
           description: Scheduling, resources and Kubernetes metadata for the instances.
@@ -793,6 +799,12 @@ components:
             (quorum `ANY 1` over all standbys). Strict: with no standby connected,
             writes block rather than silently falling back to async. Requires
             `replicas >= 2`. Applied with a reload — no restart.
+        tls:
+          $ref: '#/components/schemas/TlsSpec'
+          description: |-
+            TLS for client and replication connections, from a referenced
+            kubernetes.io/tls Secret. Enabling or disabling rolls the instances
+            (the cert mount changes the pod template).
         workload:
           $ref: '#/components/schemas/WorkloadSpec'
           description: Scheduling, resources and Kubernetes metadata for the instances.
@@ -866,13 +878,16 @@ components:
     HbaMethod:
       type: string
       description: |-
-        Deliberately small: cert needs TLS (not built), ldap/radius need auth
-        options this schema does not carry, md5 is deprecated. Growing the list
-        later is backwards-compatible; shrinking it is not.
+        Deliberately small: ldap/radius need auth options this schema does not
+        carry, md5 is deprecated. Growing the list later is backwards-compatible;
+        shrinking it is not. `cert` authenticates by client certificate (CN =
+        role name, verify-full); it is only meaningful over TLS, so it is valid
+        only on `hostssl` rules and only when the cluster has TLS enabled.
       enum:
       - scram-sha-256
       - reject
       - trust
+      - cert
     HbaRule:
       type: object
       description: |-
@@ -938,6 +953,11 @@ components:
         role:
           type: string
           description: '"primary" | "standby" | "unknown" (agent unreachable).'
+        ssl:
+          type:
+          - boolean
+          - 'null'
+          description: This instance is accepting TLS connections. Null when unreachable.
         sync_standby_count:
           type:
           - integer
@@ -1084,6 +1104,7 @@ components:
       - restore_repository
       - custom_env
       - init_scripts
+      - tls
     ResourceStatus:
       allOf:
       - $ref: '#/components/schemas/RequiredResource'
@@ -1269,6 +1290,13 @@ components:
           - boolean
           - 'null'
           description: 'Toggle synchronous replication. Reload-only: no restart, no roll.'
+        tls:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/TlsSpec'
+            description: |-
+              Full replacement of the TLS block. An empty block disables TLS.
+              Either direction rolls the instances.
         workload:
           oneOf:
           - type: 'null'
@@ -1284,6 +1312,17 @@ components:
         target:
           type: string
           description: Pod to promote, e.g. "demo-1".
+    TlsSpec:
+      type: object
+      properties:
+        server_secret:
+          type:
+          - string
+          - 'null'
+          description: |-
+            kubernetes.io/tls Secret holding the server certificate. TLS is
+            enabled iff this is set; clearing it disables TLS. Both directions
+            change the pod template and roll the instances.
     Toleration:
       type: object
       required:
