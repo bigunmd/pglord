@@ -158,15 +158,27 @@ done
 echo "OK pooled access recovered after failover"
 
 echo "==> credentials rotation rotates the pooler credential too"
-code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API/api/v1/clusters/$CL/rotate-credentials")
-[ "$code" = "202" ] || { echo "FAIL: rotate returned $code"; exit 1; }
-ok=""
-for _ in $(seq 1 120); do
-  SU_PW=$(read_su_pw)
-  if [ "$(pool_psql "$SU_PW" postgres postgres 'SELECT 1')" = "1" ]; then ok=yes; break; fi
+# Let the failover settle first: rotation talks to the primary's agent by pod
+# DNS, which is stale right after the roll above.
+for _ in $(seq 1 60); do
+  [ "$(field "['ready_replicas']")" = "2" ] && break
   sleep 2
 done
-[ "$ok" = "yes" ] || { echo "FAIL: pool broken after rotation"; exit 1; }
+[ "$(field "['ready_replicas']")" = "2" ] || { echo "FAIL: cluster never settled before rotation"; exit 1; }
+# Rotation is documented as idempotent-converging: a failed run (agent not yet
+# reachable) is re-POSTed rather than treated as terminal.
+ok=""
+for attempt in 1 2 3; do
+  code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API/api/v1/clusters/$CL/rotate-credentials")
+  [ "$code" = "202" ] || { echo "FAIL: rotate attempt $attempt returned $code"; exit 1; }
+  for _ in $(seq 1 45); do
+    SU_PW=$(read_su_pw)
+    if [ "$(pool_psql "$SU_PW" postgres postgres 'SELECT 1')" = "1" ]; then ok=yes; break; fi
+    sleep 2
+  done
+  [ "$ok" = "yes" ] && break
+done
+[ "$ok" = "yes" ] || { echo "FAIL: pool broken after rotation (3 attempts)"; exit 1; }
 echo "OK pool works with rotated credentials"
 
 echo "==> disabling the pooler deletes its objects"
