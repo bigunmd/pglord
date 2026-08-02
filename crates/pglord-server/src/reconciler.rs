@@ -443,6 +443,84 @@ async fn apply_pooler(
     Ok(())
 }
 
+/// Converge declared roles and databases via the primary's agent. Same
+/// stance as the pooler ensure: level-triggered, best-effort per pass. A
+/// missing password Secret logs and skips — required-secrets is the
+/// user-facing surface for it — and postgres objects are untouched.
+async fn apply_provisioning(
+    client: &kube::Client,
+    http: &reqwest::Client,
+    ns: &str,
+    spec: &ClusterSpec,
+    primary_pod: &str,
+) -> anyhow::Result<()> {
+    if spec.roles.is_empty() && spec.databases.is_empty() {
+        return Ok(());
+    }
+    let secrets: Api<Secret> = Api::namespaced(client.clone(), ns);
+    let mut roles = Vec::with_capacity(spec.roles.len());
+    for role in &spec.roles {
+        let password = match &role.password_secret {
+            None => None,
+            Some(sref) => {
+                let value = secrets
+                    .get_opt(&sref.name)
+                    .await?
+                    .and_then(|s| s.data)
+                    .and_then(|d| d.get(&sref.key).cloned())
+                    .and_then(|v| String::from_utf8(v.0).ok());
+                match value {
+                    Some(v) => Some(v),
+                    None => {
+                        tracing::warn!(
+                            cluster = %spec.name, role = %role.name,
+                            secret = %sref.name, key = %sref.key,
+                            "role password secret unusable; provisioning skipped this pass"
+                        );
+                        return Ok(());
+                    }
+                }
+            }
+        };
+        roles.push(serde_json::json!({
+            "name": role.name,
+            "password": password,
+            "login": role.login,
+            "createdb": role.createdb,
+            "createrole": role.createrole,
+            "connection_limit": role.connection_limit,
+            "in_roles": role.in_roles,
+        }));
+    }
+    let databases: Vec<_> = spec
+        .databases
+        .iter()
+        .map(|d| serde_json::json!({ "name": d.name, "owner": d.owner }))
+        .collect();
+    let url = format!(
+        "http://{}:{}/provision/apply",
+        pod_fqdn(primary_pod, &spec.name, ns),
+        AGENT_HTTP_PORT
+    );
+    match http
+        .post(&url)
+        .json(&serde_json::json!({ "roles": roles, "databases": databases }))
+        .send()
+        .await
+    {
+        Ok(resp) if resp.status().is_success() => {}
+        Ok(resp) => tracing::warn!(
+            cluster = %spec.name, status = %resp.status(),
+            "provisioning ensure refused; retrying next pass"
+        ),
+        Err(err) => tracing::warn!(
+            cluster = %spec.name, %err,
+            "provisioning ensure unreachable; retrying next pass"
+        ),
+    }
+    Ok(())
+}
+
 pub async fn apply_cluster(
     client: &kube::Client,
     http: &reqwest::Client,
@@ -505,6 +583,7 @@ pub async fn apply_cluster(
         svc_api.patch(&name, &pp, &Patch::Apply(&svc)).await?;
     }
     apply_pooler(client, http, ns, spec, owner, primary_pod).await?;
+    apply_provisioning(client, http, ns, spec, primary_pod).await?;
     Ok(())
 }
 
