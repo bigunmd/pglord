@@ -62,6 +62,11 @@ pub struct ClusterSpec {
     /// SQL run once, when the data directory is first created.
     #[serde(default)]
     pub init: crate::init::InitSpec,
+    /// TLS for client and replication connections, from a referenced
+    /// kubernetes.io/tls Secret. Enabling or disabling rolls the instances
+    /// (the cert mount changes the pod template).
+    #[serde(default)]
+    pub tls: crate::tls::TlsSpec,
 }
 
 fn default_image() -> String {
@@ -113,6 +118,10 @@ pub enum SpecError {
     InvalidInit(#[from] crate::init::InitError),
     #[error("invalid credentials secret name '{0}': must be a lowercase RFC1123 name")]
     InvalidCredentialsSecret(String),
+    #[error("{0}")]
+    InvalidTls(#[from] crate::tls::TlsError),
+    #[error("pg_hba method 'cert' requires TLS to be enabled on the cluster")]
+    CertRequiresTls,
 }
 
 /// The fields a running cluster may change. Name is deliberately absent:
@@ -162,6 +171,10 @@ pub struct SpecChange {
     /// cluster's data directory already exists.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub init: Option<crate::init::InitSpec>,
+    /// Full replacement of the TLS block. An empty block disables TLS.
+    /// Either direction rolls the instances.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tls: Option<crate::tls::TlsSpec>,
 }
 
 /// Size in bytes for comparison; None when the quantity is malformed.
@@ -226,6 +239,9 @@ impl ClusterSpec {
         if let Some(init) = &change.init {
             next.init = init.clone();
         }
+        if let Some(tls) = &change.tls {
+            next.tls = tls.clone();
+        }
         next.validate()?;
         Ok(next)
     }
@@ -278,6 +294,15 @@ impl ClusterSpec {
         }
         crate::env::validate(&self.env)?;
         crate::init::validate(&self.init)?;
+        crate::tls::validate(&self.tls)?;
+        if !self.tls.enabled()
+            && self
+                .pg_hba
+                .iter()
+                .any(|r| r.method == crate::hba::HbaMethod::Cert)
+        {
+            return Err(SpecError::CertRequiresTls);
+        }
         Ok(())
     }
 
@@ -321,7 +346,51 @@ mod tests {
         assert_eq!(s.image, "pglord-agent:dev");
         assert_eq!(s.replicas, 1);
         assert_eq!(s.storage_size, "1Gi");
+        assert!(!s.tls.enabled());
         assert_eq!(s.validate(), Ok(()));
+    }
+
+    #[test]
+    fn tls_block_is_replaced_wholesale_and_cleared_by_an_empty_block() {
+        let base = spec("demo");
+        let change: SpecChange = serde_json::from_value(serde_json::json!({
+            "tls": { "server_secret": "demo-tls" }
+        }))
+        .expect("change");
+        let with_tls = base.apply_change(&change).expect("apply");
+        assert_eq!(with_tls.tls.server_secret(), Some("demo-tls"));
+
+        // Absent leaves it untouched; an empty block disables.
+        let untouched = with_tls.apply_change(&SpecChange::default()).expect("apply");
+        assert!(untouched.tls.enabled());
+        let clear: SpecChange =
+            serde_json::from_value(serde_json::json!({ "tls": {} })).expect("change");
+        assert!(!with_tls.apply_change(&clear).expect("apply").tls.enabled());
+    }
+
+    #[test]
+    fn cert_hba_rules_require_tls() {
+        let mut s = spec("demo");
+        s.pg_hba = vec![crate::hba::HbaRule {
+            conn: crate::hba::HbaConn::HostSsl,
+            database: "app".into(),
+            user: "app_rw".into(),
+            address: "10.0.0.0/8".into(),
+            method: crate::hba::HbaMethod::Cert,
+        }];
+        assert_eq!(s.validate(), Err(SpecError::CertRequiresTls));
+        s.tls.server_secret = Some("demo-tls".into());
+        assert_eq!(s.validate(), Ok(()));
+        // A blank secret is disabled TLS, not enabled-with-an-odd-name.
+        s.tls.server_secret = Some("  ".into());
+        assert_eq!(s.validate(), Err(SpecError::CertRequiresTls));
+    }
+
+    #[test]
+    fn tls_secret_name_is_validated() {
+        let mut s = spec("demo");
+        s.tls.server_secret = Some("Bad_Name".into());
+        assert!(matches!(s.validate(), Err(SpecError::InvalidTls(_))));
     }
 
     #[test]

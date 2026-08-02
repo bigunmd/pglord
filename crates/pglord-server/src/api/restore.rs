@@ -54,6 +54,11 @@ pub fn restored_spec(source: &ClusterSpec, req: &RestoreRequest) -> ClusterSpec 
         // Same data, same audience: the rules that guarded the source guard
         // its restored copy.
         pg_hba: source.pg_hba.clone(),
+        // Carried with pg_hba: dropping it would strip encryption from the
+        // same audience and would invalidate any `cert` rules copied above.
+        // The certificate's DNS names still name the source, so clients doing
+        // verify-full need a new cert — but the wire stays encrypted meanwhile.
+        tls: source.tls.clone(),
         workload: source.workload.clone(),
         // Carried over: whatever ran against the source's data expects these.
         env: source.env.clone(),
