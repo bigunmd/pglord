@@ -56,7 +56,10 @@ async fn main() -> anyhow::Result<()> {
         &cfg.cluster,
         cluster_spec.as_ref().map(|s| s.replicas).unwrap_or(1),
         &hostname,
-        cluster_spec.as_ref().map(|s| s.synchronous).unwrap_or(false),
+        cluster_spec
+            .as_ref()
+            .map(|s| s.synchronous)
+            .unwrap_or(false),
     );
     if let Err(err) = pglord_agent::params::write_sync_if_changed(&cfg.pgdata, &sync_conf) {
         tracing::warn!(%err, "failed to write sync replication settings");

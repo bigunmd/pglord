@@ -678,7 +678,11 @@ mod tests {
         // Stronger-or-equal levels stay legal tuning.
         for ok in ["on", "remote_write", "remote_apply"] {
             s.parameters = BTreeMap::from([("synchronous_commit".into(), ok.into())]);
-            assert_eq!(s.validate(), Ok(()), "expected ok for synchronous_commit={ok}");
+            assert_eq!(
+                s.validate(),
+                Ok(()),
+                "expected ok for synchronous_commit={ok}"
+            );
         }
         // With the flag off, 'off' remains an allowed durability trade.
         s.synchronous = false;
@@ -689,8 +693,7 @@ mod tests {
     #[test]
     fn synchronous_standby_names_is_reserved() {
         let mut s = spec("demo");
-        s.parameters =
-            BTreeMap::from([("synchronous_standby_names".into(), "ANY 1 (x)".into())]);
+        s.parameters = BTreeMap::from([("synchronous_standby_names".into(), "ANY 1 (x)".into())]);
         assert!(matches!(s.validate(), Err(SpecError::ReservedParameter(_))));
     }
 
