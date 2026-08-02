@@ -34,6 +34,8 @@ pub struct InstanceDto {
     /// Primary only: connected standbys eligible to confirm a synchronous
     /// commit. Null on standbys and unreachable instances.
     pub sync_standby_count: Option<u32>,
+    /// This instance is accepting TLS connections. Null when unreachable.
+    pub ssl: Option<bool>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -64,6 +66,9 @@ pub struct ClusterDetail {
     pub env: Vec<pglord_core::env::EnvVarSpec>,
     /// Sources of the one-time initialisation scripts.
     pub init: pglord_core::init::InitSpec,
+    /// TLS from a referenced kubernetes.io/tls Secret (name only — never its
+    /// contents).
+    pub tls: pglord_core::tls::TlsSpec,
     /// Any instance is waiting on a restart to apply staged settings.
     pub pending_restart: bool,
     /// Commits wait for any one standby to confirm the WAL flush.
@@ -125,6 +130,12 @@ mod tests {
         let mut params = base.clone();
         params.parameters.insert("work_mem".into(), "8MB".into());
         assert!(!super::pod_template_changed(&base, &params, "ns"));
+
+        // TLS adds/removes the cert volume, so toggling it must roll.
+        let mut tls = base.clone();
+        tls.tls.server_secret = Some("demo-tls".into());
+        assert!(super::pod_template_changed(&base, &tls, "ns"));
+        assert!(super::pod_template_changed(&tls, &base, "ns"));
     }
 }
 
@@ -258,6 +269,7 @@ pub async fn get_cluster(
             lsn: o.lsn,
             pending_restart: o.pending_restart,
             sync_standby_count: o.sync_standby_count,
+            ssl: o.ssl,
         })
         .collect();
     Ok(Json(ClusterDetail {
@@ -275,6 +287,7 @@ pub async fn get_cluster(
         credentials_secret: spec.credentials_secret,
         env: spec.env,
         init: spec.init,
+        tls: spec.tls,
         pending_restart,
         synchronous: spec.synchronous,
         sync_degraded,
@@ -323,6 +336,8 @@ fn spec_error(e: SpecError) -> ApiError {
         SpecError::InvalidHba(_) => "invalid_pg_hba",
         SpecError::InvalidWorkload(_) => "invalid_workload",
         SpecError::InvalidBackup(_) => "invalid_backup",
+        SpecError::InvalidTls(_) => "invalid_tls",
+        SpecError::CertRequiresTls => "hba_cert_requires_tls",
         _ => "invalid_spec",
     };
     ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, code).with_detail(e.to_string())

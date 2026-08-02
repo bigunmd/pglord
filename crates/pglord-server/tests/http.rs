@@ -281,6 +281,32 @@ async fn pg_hba_is_in_the_openapi_contract() {
 }
 
 #[tokio::test]
+async fn tls_is_in_the_openapi_contract() {
+    let (_router, api) = pglord_server::app::build(
+        pglord_server::health::Readiness::default(),
+        &pglord_server::config::Config::test_default(),
+        None,
+        Default::default(),
+    );
+    let schemas = &api.components.as_ref().expect("components").schemas;
+    assert!(schemas.contains_key("TlsSpec"));
+    let spec_change =
+        serde_json::to_string(schemas.get("SpecChange").expect("SpecChange")).expect("serialize");
+    assert!(spec_change.contains("tls"));
+    let detail = serde_json::to_string(schemas.get("ClusterDetail").expect("ClusterDetail"))
+        .expect("serialize");
+    assert!(detail.contains("tls"));
+    // Per-instance ssl badge for the UI.
+    let instance =
+        serde_json::to_string(schemas.get("InstanceDto").expect("InstanceDto")).expect("serialize");
+    assert!(instance.contains("ssl"));
+    // The cert method rides the existing HbaRule schema.
+    let method =
+        serde_json::to_string(schemas.get("HbaMethod").expect("HbaMethod")).expect("serialize");
+    assert!(method.contains("cert"));
+}
+
+#[tokio::test]
 async fn metrics_serves_prometheus_text() {
     let resp = test_app()
         .oneshot(

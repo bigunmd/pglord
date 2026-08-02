@@ -224,7 +224,10 @@ mod tests {
         // Unchanged content must not report a change: a report triggers a
         // reload, and this runs on every 5s poll.
         assert!(!write_tls_if_changed(&dir, &on).expect("write"));
-        assert_eq!(std::fs::read_to_string(dir.join(TLS_FILE)).expect("read"), on);
+        assert_eq!(
+            std::fs::read_to_string(dir.join(TLS_FILE)).expect("read"),
+            on
+        );
         let off = pglord_core::tls::conf(false, false);
         assert!(write_tls_if_changed(&dir, &off).expect("write"));
         let _ = std::fs::remove_dir_all(&dir);

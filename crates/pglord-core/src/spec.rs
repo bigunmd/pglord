@@ -361,7 +361,9 @@ mod tests {
         assert_eq!(with_tls.tls.server_secret(), Some("demo-tls"));
 
         // Absent leaves it untouched; an empty block disables.
-        let untouched = with_tls.apply_change(&SpecChange::default()).expect("apply");
+        let untouched = with_tls
+            .apply_change(&SpecChange::default())
+            .expect("apply");
         assert!(untouched.tls.enabled());
         let clear: SpecChange =
             serde_json::from_value(serde_json::json!({ "tls": {} })).expect("change");
