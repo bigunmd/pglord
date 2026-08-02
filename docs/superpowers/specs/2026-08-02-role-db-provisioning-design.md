@@ -114,8 +114,8 @@ pglord-side rotation flow for declared roles.
 
 - Cluster-detail DTO gains `roles` and `databases` — the spec as configured,
   references only, never password values. `SpecChange` passthrough. New 422
-  codes `invalid_role` and `invalid_database` (from `SpecError` variants
-  wrapping the new `ProvisionError`).
+  code `invalid_provision` (one `SpecError` variant wraps the whole
+  `ProvisionError` enum; the `detail` string names the offending entity).
 - Contract as usual: `make openapi ui-client`, artifacts committed with code.
 - UI: "Roles & databases" card on cluster detail with an editor dialog (env
   editor's row pattern — role rows: name, flags, secret name/key, memberships;

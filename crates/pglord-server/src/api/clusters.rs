@@ -78,6 +78,10 @@ pub struct ClusterDetail {
     pub sync_degraded: bool,
     /// Managed PgBouncer in front of the primary.
     pub pooler: PoolerStatus,
+    /// Declared roles (references only — never password values).
+    pub roles: Vec<pglord_core::provision::RoleSpec>,
+    /// Declared databases.
+    pub databases: Vec<pglord_core::provision::DatabaseSpec>,
     pub instances: Vec<InstanceDto>,
 }
 
@@ -325,6 +329,8 @@ pub async fn get_cluster(
         synchronous: spec.synchronous,
         sync_degraded,
         pooler,
+        roles: spec.roles,
+        databases: spec.databases,
         instances,
     }))
 }
@@ -373,6 +379,8 @@ fn spec_error(e: SpecError) -> ApiError {
         SpecError::InvalidTls(_) => "invalid_tls",
         SpecError::CertRequiresTls => "hba_cert_requires_tls",
         SpecError::InvalidPooler(_) => "invalid_pooler",
+        // One code for both entities; the detail string names the offender.
+        SpecError::InvalidProvision(_) => "invalid_provision",
         _ => "invalid_spec",
     };
     ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, code).with_detail(e.to_string())
