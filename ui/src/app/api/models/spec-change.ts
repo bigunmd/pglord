@@ -44,5 +44,10 @@ export interface SpecChange {
   pg_hba?: (Array<HbaRule> | null);
   replicas?: (number | null);
   storage_size?: (string | null);
+
+  /**
+   * Toggle synchronous replication. Reload-only: no restart, no roll.
+   */
+  synchronous?: (boolean | null);
   workload?: (null | WorkloadSpec);
 }

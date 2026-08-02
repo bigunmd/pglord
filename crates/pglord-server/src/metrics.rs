@@ -13,6 +13,7 @@ pub struct Metrics {
     pub rotations_total: IntCounterVec,
     pub instances_ready: IntGaugeVec,
     pub instances: IntGaugeVec,
+    pub sync_degraded: IntGaugeVec,
     pub clusters: IntGauge,
 }
 
@@ -67,6 +68,11 @@ impl Metrics {
             "pglord_cluster_instances",
             "Instances the cluster should have.",
         );
+        let sync_degraded = gauge_vec(
+            &registry,
+            "pglord_sync_degraded",
+            "1 when synchronous replication is on but no sync standby is connected (writes blocking).",
+        );
         let clusters = IntGauge::new("pglord_clusters", "Number of cluster specs.")
             .expect("static metric name");
         registry
@@ -80,6 +86,7 @@ impl Metrics {
             rotations_total,
             instances_ready,
             instances,
+            sync_degraded,
             clusters,
         }
     }
@@ -100,6 +107,7 @@ impl Metrics {
     pub fn forget_cluster(&self, cluster: &str) {
         let _ = self.instances_ready.remove_label_values(&[cluster]);
         let _ = self.instances.remove_label_values(&[cluster]);
+        let _ = self.sync_degraded.remove_label_values(&[cluster]);
         for outcome in ["ok", "error"] {
             let _ = self
                 .reconcile_total
@@ -143,6 +151,7 @@ mod tests {
             .with_label_values(&["demo", "full", "succeeded"])
             .inc();
         m.instances_ready.with_label_values(&["demo"]).set(3);
+        m.sync_degraded.with_label_values(&["demo"]).set(1);
         m.rotations_total
             .with_label_values(&["demo", "succeeded"])
             .inc();
@@ -154,6 +163,7 @@ mod tests {
             "pglord_backup_runs_total{cluster=\"demo\",kind=\"full\",outcome=\"succeeded\"} 1"
         ));
         assert!(out.contains("pglord_cluster_instances_ready{cluster=\"demo\"} 3"));
+        assert!(out.contains("pglord_sync_degraded{cluster=\"demo\"} 1"));
         assert!(out.contains(
             "pglord_credential_rotations_total{cluster=\"demo\",outcome=\"succeeded\"} 1"
         ));
@@ -165,6 +175,7 @@ mod tests {
         m.reconcile_total.with_label_values(&["gone", "ok"]).inc();
         m.instances_ready.with_label_values(&["gone"]).set(1);
         m.instances.with_label_values(&["gone"]).set(1);
+        m.sync_degraded.with_label_values(&["gone"]).set(1);
         m.forget_cluster("gone");
         let out = m.render();
         assert!(!out.contains("cluster=\"gone\""));

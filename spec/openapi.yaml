@@ -614,6 +614,8 @@ components:
       - env
       - init
       - pending_restart
+      - synchronous
+      - sync_degraded
       - instances
       properties:
         backup:
@@ -678,6 +680,14 @@ components:
               Null for clusters that started empty.
         storage_size:
           type: string
+        sync_degraded:
+          type: boolean
+          description: |-
+            Synchronous replication is on but the primary sees no connected sync
+            standby: commits are blocking until one reconnects.
+        synchronous:
+          type: boolean
+          description: Commits wait for any one standby to confirm the WAL flush.
         workload:
           $ref: '#/components/schemas/WorkloadSpec'
           description: Scheduling, resources and Kubernetes metadata for the instances.
@@ -748,6 +758,13 @@ components:
         storage_size:
           type: string
           description: PVC size per instance, e.g. "1Gi".
+        synchronous:
+          type: boolean
+          description: |-
+            Every commit waits until any one standby confirms the WAL flush
+            (quorum `ANY 1` over all standbys). Strict: with no standby connected,
+            writes block rather than silently falling back to async. Requires
+            `replicas >= 2`. Applied with a reload — no restart.
         workload:
           $ref: '#/components/schemas/WorkloadSpec'
           description: Scheduling, resources and Kubernetes metadata for the instances.
@@ -893,6 +910,15 @@ components:
         role:
           type: string
           description: '"primary" | "standby" | "unknown" (agent unreachable).'
+        sync_standby_count:
+          type:
+          - integer
+          - 'null'
+          format: int32
+          description: |-
+            Primary only: connected standbys eligible to confirm a synchronous
+            commit. Null on standbys and unreachable instances.
+          minimum: 0
     PingResponse:
       type: object
       required:
@@ -1191,6 +1217,11 @@ components:
           type:
           - string
           - 'null'
+        synchronous:
+          type:
+          - boolean
+          - 'null'
+          description: 'Toggle synchronous replication. Reload-only: no restart, no roll.'
         workload:
           oneOf:
           - type: 'null'

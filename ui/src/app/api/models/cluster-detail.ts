@@ -62,6 +62,17 @@ export interface ClusterDetail {
   storage_size: string;
 
   /**
+   * Synchronous replication is on but the primary sees no connected sync
+   * standby: commits are blocking until one reconnects.
+   */
+  sync_degraded: boolean;
+
+  /**
+   * Commits wait for any one standby to confirm the WAL flush.
+   */
+  synchronous: boolean;
+
+  /**
    * Scheduling, resources and Kubernetes metadata for the instances.
    */
   workload: WorkloadSpec;

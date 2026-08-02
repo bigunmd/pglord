@@ -31,6 +31,9 @@ pub struct InstanceDto {
     pub lsn: Option<String>,
     /// Settings are staged on this instance that only a restart will apply.
     pub pending_restart: bool,
+    /// Primary only: connected standbys eligible to confirm a synchronous
+    /// commit. Null on standbys and unreachable instances.
+    pub sync_standby_count: Option<u32>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -63,6 +66,11 @@ pub struct ClusterDetail {
     pub init: pglord_core::init::InitSpec,
     /// Any instance is waiting on a restart to apply staged settings.
     pub pending_restart: bool,
+    /// Commits wait for any one standby to confirm the WAL flush.
+    pub synchronous: bool,
+    /// Synchronous replication is on but the primary sees no connected sync
+    /// standby: commits are blocking until one reconnects.
+    pub sync_degraded: bool,
     pub instances: Vec<InstanceDto>,
 }
 
@@ -213,6 +221,10 @@ pub async fn get_cluster(
         crate::instance_probe::observe_cluster(&ops.http, &spec.name, &ops.ns, spec.replicas).await;
     let ready_replicas = observations.iter().filter(|o| o.ready).count() as i32;
     let pending_restart = observations.iter().any(|o| o.pending_restart);
+    let sync_degraded = spec.synchronous
+        && observations
+            .iter()
+            .any(|o| o.pod == primary && o.ready && o.sync_standby_count == Some(0));
     let instances = observations
         .into_iter()
         .map(|o| InstanceDto {
@@ -221,6 +233,7 @@ pub async fn get_cluster(
             ready: o.ready,
             lsn: o.lsn,
             pending_restart: o.pending_restart,
+            sync_standby_count: o.sync_standby_count,
         })
         .collect();
     Ok(Json(ClusterDetail {
@@ -239,6 +252,8 @@ pub async fn get_cluster(
         env: spec.env,
         init: spec.init,
         pending_restart,
+        synchronous: spec.synchronous,
+        sync_degraded,
         instances,
     }))
 }
@@ -255,6 +270,8 @@ fn spec_error(e: SpecError) -> ApiError {
         SpecError::UnknownParameter(_)
         | SpecError::ReservedParameter(_)
         | SpecError::InvalidParameterValue { .. } => "invalid_parameter",
+        SpecError::SyncRequiresReplicas => "sync_requires_replicas",
+        SpecError::SyncConflictsSynchronousCommit(_) => "sync_conflicts_synchronous_commit",
         SpecError::InvalidHba(_) => "invalid_pg_hba",
         SpecError::InvalidWorkload(_) => "invalid_workload",
         SpecError::InvalidBackup(_) => "invalid_backup",

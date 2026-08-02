@@ -23,4 +23,10 @@ export interface InstanceDto {
    * "primary" | "standby" | "unknown" (agent unreachable).
    */
   role: string;
+
+  /**
+   * Primary only: connected standbys eligible to confirm a synchronous
+   * commit. Null on standbys and unreachable instances.
+   */
+  sync_standby_count?: (number | null);
 }

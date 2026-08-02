@@ -70,6 +70,14 @@ pub async fn run(client: kube::Client, ns: String, metrics: crate::metrics::Metr
                 .instances_ready
                 .with_label_values(&[spec.name.as_str()])
                 .set(observations.iter().filter(|o| o.ready).count() as i64);
+            let degraded = spec.synchronous
+                && observations
+                    .iter()
+                    .any(|o| o.pod == primary && o.ready && o.sync_standby_count == Some(0));
+            metrics
+                .sync_degraded
+                .with_label_values(&[spec.name.as_str()])
+                .set(i64::from(degraded));
 
             let primary_ok = observations
                 .iter()

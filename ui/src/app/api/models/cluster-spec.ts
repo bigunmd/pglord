@@ -70,6 +70,14 @@ export interface ClusterSpec {
   storage_size?: string;
 
   /**
+   * Every commit waits until any one standby confirms the WAL flush
+   * (quorum `ANY 1` over all standbys). Strict: with no standby connected,
+   * writes block rather than silently falling back to async. Requires
+   * `replicas >= 2`. Applied with a reload — no restart.
+   */
+  synchronous?: boolean;
+
+  /**
    * Scheduling, resources and Kubernetes metadata for the instances.
    */
   workload?: WorkloadSpec;

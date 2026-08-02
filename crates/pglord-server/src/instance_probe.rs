@@ -12,6 +12,8 @@ struct AgentStatus {
     lsn: Option<String>,
     #[serde(default)]
     pending_restart: bool,
+    #[serde(default)]
+    sync_standby_count: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -22,6 +24,8 @@ pub struct InstanceObservation {
     pub lsn: Option<String>,
     /// Postgres has settings staged that only a restart will apply.
     pub pending_restart: bool,
+    /// Primary only: connected standbys eligible to confirm a sync commit.
+    pub sync_standby_count: Option<u32>,
 }
 
 pub async fn observe_cluster(
@@ -49,6 +53,7 @@ pub async fn observe_cluster(
                 in_recovery: s.in_recovery,
                 lsn: s.lsn,
                 pending_restart: s.pending_restart,
+                sync_standby_count: s.sync_standby_count,
             },
             None => InstanceObservation {
                 pod,
@@ -56,6 +61,7 @@ pub async fn observe_cluster(
                 in_recovery: None,
                 lsn: None,
                 pending_restart: false,
+                sync_standby_count: None,
             },
         });
     }
