@@ -48,6 +48,10 @@ impl ApiError {
             .with_detail("The requested resource does not exist.")
     }
 
+    pub fn unauthorized(code: impl Into<Cow<'static, str>>) -> Self {
+        Self::new(StatusCode::UNAUTHORIZED, code)
+    }
+
     pub fn bad_request(code: impl Into<Cow<'static, str>>) -> Self {
         Self::new(StatusCode::BAD_REQUEST, code)
     }
@@ -92,6 +96,13 @@ impl IntoResponse for ApiError {
             axum::http::header::CONTENT_TYPE,
             axum::http::HeaderValue::from_static("application/problem+json"),
         );
+        // RFC 6750: a 401 must tell the client which scheme the API expects.
+        if self.status == StatusCode::UNAUTHORIZED {
+            resp.headers_mut().insert(
+                axum::http::header::WWW_AUTHENTICATE,
+                axum::http::HeaderValue::from_static("Bearer"),
+            );
+        }
         resp
     }
 }
@@ -115,6 +126,13 @@ mod tests {
         assert_eq!(v["status"], 404);
         assert_eq!(v["code"], "not_found");
         assert_eq!(v["type"], "https://pglord.dev/problems/not_found");
+    }
+
+    #[tokio::test]
+    async fn unauthorized_carries_www_authenticate_bearer() {
+        let resp = ApiError::unauthorized("auth_required").into_response();
+        assert_eq!(resp.status(), axum::http::StatusCode::UNAUTHORIZED);
+        assert_eq!(resp.headers()[axum::http::header::WWW_AUTHENTICATE], "Bearer");
     }
 
     #[tokio::test]
