@@ -71,6 +71,13 @@ pub struct ClusterSpec {
     /// the postgres instances.
     #[serde(default)]
     pub pooler: crate::pooler::PoolerSpec,
+    /// Declared roles, converged on the primary. Additive: removing an entry
+    /// stops managing it, nothing is dropped.
+    #[serde(default)]
+    pub roles: Vec<crate::provision::RoleSpec>,
+    /// Declared databases, converged after the roles that own them.
+    #[serde(default)]
+    pub databases: Vec<crate::provision::DatabaseSpec>,
 }
 
 fn default_image() -> String {
@@ -128,6 +135,8 @@ pub enum SpecError {
     CertRequiresTls,
     #[error("{0}")]
     InvalidPooler(#[from] crate::pooler::PoolerError),
+    #[error("{0}")]
+    InvalidProvision(#[from] crate::provision::ProvisionError),
 }
 
 /// The fields a running cluster may change. Name is deliberately absent:
@@ -185,6 +194,13 @@ pub struct SpecChange {
     /// pooler and deletes its objects; instances are unaffected.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pooler: Option<crate::pooler::PoolerSpec>,
+    /// Full replacement of the declared roles: absent leaves them untouched,
+    /// an empty list stops managing (nothing is dropped).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roles: Option<Vec<crate::provision::RoleSpec>>,
+    /// Full replacement of the declared databases; same semantics as roles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub databases: Option<Vec<crate::provision::DatabaseSpec>>,
 }
 
 /// Size in bytes for comparison; None when the quantity is malformed.
@@ -255,6 +271,12 @@ impl ClusterSpec {
         if let Some(pooler) = &change.pooler {
             next.pooler = pooler.clone();
         }
+        if let Some(roles) = &change.roles {
+            next.roles = roles.clone();
+        }
+        if let Some(databases) = &change.databases {
+            next.databases = databases.clone();
+        }
         next.validate()?;
         Ok(next)
     }
@@ -309,6 +331,7 @@ impl ClusterSpec {
         crate::init::validate(&self.init)?;
         crate::tls::validate(&self.tls)?;
         crate::pooler::validate(&self.pooler)?;
+        crate::provision::validate(&self.roles, &self.databases)?;
         if !self.tls.enabled()
             && self
                 .pg_hba
@@ -407,6 +430,37 @@ mod tests {
         // apply_change validates: out-of-bounds knobs are rejected.
         let bad: SpecChange = serde_json::from_value(serde_json::json!({
             "pooler": { "enabled": true, "replicas": 0 }
+        }))
+        .expect("change");
+        assert!(base.apply_change(&bad).is_err());
+    }
+
+    #[test]
+    fn provision_lists_replace_wholesale() {
+        let base = spec("demo");
+        let change: SpecChange = serde_json::from_value(serde_json::json!({
+            "roles": [{ "name": "app_rw" }],
+            "databases": [{ "name": "appdb", "owner": "app_rw" }]
+        }))
+        .expect("change");
+        let with = base.apply_change(&change).expect("apply");
+        assert_eq!(with.roles.len(), 1);
+        assert_eq!(with.databases[0].owner, "app_rw");
+        // Absent leaves untouched; empty lists stop managing.
+        assert_eq!(
+            with.apply_change(&SpecChange::default())
+                .expect("a")
+                .roles
+                .len(),
+            1
+        );
+        let clear: SpecChange =
+            serde_json::from_value(serde_json::json!({ "roles": [], "databases": [] })).expect("c");
+        let cleared = with.apply_change(&clear).expect("a");
+        assert!(cleared.roles.is_empty() && cleared.databases.is_empty());
+        // Validation runs: a database owned by an undeclared role is rejected.
+        let bad: SpecChange = serde_json::from_value(serde_json::json!({
+            "databases": [{ "name": "appdb", "owner": "ghost" }]
         }))
         .expect("change");
         assert!(base.apply_change(&bad).is_err());
