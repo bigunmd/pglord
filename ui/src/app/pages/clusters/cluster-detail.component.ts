@@ -9,6 +9,7 @@ import {
   lucideLock,
   lucideNetwork,
   lucidePencil,
+  lucideUsers,
   lucidePower,
   lucideRefreshCw,
   lucideDatabaseBackup,
@@ -66,6 +67,10 @@ import { ClusterTlsDialogComponent } from './cluster-tls-dialog.component';
 import { TlsSpec } from '../../api/models/tls-spec';
 import { ClusterPoolerDialogComponent } from './cluster-pooler-dialog.component';
 import { PoolerSpec } from '../../api/models/pooler-spec';
+import {
+  ClusterProvisionDialogComponent,
+  ProvisionResult,
+} from './cluster-provision-dialog.component';
 
 const REFRESH_MS = 5000;
 
@@ -253,6 +258,7 @@ export class ImageDialogComponent {
       lucideLock,
       lucideNetwork,
       lucidePencil,
+      lucideUsers,
       lucidePower,
       lucideRefreshCw,
       lucideDatabaseBackup,
@@ -890,6 +896,47 @@ export class ImageDialogComponent {
             {{ 'pooler.off' | transloco }}
           </p>
         }
+
+        <!-- Roles & databases -->
+        <div class="mt-6 flex items-center justify-between">
+          <h2 class="font-medium">{{ 'provision.title' | transloco }}</h2>
+          <button
+            hlmBtn
+            variant="outline"
+            size="sm"
+            data-testid="open-provision"
+            [disabled]="busy()"
+            (click)="openProvision(d)"
+          >
+            <ng-icon name="lucideUsers" size="14" />
+            {{ 'provision.edit' | transloco }}
+          </button>
+        </div>
+        @if (d.roles.length || d.databases.length) {
+          <p class="text-muted-foreground mt-2 text-sm" data-testid="provision-state">
+            {{
+              'provision.summary'
+                | transloco: { roles: d.roles.length, databases: d.databases.length }
+            }}
+          </p>
+          <div class="mt-1 grid gap-1">
+            @for (r of d.roles; track r.name) {
+              <p class="text-muted-foreground font-mono text-xs">
+                {{ r.name }}{{ r.login === false ? ' · nologin' : '' }}
+                {{ r.in_roles?.length ? '→ ' + r.in_roles!.join(', ') : '' }}
+              </p>
+            }
+            @for (db of d.databases; track db.name) {
+              <p class="text-muted-foreground font-mono text-xs">
+                {{ db.name }} ({{ db.owner }})
+              </p>
+            }
+          </div>
+        } @else {
+          <p class="text-muted-foreground mt-2 text-sm" data-testid="provision-state">
+            {{ 'provision.none' | transloco }}
+          </p>
+        }
       } @else if (!error()) {
         <p class="text-muted-foreground text-sm">{{ 'common.loading' | transloco }}</p>
       }
@@ -1105,6 +1152,24 @@ export class ClusterDetailComponent implements OnDestroy {
     }
     await this.run(() =>
       this.api.invoke(patchCluster, { name: this.name(), body: { pooler: result } }),
+    );
+  }
+
+  async openProvision(d: ClusterDetail): Promise<void> {
+    const result = await firstValueFrom(
+      this.dialog.open<ProvisionResult | undefined>(ClusterProvisionDialogComponent, {
+        context: { roles: d.roles ?? [], databases: d.databases ?? [] },
+        contentClass: EDITOR_DIALOG_CLASS,
+      }).closed$,
+    );
+    if (!result) {
+      return;
+    }
+    await this.run(() =>
+      this.api.invoke(patchCluster, {
+        name: this.name(),
+        body: { roles: result.roles, databases: result.databases },
+      }),
     );
   }
 
