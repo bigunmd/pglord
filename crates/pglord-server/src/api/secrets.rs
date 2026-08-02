@@ -11,8 +11,8 @@ use k8s_openapi::api::core::v1::{ConfigMap, Secret};
 use kube::api::{Api, Patch, PatchParams};
 use pglord_core::deps::{RequiredResource, ResourceKind, required_resources};
 use pglord_core::render::{
-    AGENT_HTTP_PORT, REPLICATION_PASSWORD_KEY, SUPERUSER_PASSWORD_KEY, credentials_secret_name,
-    pod_fqdn,
+    AGENT_HTTP_PORT, POOLER_PASSWORD_KEY, REPLICATION_PASSWORD_KEY, SUPERUSER_PASSWORD_KEY,
+    credentials_secret_name, pod_fqdn,
 };
 use serde::Serialize;
 use utoipa::ToSchema;
@@ -215,16 +215,30 @@ async fn run_rotation(
 ) -> anyhow::Result<()> {
     let su_pw = crate::reconciler::generate_password();
     let repl_pw = crate::reconciler::generate_password();
+    // The pooler's credential rotates with the rest; the reconciler re-renders
+    // the pooler config Secret from the new value and the config-hash
+    // annotation rolls the pooler pods on its next pass.
+    let pooler_pw = spec
+        .pooler
+        .enabled
+        .then(crate::reconciler::generate_password);
 
     let secrets: Api<Secret> = Api::namespaced(ops.kube.clone(), &ops.ns);
+    let mut string_data = serde_json::json!({
+        SUPERUSER_PASSWORD_KEY: su_pw.clone(),
+        REPLICATION_PASSWORD_KEY: repl_pw.clone(),
+    });
+    if let (Some(pw), Some(map)) = (&pooler_pw, string_data.as_object_mut()) {
+        map.insert(
+            POOLER_PASSWORD_KEY.to_string(),
+            serde_json::Value::String(pw.clone()),
+        );
+    }
     let patch = serde_json::json!({
         "metadata": { "annotations": {
             "pglord.dev/rotated-at": chrono::Utc::now().to_rfc3339(),
         } },
-        "stringData": {
-            SUPERUSER_PASSWORD_KEY: su_pw.clone(),
-            REPLICATION_PASSWORD_KEY: repl_pw.clone(),
-        },
+        "stringData": string_data,
     });
     secrets
         .patch(
@@ -255,6 +269,26 @@ async fn run_rotation(
         anyhow::bail!("agent /roles/apply on {primary} answered {status}: {body}");
     }
     tracing::info!(cluster = %spec.name, %primary, "rotation: roles altered on primary");
+
+    if let Some(pw) = &pooler_pw {
+        let url = format!(
+            "http://{}:{}/pooler/ensure",
+            pod_fqdn(primary, &spec.name, &ops.ns),
+            AGENT_HTTP_PORT
+        );
+        let resp = ops
+            .http
+            .post(&url)
+            .json(&serde_json::json!({ "password": pw }))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("agent /pooler/ensure on {primary} answered {status}: {body}");
+        }
+        tracing::info!(cluster = %spec.name, %primary, "rotation: pooler role altered on primary");
+    }
 
     let order = crate::api::clusters::roll_order(&spec.name, spec.replicas, primary);
     crate::api::clusters::roll_pods(ops, spec, order).await;
