@@ -91,6 +91,9 @@ restore-e2e: ## Minikube e2e: restore into a new cluster, and to a point in time
 secrets-e2e: ## Minikube e2e: own credentials secret, custom env and init scripts
 	./scripts/secrets-e2e.sh
 
+tls-e2e: ## Minikube e2e: tls handshake, cert rotation without restart, hostnossl reject
+	./scripts/tls-e2e.sh
+
 ui-install: ## Install UI dependencies
 	cd ui && npm ci
 
