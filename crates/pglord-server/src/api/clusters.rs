@@ -102,6 +102,30 @@ mod tests {
         );
         assert_eq!(roll_order("demo", 1, "demo-0"), vec!["demo-0"]);
     }
+
+    #[test]
+    fn template_diff_spots_pod_changes_and_ignores_the_rest() {
+        let base: pglord_core::spec::ClusterSpec =
+            serde_json::from_value(serde_json::json!({ "name": "demo" })).expect("spec");
+
+        let mut image = base.clone();
+        image.image = "pglord-agent:v2".into();
+        assert!(super::pod_template_changed(&base, &image, "ns"));
+
+        let mut env = base.clone();
+        env.env = vec![pglord_core::env::EnvVarSpec {
+            name: "APP_MODE".into(),
+            value: Some("fast".into()),
+            secret: None,
+        }];
+        assert!(super::pod_template_changed(&base, &env, "ns"));
+
+        // Parameters land via the agent's conf files, not the pod template:
+        // changing them must never trigger a roll.
+        let mut params = base.clone();
+        params.parameters.insert("work_mem".into(), "8MB".into());
+        assert!(!super::pod_template_changed(&base, &params, "ns"));
+    }
 }
 
 fn ops(state: &Option<ClusterOps>) -> Result<&ClusterOps, ApiError> {
@@ -264,9 +288,33 @@ pub struct SwitchoverRequest {
     pub target: String,
 }
 
+/// Whether a spec change alters the rendered pod template (image, env,
+/// workload...). Such a change only takes effect through a roll: the
+/// StatefulSet uses OnDelete, so the controller never restarts pods itself.
+/// Owner content cancels out — any fixed value works here.
+fn pod_template_changed(
+    current: &pglord_core::spec::ClusterSpec,
+    next: &pglord_core::spec::ClusterSpec,
+    ns: &str,
+) -> bool {
+    let owner = pglord_core::render::OwnerRef {
+        api_version: "v1".into(),
+        kind: "ConfigMap".into(),
+        name: format!("{}-spec", current.name),
+        uid: "template-diff".into(),
+    };
+    pglord_core::render::render_statefulset(current, ns, &owner)
+        .spec
+        .map(|s| s.template)
+        != pglord_core::render::render_statefulset(next, ns, &owner)
+            .spec
+            .map(|s| s.template)
+}
+
 fn spec_error(e: SpecError) -> ApiError {
     let code = match e {
         SpecError::StorageShrink { .. } => "storage_shrink",
+        SpecError::InvalidImage => "invalid_image",
         SpecError::UnknownParameter(_)
         | SpecError::ReservedParameter(_)
         | SpecError::InvalidParameterValue { .. } => "invalid_parameter",
@@ -299,7 +347,7 @@ pub async fn patch_cluster(
     Json(change): Json<SpecChange>,
 ) -> Result<Json<ClusterDetail>, ApiError> {
     let ops = ops(&state)?;
-    let Some((current, _owner)) = ops.store.get(&name).await.map_err(ApiError::internal)? else {
+    let Some((current, owner)) = ops.store.get(&name).await.map_err(ApiError::internal)? else {
         return Err(ApiError::not_found());
     };
     let next = current.apply_change(&change).map_err(spec_error)?;
@@ -334,6 +382,29 @@ pub async fn patch_cluster(
             current.replicas,
         )
         .await;
+    }
+
+    if pod_template_changed(&current, &next, &ops.ns) {
+        let primary = ops
+            .store
+            .primary(&name)
+            .await
+            .map_err(ApiError::internal)?
+            .unwrap_or_else(|| format!("{name}-0"));
+        // The StatefulSet must carry the new template before any pod dies, or
+        // a deleted pod would come back on the old one. Same field manager as
+        // the reconciler, so the level-triggered loop stays idempotent on top.
+        crate::reconciler::apply_cluster(&ops.kube, &ops.ns, &next, &owner, &primary)
+            .await
+            .map_err(ApiError::internal)?;
+        let ops = ops.clone();
+        let roll_spec = next.clone();
+        tokio::spawn(async move {
+            let order = roll_order(&roll_spec.name, roll_spec.replicas, &primary);
+            tracing::info!(cluster = %roll_spec.name, ?order, "template change: rolling instances");
+            roll_pods(&ops, &roll_spec, order).await;
+            tracing::info!(cluster = %roll_spec.name, "template roll finished");
+        });
     }
     tracing::info!(cluster = %next.name, replicas = next.replicas, storage = %next.storage_size, "cluster updated");
     get_cluster(State(state.clone()), Path(name)).await

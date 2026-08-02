@@ -1154,9 +1154,8 @@ components:
     SpecChange:
       type: object
       description: |-
-        The fields a running cluster may change. Name and image are deliberately
-        absent: renaming would orphan every derived object, and image changes are a
-        rolling-upgrade concern with its own (future) workflow.
+        The fields a running cluster may change. Name is deliberately absent:
+        renaming would orphan every derived object.
 
         `credentials_secret` is absent for a subtler reason. Pointing a running
         cluster at a different Secret would change the password the agent presents
@@ -1179,6 +1178,14 @@ components:
           description: |-
             Full replacement of the custom environment. Changing it rolls the
             instances, since the pod template changes.
+        image:
+          type:
+          - string
+          - 'null'
+          description: |-
+            Change the instance image. Rolls every instance, standbys first,
+            primary last. Same-major images only — the agent refuses to start a
+            data directory created by a different PostgreSQL major version.
         init:
           oneOf:
           - type: 'null'
