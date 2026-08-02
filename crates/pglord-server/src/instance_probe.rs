@@ -14,6 +14,8 @@ struct AgentStatus {
     pending_restart: bool,
     #[serde(default)]
     sync_standby_count: Option<u32>,
+    #[serde(default)]
+    ssl: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -26,6 +28,8 @@ pub struct InstanceObservation {
     pub pending_restart: bool,
     /// Primary only: connected standbys eligible to confirm a sync commit.
     pub sync_standby_count: Option<u32>,
+    /// The server is accepting TLS connections. None when unreachable.
+    pub ssl: Option<bool>,
 }
 
 pub async fn observe_cluster(
@@ -54,6 +58,7 @@ pub async fn observe_cluster(
                 lsn: s.lsn,
                 pending_restart: s.pending_restart,
                 sync_standby_count: s.sync_standby_count,
+                ssl: s.ssl,
             },
             None => InstanceObservation {
                 pod,
@@ -62,6 +67,7 @@ pub async fn observe_cluster(
                 lsn: None,
                 pending_restart: false,
                 sync_standby_count: None,
+                ssl: None,
             },
         });
     }
