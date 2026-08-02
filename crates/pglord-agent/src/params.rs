@@ -16,6 +16,9 @@ pub const ARCHIVE_FILE: &str = "postgresql.pglord-archive.conf";
 /// peer list excludes itself, so a promoted standby already carries the right
 /// value (see pglord_core::sync::render).
 pub const SYNC_FILE: &str = "postgresql.pglord-sync.conf";
+/// Hot-standby GUC floor (see pglord_core::standby::render); included after
+/// the user parameter file so the clamp always wins.
+pub const STANDBY_FILE: &str = "postgresql.pglord-standby.conf";
 
 /// Rendered archiving settings: on with a pgBackRest archive_command when
 /// backups are configured, explicitly off when they are not.
@@ -55,6 +58,11 @@ pub fn write_archive_if_changed(pgdata: &Path, rendered: &str) -> std::io::Resul
 /// Write the sync-replication file when it differs; returns whether it changed.
 pub fn write_sync_if_changed(pgdata: &Path, rendered: &str) -> std::io::Result<bool> {
     write_file_if_changed(&pgdata.join(SYNC_FILE), rendered)
+}
+
+/// Write the hot-standby floor file when it differs; returns whether it changed.
+pub fn write_standby_if_changed(pgdata: &Path, rendered: &str) -> std::io::Result<bool> {
+    write_file_if_changed(&pgdata.join(STANDBY_FILE), rendered)
 }
 
 /// Write the rendered parameters, returning whether the content changed.
@@ -147,6 +155,26 @@ mod tests {
         );
         let off = pglord_core::sync::render("demo", 2, "demo-0", false);
         assert!(write_sync_if_changed(&dir, &off).expect("write"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn standby_write_is_idempotent_and_targets_the_standby_file() {
+        let dir = tempdir("standby");
+        let live = pglord_core::standby::parse_controldata(
+            "max_connections setting: 150\nmax_worker_processes setting: 8\n\
+             max_prepared_xacts setting: 0\nmax_locks_per_xact setting: 64\n",
+        )
+        .expect("parse");
+        let clamped = pglord_core::standby::render(&Default::default(), Some(&live));
+        assert!(write_standby_if_changed(&dir, &clamped).expect("write"));
+        // Unchanged content must not report a change: a report triggers a
+        // reload, and this runs on every 5s poll.
+        assert!(!write_standby_if_changed(&dir, &clamped).expect("write"));
+        assert_eq!(
+            std::fs::read_to_string(dir.join(STANDBY_FILE)).expect("read"),
+            clamped
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

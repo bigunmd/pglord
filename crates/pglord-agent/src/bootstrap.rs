@@ -28,6 +28,7 @@ pub fn postgresql_conf_extra(port: u16) -> String {
          include_if_exists = '{}'\n\
          include_if_exists = '{}'\n\
          include_if_exists = '{}'\n\
+         include_if_exists = '{}'\n\
          listen_addresses = '*'\n\
          port = {port}\n\
          wal_level = replica\n\
@@ -37,6 +38,7 @@ pub fn postgresql_conf_extra(port: u16) -> String {
         crate::params::PARAMS_FILE,
         crate::params::ARCHIVE_FILE,
         crate::params::SYNC_FILE,
+        crate::params::STANDBY_FILE,
     )
 }
 
@@ -371,6 +373,17 @@ mod tests {
             .expect("sync include present");
         let managed_at = conf.find("listen_addresses").expect("managed settings");
         assert!(sync_at < managed_at);
+        // The hot-standby floor include must come after the user parameter
+        // include (last assignment wins, so the clamp overrides the spec).
+        assert!(conf.contains("include_if_exists = 'postgresql.pglord-standby.conf'"));
+        let params_at = conf
+            .find("postgresql.pglord.conf")
+            .expect("params include present");
+        let standby_at = conf
+            .find("postgresql.pglord-standby.conf")
+            .expect("standby include present");
+        assert!(params_at < standby_at);
+        assert!(standby_at < managed_at);
     }
 
     #[test]

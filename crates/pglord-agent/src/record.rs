@@ -113,7 +113,7 @@ pub async fn follow(reader: RecordReader, cfg: std::sync::Arc<Config>, me: Strin
         if !st.ready {
             continue;
         }
-        apply_parameters(&reader, &cfg, &me).await;
+        apply_parameters(&reader, &cfg, &me, st.in_recovery == Some(true)).await;
         let i_am_recorded = recorded == me;
         match st.in_recovery {
             // A restoring instance is in recovery *and* recorded as primary,
@@ -145,7 +145,7 @@ pub async fn follow(reader: RecordReader, cfg: std::sync::Arc<Config>, me: Strin
 /// Apply everything the spec drives on this instance: user parameters,
 /// archiving, pg_hba rules, and the backup repository config. Reload-safe
 /// settings take effect at once; the rest surface as pending_restart.
-async fn apply_parameters(reader: &RecordReader, cfg: &Config, me: &str) {
+async fn apply_parameters(reader: &RecordReader, cfg: &Config, me: &str, in_recovery: bool) {
     let Some(spec) = reader.spec().await else {
         return;
     };
@@ -184,6 +184,21 @@ async fn apply_parameters(reader: &RecordReader, cfg: &Config, me: &str) {
         Ok(true) => changed = true,
         Ok(false) => {}
         Err(err) => tracing::warn!(%err, "failed to write sync replication settings"),
+    }
+
+    // Standbys clamp restart-required hot-standby GUCs to the primary's live
+    // values (control file); a primary renders the header-only file, clearing
+    // any clamp left over from before its promotion.
+    let live = if in_recovery {
+        crate::controldata::live_values(&cfg.pgdata).await
+    } else {
+        None
+    };
+    let standby = pglord_core::standby::render(&spec.parameters, live.as_ref());
+    match crate::params::write_standby_if_changed(&cfg.pgdata, &standby) {
+        Ok(true) => changed = true,
+        Ok(false) => {}
+        Err(err) => tracing::warn!(%err, "failed to write hot-standby floor settings"),
     }
 
     if spec.backup.enabled {

@@ -64,6 +64,24 @@ async fn main() -> anyhow::Result<()> {
     if let Err(err) = pglord_agent::params::write_sync_if_changed(&cfg.pgdata, &sync_conf) {
         tracing::warn!(%err, "failed to write sync replication settings");
     }
+    // A rebuilt standby carries the primary's control file, so the clamp is
+    // correct exactly when postgres first validates hot-standby settings.
+    let empty = std::collections::BTreeMap::new();
+    let live = if cfg.role == Role::Standby {
+        pglord_agent::controldata::live_values(&cfg.pgdata).await
+    } else {
+        None
+    };
+    let standby_conf = pglord_core::standby::render(
+        cluster_spec
+            .as_ref()
+            .map(|s| &s.parameters)
+            .unwrap_or(&empty),
+        live.as_ref(),
+    );
+    if let Err(err) = pglord_agent::params::write_standby_if_changed(&cfg.pgdata, &standby_conf) {
+        tracing::warn!(%err, "failed to write hot-standby floor settings");
+    }
     let child = supervisor::spawn_postgres(&cfg)?;
 
     if cfg.role == Role::Primary {
