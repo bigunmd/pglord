@@ -6,6 +6,7 @@ import { EnvVarSpec } from '../models/env-var-spec';
 import { HbaRule } from '../models/hba-rule';
 import { InitSpec } from '../models/init-spec';
 import { InstanceDto } from '../models/instance-dto';
+import { PoolerStatus } from '../models/pooler-status';
 import { RestoreSpec } from '../models/restore-spec';
 import { TlsSpec } from '../models/tls-spec';
 import { WorkloadSpec } from '../models/workload-spec';
@@ -52,6 +53,11 @@ export interface ClusterDetail {
    * Client access rules between pglord's managed prefix and catch-all.
    */
   pg_hba: Array<HbaRule>;
+
+  /**
+   * Managed PgBouncer in front of the primary.
+   */
+  pooler: PoolerStatus;
 
   /**
    * Recorded primary pod (the single writer per the primary record).

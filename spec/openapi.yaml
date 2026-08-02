@@ -645,6 +645,7 @@ components:
       - pending_restart
       - synchronous
       - sync_degraded
+      - pooler
       - instances
       properties:
         backup:
@@ -690,6 +691,9 @@ components:
           items:
             $ref: '#/components/schemas/HbaRule'
           description: Client access rules between pglord's managed prefix and catch-all.
+        pooler:
+          $ref: '#/components/schemas/PoolerStatus'
+          description: Managed PgBouncer in front of the primary.
         primary:
           type: string
           description: Recorded primary pod (the single writer per the primary record).
@@ -776,6 +780,11 @@ components:
             Client access rules (pg_hba.conf) inserted between pglord's managed
             prefix and its scram catch-all. First match wins; use `reject` rules
             to tighten access. Applied with a reload — no restart.
+        pooler:
+          $ref: '#/components/schemas/PoolerSpec'
+          description: |-
+            Managed PgBouncer in front of the primary. Pooler changes never touch
+            the postgres instances.
         replicas:
           type: integer
           format: int32
@@ -986,6 +995,63 @@ components:
       properties:
         message:
           type: string
+    PoolMode:
+      type: string
+      enum:
+      - transaction
+      - session
+    PoolerSpec:
+      type: object
+      properties:
+        default_pool_size:
+          type: integer
+          format: int32
+          description: Server connections per database/user pair.
+          minimum: 0
+        enabled:
+          type: boolean
+          description: |-
+            Run a PgBouncer Deployment for this cluster. Disabling deletes the
+            pooler objects; postgres instances are never touched by pooler changes.
+        image:
+          type: string
+          description: PgBouncer image; pinned default, overridable like the cluster image.
+        max_client_conn:
+          type: integer
+          format: int32
+          description: Client connections PgBouncer accepts, across all databases.
+          minimum: 0
+        pool_mode:
+          $ref: '#/components/schemas/PoolMode'
+        replicas:
+          type: integer
+          format: int32
+          description: Pooler pods — independent of postgres replicas.
+          minimum: 0
+        resources:
+          $ref: '#/components/schemas/Resources'
+          description: Resources of the pooler container.
+    PoolerStatus:
+      type: object
+      required:
+      - spec
+      - ready_replicas
+      - service
+      properties:
+        ready_replicas:
+          type: integer
+          format: int32
+          description: |-
+            Ready pooler pods, from the Deployment status; 0 when the Deployment
+            is absent.
+        service:
+          type: string
+          description: Service clients connect to, port 5432.
+        spec:
+          $ref: '#/components/schemas/PoolerSpec'
+          description: |-
+            The pooler block as configured (disabled poolers report their inert
+            knobs too).
     PreflightCheck:
       type: object
       required:
@@ -1275,6 +1341,13 @@ components:
           description: |-
             Full replacement of the pg_hba rule list: absent leaves it untouched,
             an empty list removes every user rule.
+        pooler:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/PoolerSpec'
+            description: |-
+              Full replacement of the pooler block. An empty block disables the
+              pooler and deletes its objects; instances are unaffected.
         replicas:
           type:
           - integer

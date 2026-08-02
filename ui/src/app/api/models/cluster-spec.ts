@@ -5,6 +5,7 @@ import { BackupSpec } from '../models/backup-spec';
 import { EnvVarSpec } from '../models/env-var-spec';
 import { HbaRule } from '../models/hba-rule';
 import { InitSpec } from '../models/init-spec';
+import { PoolerSpec } from '../models/pooler-spec';
 import { RestoreSpec } from '../models/restore-spec';
 import { TlsSpec } from '../models/tls-spec';
 import { WorkloadSpec } from '../models/workload-spec';
@@ -58,6 +59,12 @@ export interface ClusterSpec {
    * to tighten access. Applied with a reload — no restart.
    */
   pg_hba?: Array<HbaRule>;
+
+  /**
+   * Managed PgBouncer in front of the primary. Pooler changes never touch
+   * the postgres instances.
+   */
+  pooler?: PoolerSpec;
 
   /**
    * Total instances: 1 primary + (replicas - 1) streaming standbys.

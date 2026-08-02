@@ -5,6 +5,7 @@ import { BackupSpec } from '../models/backup-spec';
 import { EnvVarSpec } from '../models/env-var-spec';
 import { HbaRule } from '../models/hba-rule';
 import { InitSpec } from '../models/init-spec';
+import { PoolerSpec } from '../models/pooler-spec';
 import { TlsSpec } from '../models/tls-spec';
 import { WorkloadSpec } from '../models/workload-spec';
 
@@ -49,6 +50,7 @@ export interface SpecChange {
    * an empty list removes every user rule.
    */
   pg_hba?: (Array<HbaRule> | null);
+  pooler?: (null | PoolerSpec);
   replicas?: (number | null);
   storage_size?: (string | null);
 
