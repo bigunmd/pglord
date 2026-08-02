@@ -231,6 +231,28 @@ primary automatically; it starts streaming when the clone finishes.
 Removing instances **deletes their data volumes**. Only the highest-numbered
 instances are removed, and the primary is never one of them.
 
+### Minor version upgrades
+
+Click the pencil next to the image name in the cluster header, enter the new
+image, and confirm. pglord rolls every instance onto it: standbys first, the
+primary last, one at a time, each waited on until it is ready again — the same
+order as a rolling restart, so writes stay available for as long as possible.
+
+Rules and recovery:
+
+- **Same PostgreSQL major only.** The image tag itself is not inspected (tags
+  are arbitrary), but an instance refuses to start when its data directory was
+  created by a different major version, with a log line naming both versions.
+  Revert the image in the spec and the cluster rolls back.
+- **A bad image** (unpullable, broken) stops the roll at the first standby;
+  the primary keeps serving on the old image. Revert the image to roll back.
+- **If the pglord server restarts mid-roll**, the remaining instances stay on
+  the old image (the StatefulSet only replaces pods pglord deletes). Use
+  **Restart cluster** to finish the roll.
+
+Changing custom environment variables or workload settings rolls instances
+the same way.
+
 ### Back up to object storage
 
 pglord backs clusters up with pgBackRest to any S3-compatible storage.
@@ -369,6 +391,14 @@ rather than left to break startup), and settings pglord manages itself —
 `wal_level`, `max_wal_senders`, `hot_standby`, `wal_log_hints`,
 `listen_addresses`, `port` — cannot be overridden, because replication and
 failover depend on them.
+
+Lowering `max_connections`, `max_worker_processes`,
+`max_prepared_transactions` or `max_locks_per_transaction` is safe at any
+time: each instance picks the lower value up at its next restart, and until
+the primary has restarted, standbys keep running with the primary's higher
+live value (pglord raises it for them automatically — PostgreSQL refuses
+standby recovery below the primary's live setting, so this is what keeps
+replicas rebuildable in the meantime).
 
 ### Client access rules (pg_hba)
 
@@ -585,8 +615,10 @@ default because they require the monitoring.coreos.com CRDs; the raw
   and the restored cluster starts with backups switched off.
 - Custom images must be built on the pglord agent image; stock `postgres:NN`
   images are not usable yet.
-- Cluster name and image cannot be changed after creation (instances, storage
+- Cluster name cannot be changed after creation (instances, storage, image
   and PostgreSQL settings can — see Day-2 operations).
+- Upgrades stay within one PostgreSQL major version; major upgrades
+  (pg_upgrade) are not supported.
 - The credentials Secret reference is fixed once a cluster exists (the managed
   passwords themselves can be rotated — see Rotating credentials).
 - Initialisation scripts are SQL only, and run only when a cluster is first

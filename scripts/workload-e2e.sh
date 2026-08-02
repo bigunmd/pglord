@@ -42,8 +42,10 @@ code=$(curl -s -o /tmp/wl.json -w '%{http_code}' -X POST "$API/api/v1/clusters" 
       "resources":{"cpu_request":"100m","memory_request":"256Mi","memory_limit":"1Gi"}
     }}')
 [ "$code" = "201" ] || { echo "FAIL: create returned $code: $(cat /tmp/wl.json)"; exit 1; }
+# Wait for Running, not mere existence: the phase assertion below would
+# otherwise race a pod that is still ContainerCreating.
 for _ in $(seq 1 120); do
-  [ "$(jsonpath '{.metadata.name}')" = "wl-0" ] && break
+  [ "$(jsonpath '{.status.phase}')" = "Running" ] && break
   sleep 2
 done
 

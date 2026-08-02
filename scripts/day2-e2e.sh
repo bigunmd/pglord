@@ -25,6 +25,14 @@ for img in pglord-server:dev pglord-agent:dev; do
   minikube -p pglord image rm "docker.io/library/$img" >/dev/null 2>&1 || true
   minikube -p pglord image load "$img"
 done
+# The rm above fails silently while any pod still runs the image (leftover
+# clusters do this), and kubelet then keeps serving the stale build. Verify
+# the stand really runs what was just built before trusting any result.
+for img in pglord-server:dev pglord-agent:dev; do
+  want=$(docker image inspect "$img" -f '{{.Id}}')
+  have=$(minikube -p pglord ssh -- docker image inspect -f '{{.Id}}' "docker.io/library/$img" 2>/dev/null | tr -d '\r')
+  [ "$want" = "$have" ] || { echo "FAIL: minikube kept a stale $img (have $have, want $want) — delete leftover clusters and retry"; exit 1; }
+done
 $KUBECTL apply -f deploy/k8s/ >/dev/null
 $KUBECTL -n pglord scale deploy/pglord-server --replicas=1 >/dev/null
 $KUBECTL -n pglord rollout status deploy/pglord-server --timeout=120s >/dev/null
@@ -161,6 +169,48 @@ done
 got=$(psql_on demo-2 "SELECT x FROM day2")
 [ "$got" = "7" ] || { echo "FAIL: new instance did not clone data (got '$got')"; exit 1; }
 echo "OK scaled to 3/3 and demo-2 streaming from the new primary"
+
+echo "==> rejecting an empty image"
+code=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "$API/api/v1/clusters/demo" \
+  -H 'content-type: application/json' -d '{"image":"  "}')
+[ "$code" = "422" ] || { echo "FAIL: empty image returned $code, expected 422"; exit 1; }
+echo "OK rejected"
+
+echo "==> image change: rolling upgrade, standbys first"
+# The same binary under a second tag: this proves the roll machinery, not
+# postgres. A real minor upgrade differs only in the image contents.
+minikube -p pglord image tag docker.io/library/pglord-agent:dev docker.io/library/pglord-agent:dev-upgrade
+primary_before=$(curl -s "$API/api/v1/clusters/demo" | python3 -c "import sys,json; print(json.load(sys.stdin)['primary'])")
+code=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "$API/api/v1/clusters/demo" \
+  -H 'content-type: application/json' -d '{"image":"pglord-agent:dev-upgrade"}')
+[ "$code" = "200" ] || { echo "FAIL: image patch returned $code"; exit 1; }
+for _ in $(seq 1 150); do
+  images=$($KUBECTL -n pglord get pods -l app.kubernetes.io/instance=demo \
+    -o jsonpath='{range .items[*]}{.spec.containers[0].image}{"\n"}{end}' 2>/dev/null | sort -u)
+  ready=$(curl -s "$API/api/v1/clusters/demo" | python3 -c "import sys,json; print(json.load(sys.stdin)['ready_replicas'])" 2>/dev/null || echo "")
+  [ "$images" = "pglord-agent:dev-upgrade" ] && [ "$ready" = "3" ] && break
+  sleep 2
+done
+if [ "$images" != "pglord-agent:dev-upgrade" ] || [ "$ready" != "3" ]; then
+  echo "DIAG images: $images ready: $ready"
+  $KUBECTL -n pglord get pods -o wide | grep '^demo-' || true
+  $KUBECTL -n pglord logs deploy/pglord-server --tail 20 || true
+  echo "FAIL: pods never converged healthy on the new image"
+  exit 1
+fi
+# Standbys first, primary last: the primary's replacement pod must be the
+# youngest. (Recorded before the patch — the roll itself may end in a
+# failover that moves the record afterwards.)
+prim_ts=$($KUBECTL -n pglord get pod "$primary_before" -o jsonpath='{.metadata.creationTimestamp}')
+for pod in $($KUBECTL -n pglord get pods -l app.kubernetes.io/instance=demo -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}'); do
+  [ "$pod" = "$primary_before" ] && continue
+  ts=$($KUBECTL -n pglord get pod "$pod" -o jsonpath='{.metadata.creationTimestamp}')
+  [[ "$ts" < "$prim_ts" || "$ts" == "$prim_ts" ]] \
+    || { echo "FAIL: $pod ($ts) rolled after the primary $primary_before ($prim_ts)"; exit 1; }
+done
+got=$(psql_on demo-0 "SELECT x FROM day2")
+[ "$got" = "7" ] || { echo "FAIL: data lost across the upgrade (got '$got')"; exit 1; }
+echo "OK all instances on the new image, standbys rolled first, data intact"
 
 echo "==> cleanup"
 curl -s -X DELETE "$API/api/v1/clusters/demo" >/dev/null
