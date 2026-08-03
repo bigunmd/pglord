@@ -91,12 +91,15 @@ struct AuthEntry {
     expires: Instant,
 }
 
+/// (token hash, verb, ns) — one grant per authenticated subject and target.
+type GrantKey = (String, &'static str, Option<String>);
+
 pub struct KubernetesAuthorizer {
     client: kube::Client,
     tokens: Mutex<HashMap<String, AuthEntry>>,
-    /// (token hash, verb, ns) -> allowed-until. Only positive results live
-    /// here; denials are re-checked every time.
-    grants: Mutex<HashMap<(String, &'static str, Option<String>), Instant>>,
+    /// Grant -> allowed-until. Only positive results live here; denials are
+    /// re-checked every time.
+    grants: Mutex<HashMap<GrantKey, Instant>>,
 }
 
 fn token_key(token: &str) -> String {
