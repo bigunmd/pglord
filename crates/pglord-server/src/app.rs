@@ -35,6 +35,9 @@ pub struct ClusterOps {
     pub ns: String,
     /// Image given to clusters created without one. See Config.
     pub default_agent_image: String,
+    /// "configmap" or "crd" — preflight reports the CR permissions only when
+    /// the CRD backend is actually in use.
+    pub spec_backend: String,
     pub metrics: crate::metrics::Metrics,
 }
 

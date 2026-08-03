@@ -27,6 +27,16 @@ rules:
   - apiGroups: [rbac.authorization.k8s.io]
     resources: [roles, rolebindings]
     verbs: [get, list, watch, create, update, patch, delete]
+  {{- if eq .Values.config.specBackend "crd" }}
+  # Operator mode: PostgresCluster resources are the spec store, and the
+  # sync loop writes their status subresource.
+  - apiGroups: [pglord.dev]
+    resources: [postgresclusters]
+    verbs: [get, list, watch, create, patch, delete]
+  - apiGroups: [pglord.dev]
+    resources: [postgresclusters/status]
+    verbs: [get, patch]
+  {{- end }}
 # The permission preflight needs no rule here: SelfSubjectAccessReview is
 # cluster-scoped, and default Kubernetes RBAC already lets every authenticated
 # identity create one. A namespaced Role granting it would have no effect.

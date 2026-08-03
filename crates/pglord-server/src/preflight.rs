@@ -27,7 +27,7 @@ pub struct CheckResult {
 }
 
 /// Everything pglord needs in its own namespace to manage clusters.
-pub fn required() -> Vec<PermissionCheck> {
+pub fn required(spec_backend: &str) -> Vec<PermissionCheck> {
     const WRITE: [&str; 5] = ["get", "list", "create", "patch", "delete"];
     let mut out = Vec::new();
     for resource in ["configmaps", "secrets", "services", "serviceaccounts"] {
@@ -69,6 +69,24 @@ pub fn required() -> Vec<PermissionCheck> {
             });
         }
     }
+    // Operator mode: PostgresCluster resources are the spec store, and the
+    // sync loop writes their status subresource.
+    if spec_backend == "crd" {
+        for verb in ["get", "list", "watch", "create", "patch", "delete"] {
+            out.push(PermissionCheck {
+                group: "pglord.dev",
+                resource: "postgresclusters",
+                verb,
+            });
+        }
+        for verb in ["get", "patch"] {
+            out.push(PermissionCheck {
+                group: "pglord.dev",
+                resource: "postgresclusters/status",
+                verb,
+            });
+        }
+    }
     // Per-cluster instance RBAC lets agents read their own primary record.
     for resource in ["roles", "rolebindings"] {
         for verb in ["get", "create", "patch"] {
@@ -84,10 +102,10 @@ pub fn required() -> Vec<PermissionCheck> {
 
 /// Run every required check. Individual failures degrade to `allowed: None`
 /// with a reason — the preflight endpoint must never 500 on a flaky apiserver.
-pub async fn run(client: &kube::Client, ns: &str) -> Vec<CheckResult> {
+pub async fn run(client: &kube::Client, ns: &str, spec_backend: &str) -> Vec<CheckResult> {
     let api: Api<SelfSubjectAccessReview> = Api::all(client.clone());
     let mut results = Vec::new();
-    for check in required() {
+    for check in required(spec_backend) {
         let review = SelfSubjectAccessReview {
             spec: SelfSubjectAccessReviewSpec {
                 resource_attributes: Some(ResourceAttributes {
@@ -148,7 +166,7 @@ mod tests {
 
     #[test]
     fn required_checks_cover_managed_resources_without_duplicates() {
-        let checks = required();
+        let checks = required("configmap");
         assert!(!checks.is_empty());
         for resource in [
             "configmaps",
@@ -187,6 +205,21 @@ mod tests {
         seen.sort_unstable();
         seen.dedup();
         assert_eq!(seen.len(), total, "duplicate permission checks");
+    }
+
+    #[test]
+    fn crd_backend_adds_postgrescluster_checks_and_configmap_mode_omits_them() {
+        let crd = required("crd");
+        assert!(
+            crd.iter()
+                .any(|c| c.group == "pglord.dev" && c.resource == "postgresclusters")
+        );
+        assert!(
+            crd.iter()
+                .any(|c| c.resource == "postgresclusters/status" && c.verb == "patch")
+        );
+        let standalone = required("configmap");
+        assert!(standalone.iter().all(|c| c.group != "pglord.dev"));
     }
 
     #[test]

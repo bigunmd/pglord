@@ -68,8 +68,14 @@ async fn main() -> anyhow::Result<()> {
             // at /api/v1/preflight and shown in the UI.
             let preflight_client = client.clone();
             let preflight_ns = ns.clone();
+            let preflight_backend = cfg.spec_backend.clone();
             tokio::spawn(async move {
-                let results = pglord_server::preflight::run(&preflight_client, &preflight_ns).await;
+                let results = pglord_server::preflight::run(
+                    &preflight_client,
+                    &preflight_ns,
+                    &preflight_backend,
+                )
+                .await;
                 let (ok, missing) = pglord_server::preflight::summarize(&results);
                 let total = results.len();
                 if ok {
@@ -104,6 +110,7 @@ async fn main() -> anyhow::Result<()> {
                     .build()?,
                 ns,
                 default_agent_image: cfg.default_agent_image.clone(),
+                spec_backend: cfg.spec_backend.clone(),
                 metrics: metrics.clone(),
             };
             tokio::spawn(pglord_server::backup_scheduler::run(ops.clone()));

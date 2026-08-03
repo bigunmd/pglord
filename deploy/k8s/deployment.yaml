@@ -27,6 +27,10 @@ spec:
             # has to be something the nodes can pull; here it is the tag
             # `minikube image load` puts in place.
             - { name: PGLORD_DEFAULT_AGENT_IMAGE, value: "pglord-agent:dev" }
+            # Spec backend: "configmap" (standalone, default) or "crd"
+            # (operator mode — install deploy/crds/ and uncomment the
+            # pglord.dev rules in rbac.yaml first).
+            - { name: PGLORD_SPEC_BACKEND, value: "configmap" }
             # --- API authentication (off by default on the dev stand) ---
             # Static bearer tokens, comma-separated, from a Secret you manage:
             #   kubectl -n pglord create secret generic pglord-auth --from-literal=tokens=<token>

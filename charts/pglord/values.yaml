@@ -90,6 +90,10 @@ config:
   corsAllowedOrigins: ""
   # Graceful drain budget; keep below terminationGracePeriodSeconds.
   shutdownTimeoutSeconds: 25
+  # Where cluster specs live: "configmap" (standalone, default) or "crd"
+  # (operator mode). "crd" needs the PostgresCluster CRD installed
+  # (deploy/crds/) and adds pglord.dev rules to the Role.
+  specBackend: configmap
 
 resources:
   requests:

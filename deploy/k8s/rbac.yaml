@@ -31,6 +31,15 @@ rules:
   - apiGroups: [rbac.authorization.k8s.io]
     resources: [roles, rolebindings]
     verbs: [get, list, watch, create, update, patch, delete]
+  # Operator mode only (PGLORD_SPEC_BACKEND=crd): PostgresCluster resources
+  # are the spec store and the sync loop writes their status. Uncomment both
+  # rules together with the env var, after installing deploy/crds/.
+  # - apiGroups: [pglord.dev]
+  #   resources: [postgresclusters]
+  #   verbs: [get, list, watch, create, patch, delete]
+  # - apiGroups: [pglord.dev]
+  #   resources: [postgresclusters/status]
+  #   verbs: [get, patch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

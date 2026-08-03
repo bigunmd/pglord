@@ -54,6 +54,8 @@ spec:
               value: {{ .Values.config.shutdownTimeoutSeconds | quote }}
             - name: PGLORD_DEFAULT_AGENT_IMAGE
               value: {{ .Values.agentImage | quote }}
+            - name: PGLORD_SPEC_BACKEND
+              value: {{ .Values.config.specBackend | quote }}
             {{- if or .Values.auth.tokens.existingSecret .Values.auth.tokens.value }}
             - name: PGLORD_AUTH_TOKENS
               valueFrom:
