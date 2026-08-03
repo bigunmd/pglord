@@ -10,6 +10,7 @@ API=http://127.0.0.1:18097
 
 kill_pf() { pkill -f "kubectl.*port-forward.*pglord-server" 2>/dev/null || true; }
 cleanup() {
+  $KUBECTL uncordon pglord >/dev/null 2>&1 || true
   $KUBECTL -n pglord delete pgc crdemo other --ignore-not-found >/dev/null 2>&1 || true
   $KUBECTL -n pglord delete cm other-spec --ignore-not-found >/dev/null 2>&1 || true
   # Back to standalone so later e2e suites see the stand they expect.
@@ -131,9 +132,13 @@ done
 [ "$mc" = "150" ] || { echo "FAIL: REST edit not visible on the CR (max_connections=$mc)"; exit 1; }
 echo "OK REST edit visible in kubectl"
 
-echo "==> failover updates status.primary"
+echo "==> failover updates status.primary (cordon so the failure is sustained)"
+# A bare pod delete recovers inside the failover threshold and correctly
+# produces no failover — cordon first, exactly like failover-e2e.
 old_primary=$(pgc '{.status.primary}')
 [ -n "$old_primary" ] || { echo "FAIL: no status.primary"; exit 1; }
+NODE=pglord
+$KUBECTL cordon "$NODE" >/dev/null
 $KUBECTL -n pglord delete pod "$old_primary" --wait=false >/dev/null
 new_primary=""
 for _ in $(seq 1 90); do
@@ -141,6 +146,7 @@ for _ in $(seq 1 90); do
   [ -n "$new_primary" ] && [ "$new_primary" != "$old_primary" ] && break
   sleep 2
 done
+$KUBECTL uncordon "$NODE" >/dev/null
 [ -n "$new_primary" ] && [ "$new_primary" != "$old_primary" ] || { echo "FAIL: primary never moved off $old_primary"; exit 1; }
 for _ in $(seq 1 180); do
   ready=$(detail | jsonq "d['ready_replicas']")
