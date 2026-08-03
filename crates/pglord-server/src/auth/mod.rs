@@ -16,6 +16,7 @@ use crate::config::Config;
 use crate::error::ApiError;
 
 pub mod jwks;
+pub mod kubernetes;
 
 /// The one anonymous API path: the UI needs it to render the login screen
 /// before it has any credential.
