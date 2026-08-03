@@ -11,6 +11,11 @@ export interface ClusterSummary {
   name: string;
 
   /**
+   * Namespace the cluster lives in.
+   */
+  namespace: string;
+
+  /**
    * Instances currently passing their readiness probe.
    */
   ready_replicas: number;

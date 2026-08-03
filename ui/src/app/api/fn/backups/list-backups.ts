@@ -12,6 +12,11 @@ import { BackupList } from '../../models/backup-list';
 export interface ListBackups$Params {
 
 /**
+ * Namespace
+ */
+  ns: string;
+
+/**
  * Cluster name
  */
   name: string;
@@ -20,6 +25,7 @@ export interface ListBackups$Params {
 export function listBackups(http: HttpClient, rootUrl: string, params: ListBackups$Params, context?: HttpContext): Observable<StrictHttpResponse<BackupList>> {
   const rb = new RequestBuilder(rootUrl, listBackups.PATH, 'get');
   if (params) {
+    rb.path('ns', params.ns, {});
     rb.path('name', params.name, {});
   }
 
@@ -33,4 +39,4 @@ export function listBackups(http: HttpClient, rootUrl: string, params: ListBacku
   );
 }
 
-listBackups.PATH = '/api/v1/clusters/{name}/backups';
+listBackups.PATH = '/api/v1/namespaces/{ns}/clusters/{name}/backups';

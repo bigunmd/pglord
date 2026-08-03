@@ -11,6 +11,11 @@ import { RequestBuilder } from '../../request-builder';
 export interface DeleteCluster$Params {
 
 /**
+ * Namespace
+ */
+  ns: string;
+
+/**
  * Cluster name
  */
   name: string;
@@ -19,6 +24,7 @@ export interface DeleteCluster$Params {
 export function deleteCluster(http: HttpClient, rootUrl: string, params: DeleteCluster$Params, context?: HttpContext): Observable<StrictHttpResponse<void>> {
   const rb = new RequestBuilder(rootUrl, deleteCluster.PATH, 'delete');
   if (params) {
+    rb.path('ns', params.ns, {});
     rb.path('name', params.name, {});
   }
 
@@ -32,4 +38,4 @@ export function deleteCluster(http: HttpClient, rootUrl: string, params: DeleteC
   );
 }
 
-deleteCluster.PATH = '/api/v1/clusters/{name}';
+deleteCluster.PATH = '/api/v1/namespaces/{ns}/clusters/{name}';

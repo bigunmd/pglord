@@ -349,7 +349,9 @@
     "hideAdvanced": "Hide secrets, environment and init scripts",
     "imageDefault": "Server default",
     "imageHelp": "Leave empty to use the image this pglord was configured with. Set one only to pin a specific agent image.",
-    "hibernated": "Hibernated"
+    "hibernated": "Hibernated",
+    "namespace": "Namespace",
+    "allNamespaces": "All namespaces"
   },
   "clusterDetail": {
     "back": "Clusters",
@@ -383,6 +385,7 @@
     "fence": "Fence",
     "fenceTitle": "Fence {{pod}}?",
     "fenceWarning": "PostgreSQL stops on this instance and stays down until it is unfenced. The pod keeps running so the disk can be inspected. The rest of the cluster continues to serve.",
-    "unfence": "Unfence"
+    "unfence": "Unfence",
+    "namespace": "Namespace"
   }
 }

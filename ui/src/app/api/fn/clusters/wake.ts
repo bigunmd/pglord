@@ -11,6 +11,11 @@ import { RequestBuilder } from '../../request-builder';
 export interface Wake$Params {
 
 /**
+ * Namespace
+ */
+  ns: string;
+
+/**
  * Cluster name
  */
   name: string;
@@ -19,6 +24,7 @@ export interface Wake$Params {
 export function wake(http: HttpClient, rootUrl: string, params: Wake$Params, context?: HttpContext): Observable<StrictHttpResponse<void>> {
   const rb = new RequestBuilder(rootUrl, wake.PATH, 'post');
   if (params) {
+    rb.path('ns', params.ns, {});
     rb.path('name', params.name, {});
   }
 
@@ -32,4 +38,4 @@ export function wake(http: HttpClient, rootUrl: string, params: Wake$Params, con
   );
 }
 
-wake.PATH = '/api/v1/clusters/{name}/wake';
+wake.PATH = '/api/v1/namespaces/{ns}/clusters/{name}/wake';

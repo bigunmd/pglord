@@ -29,11 +29,54 @@ paths:
     get:
       tags:
       - clusters
-      summary: List clusters.
-      operationId: list_clusters
+      summary: List every cluster the operator manages, across namespaces.
+      operationId: list_all_clusters
       responses:
         '200':
-          description: Clusters
+          description: All managed clusters
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ClusterSummary'
+        '503':
+          description: No Kubernetes environment
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+  /api/v1/gucs:
+    get:
+      tags:
+      - system
+      summary: The settings pglord lets you tune, with the metadata a config editor needs.
+      operationId: list_gucs
+      responses:
+        '200':
+          description: Tunable settings
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/GucInfo'
+  /api/v1/namespaces/{ns}/clusters:
+    get:
+      tags:
+      - clusters
+      summary: List clusters.
+      operationId: list_clusters
+      parameters:
+      - name: ns
+        in: path
+        description: Namespace
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Clusters in the namespace
           content:
             application/json:
               schema:
@@ -51,6 +94,13 @@ paths:
       - clusters
       summary: Create a new Postgres cluster.
       operationId: create_cluster
+      parameters:
+      - name: ns
+        in: path
+        description: Namespace
+        required: true
+        schema:
+          type: string
       requestBody:
         content:
           application/json:
@@ -82,13 +132,19 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
-  /api/v1/clusters/{name}:
+  /api/v1/namespaces/{ns}/clusters/{name}:
     get:
       tags:
       - clusters
       summary: Get one cluster with per-instance topology.
       operationId: get_cluster
       parameters:
+      - name: ns
+        in: path
+        description: Namespace
+        required: true
+        schema:
+          type: string
       - name: name
         in: path
         description: Cluster name
@@ -114,6 +170,12 @@ paths:
       summary: Delete a cluster (children are garbage-collected via ownerReferences).
       operationId: delete_cluster
       parameters:
+      - name: ns
+        in: path
+        description: Namespace
+        required: true
+        schema:
+          type: string
       - name: name
         in: path
         description: Cluster name
@@ -135,6 +197,12 @@ paths:
       summary: 'Change a running cluster: scale instances or grow storage.'
       operationId: patch_cluster
       parameters:
+      - name: ns
+        in: path
+        description: Namespace
+        required: true
+        schema:
+          type: string
       - name: name
         in: path
         description: Cluster name
@@ -166,13 +234,19 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
-  /api/v1/clusters/{name}/backups:
+  /api/v1/namespaces/{ns}/clusters/{name}/backups:
     get:
       tags:
       - backups
       summary: List the backups in a cluster's repository.
       operationId: list_backups
       parameters:
+      - name: ns
+        in: path
+        description: Namespace
+        required: true
+        schema:
+          type: string
       - name: name
         in: path
         description: Cluster name
@@ -198,6 +272,12 @@ paths:
       summary: Take a full backup now, on the primary.
       operationId: create_backup
       parameters:
+      - name: ns
+        in: path
+        description: Namespace
+        required: true
+        schema:
+          type: string
       - name: name
         in: path
         description: Cluster name
@@ -224,13 +304,19 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
-  /api/v1/clusters/{name}/hibernate:
+  /api/v1/namespaces/{ns}/clusters/{name}/hibernate:
     post:
       tags:
       - clusters
       summary: Scale the cluster to zero pods, keeping volumes, credentials and the spec.
       operationId: hibernate
       parameters:
+      - name: ns
+        in: path
+        description: Namespace
+        required: true
+        schema:
+          type: string
       - name: name
         in: path
         description: Cluster name
@@ -252,13 +338,19 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
-  /api/v1/clusters/{name}/instances/{pod}/fence:
+  /api/v1/namespaces/{ns}/clusters/{name}/instances/{pod}/fence:
     post:
       tags:
       - clusters
       summary: Stop postgres on one standby; the pod stays up for inspection.
       operationId: fence_instance
       parameters:
+      - name: ns
+        in: path
+        description: Namespace
+        required: true
+        schema:
+          type: string
       - name: name
         in: path
         description: Cluster name
@@ -292,13 +384,19 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
-  /api/v1/clusters/{name}/instances/{pod}/unfence:
+  /api/v1/namespaces/{ns}/clusters/{name}/instances/{pod}/unfence:
     post:
       tags:
       - clusters
       summary: Release a fenced instance so it rejoins as a standby.
       operationId: unfence_instance
       parameters:
+      - name: ns
+        in: path
+        description: Namespace
+        required: true
+        schema:
+          type: string
       - name: name
         in: path
         description: Cluster name
@@ -332,7 +430,7 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
-  /api/v1/clusters/{name}/restart:
+  /api/v1/namespaces/{ns}/clusters/{name}/restart:
     post:
       tags:
       - clusters
@@ -341,6 +439,12 @@ paths:
         and the primary last, keeping writes available for as long as possible.
       operationId: restart_cluster
       parameters:
+      - name: ns
+        in: path
+        description: Namespace
+        required: true
+        schema:
+          type: string
       - name: name
         in: path
         description: Cluster name
@@ -356,13 +460,19 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
-  /api/v1/clusters/{name}/restore:
+  /api/v1/namespaces/{ns}/clusters/{name}/restore:
     post:
       tags:
       - backups
       summary: Restore this cluster's backup into a new cluster.
       operationId: restore_cluster
       parameters:
+      - name: ns
+        in: path
+        description: Namespace
+        required: true
+        schema:
+          type: string
       - name: name
         in: path
         description: Source cluster name
@@ -400,7 +510,7 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
-  /api/v1/clusters/{name}/rotate-credentials:
+  /api/v1/namespaces/{ns}/clusters/{name}/rotate-credentials:
     post:
       tags:
       - clusters
@@ -409,6 +519,12 @@ paths:
         Secret, applied on the primary, then every instance is restarted.
       operationId: rotate_credentials
       parameters:
+      - name: ns
+        in: path
+        description: Namespace
+        required: true
+        schema:
+          type: string
       - name: name
         in: path
         description: Cluster name
@@ -430,13 +546,19 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
-  /api/v1/clusters/{name}/secrets:
+  /api/v1/namespaces/{ns}/clusters/{name}/secrets:
     get:
       tags:
       - clusters
       summary: List the Secrets and ConfigMaps this cluster depends on.
       operationId: list_required_secrets
       parameters:
+      - name: ns
+        in: path
+        description: Namespace
+        required: true
+        schema:
+          type: string
       - name: name
         in: path
         description: Cluster name
@@ -456,13 +578,19 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
-  /api/v1/clusters/{name}/switchover:
+  /api/v1/namespaces/{ns}/clusters/{name}/switchover:
     post:
       tags:
       - clusters
       summary: Promote a specific standby (planned switchover).
       operationId: switchover
       parameters:
+      - name: ns
+        in: path
+        description: Namespace
+        required: true
+        schema:
+          type: string
       - name: name
         in: path
         description: Cluster name
@@ -496,13 +624,19 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
-  /api/v1/clusters/{name}/wake:
+  /api/v1/namespaces/{ns}/clusters/{name}/wake:
     post:
       tags:
       - clusters
       summary: 'Wake a hibernated cluster: restore its instances and pooler.'
       operationId: wake
       parameters:
+      - name: ns
+        in: path
+        description: Namespace
+        required: true
+        schema:
+          type: string
       - name: name
         in: path
         description: Cluster name
@@ -524,21 +658,6 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
-  /api/v1/gucs:
-    get:
-      tags:
-      - system
-      summary: The settings pglord lets you tune, with the metadata a config editor needs.
-      operationId: list_gucs
-      responses:
-        '200':
-          description: Tunable settings
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/GucInfo'
   /api/v1/ping:
     get:
       tags:
@@ -766,6 +885,7 @@ components:
       type: object
       required:
       - name
+      - namespace
       - image
       - replicas
       - storage_size
@@ -831,6 +951,9 @@ components:
             $ref: '#/components/schemas/InstanceDto'
         name:
           type: string
+        namespace:
+          type: string
+          description: Namespace the cluster lives in.
         parameters:
           type: object
           description: PostgreSQL settings applied on top of the defaults.
@@ -891,8 +1014,6 @@ components:
           description: Scheduling, resources and Kubernetes metadata for the instances.
     ClusterSpec:
       type: object
-      required:
-      - name
       properties:
         backup:
           $ref: '#/components/schemas/BackupSpec'
@@ -941,7 +1062,10 @@ components:
           description: SQL run once, when the data directory is first created.
         name:
           type: string
-          description: RFC1123 label; used as the prefix of every derived object name.
+          description: |-
+            RFC1123 label; used as the prefix of every derived object name.
+            Empty is invalid through the API; in operator mode the CR sync fills
+            it from metadata.name, so kubectl users write the name once.
         parameters:
           type: object
           description: |-
@@ -1007,6 +1131,7 @@ components:
       type: object
       required:
       - name
+      - namespace
       - image
       - replicas
       - ready_replicas
@@ -1019,6 +1144,9 @@ components:
           type: string
         name:
           type: string
+        namespace:
+          type: string
+          description: Namespace the cluster lives in.
         ready_replicas:
           type: integer
           format: int32

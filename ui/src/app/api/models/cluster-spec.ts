@@ -63,8 +63,10 @@ export interface ClusterSpec {
 
   /**
    * RFC1123 label; used as the prefix of every derived object name.
+   * Empty is invalid through the API; in operator mode the CR sync fills
+   * it from metadata.name, so kubectl users write the name once.
    */
-  name: string;
+  name?: string;
 
   /**
    * PostgreSQL settings applied on top of the defaults. Only settings in the

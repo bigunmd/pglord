@@ -33,7 +33,7 @@ export const routes: Routes = [
           import('./pages/preflight/preflight.component').then((m) => m.PreflightComponent),
       },
       {
-        path: 'clusters/:name',
+        path: 'namespaces/:ns/clusters/:name',
         loadComponent: () =>
           import('./pages/clusters/cluster-detail.component').then(
             (m) => m.ClusterDetailComponent,

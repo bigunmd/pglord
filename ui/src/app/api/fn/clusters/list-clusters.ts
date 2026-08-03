@@ -10,11 +10,17 @@ import { RequestBuilder } from '../../request-builder';
 import { ClusterSummary } from '../../models/cluster-summary';
 
 export interface ListClusters$Params {
+
+/**
+ * Namespace
+ */
+  ns: string;
 }
 
-export function listClusters(http: HttpClient, rootUrl: string, params?: ListClusters$Params, context?: HttpContext): Observable<StrictHttpResponse<Array<ClusterSummary>>> {
+export function listClusters(http: HttpClient, rootUrl: string, params: ListClusters$Params, context?: HttpContext): Observable<StrictHttpResponse<Array<ClusterSummary>>> {
   const rb = new RequestBuilder(rootUrl, listClusters.PATH, 'get');
   if (params) {
+    rb.path('ns', params.ns, {});
   }
 
   return http.request(
@@ -27,4 +33,4 @@ export function listClusters(http: HttpClient, rootUrl: string, params?: ListClu
   );
 }
 
-listClusters.PATH = '/api/v1/clusters';
+listClusters.PATH = '/api/v1/namespaces/{ns}/clusters';

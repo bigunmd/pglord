@@ -11,6 +11,11 @@ import { RequestBuilder } from '../../request-builder';
 export interface RotateCredentials$Params {
 
 /**
+ * Namespace
+ */
+  ns: string;
+
+/**
  * Cluster name
  */
   name: string;
@@ -19,6 +24,7 @@ export interface RotateCredentials$Params {
 export function rotateCredentials(http: HttpClient, rootUrl: string, params: RotateCredentials$Params, context?: HttpContext): Observable<StrictHttpResponse<void>> {
   const rb = new RequestBuilder(rootUrl, rotateCredentials.PATH, 'post');
   if (params) {
+    rb.path('ns', params.ns, {});
     rb.path('name', params.name, {});
   }
 
@@ -32,4 +38,4 @@ export function rotateCredentials(http: HttpClient, rootUrl: string, params: Rot
   );
 }
 
-rotateCredentials.PATH = '/api/v1/clusters/{name}/rotate-credentials';
+rotateCredentials.PATH = '/api/v1/namespaces/{ns}/clusters/{name}/rotate-credentials';

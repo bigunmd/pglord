@@ -12,6 +12,11 @@ import { BackupRequest } from '../../models/backup-request';
 export interface CreateBackup$Params {
 
 /**
+ * Namespace
+ */
+  ns: string;
+
+/**
  * Cluster name
  */
   name: string;
@@ -21,6 +26,7 @@ export interface CreateBackup$Params {
 export function createBackup(http: HttpClient, rootUrl: string, params: CreateBackup$Params, context?: HttpContext): Observable<StrictHttpResponse<void>> {
   const rb = new RequestBuilder(rootUrl, createBackup.PATH, 'post');
   if (params) {
+    rb.path('ns', params.ns, {});
     rb.path('name', params.name, {});
     rb.body(params.body, 'application/json');
   }
@@ -35,4 +41,4 @@ export function createBackup(http: HttpClient, rootUrl: string, params: CreateBa
   );
 }
 
-createBackup.PATH = '/api/v1/clusters/{name}/backups';
+createBackup.PATH = '/api/v1/namespaces/{ns}/clusters/{name}/backups';

@@ -12,6 +12,11 @@ import { ResourceList } from '../../models/resource-list';
 export interface ListRequiredSecrets$Params {
 
 /**
+ * Namespace
+ */
+  ns: string;
+
+/**
  * Cluster name
  */
   name: string;
@@ -20,6 +25,7 @@ export interface ListRequiredSecrets$Params {
 export function listRequiredSecrets(http: HttpClient, rootUrl: string, params: ListRequiredSecrets$Params, context?: HttpContext): Observable<StrictHttpResponse<ResourceList>> {
   const rb = new RequestBuilder(rootUrl, listRequiredSecrets.PATH, 'get');
   if (params) {
+    rb.path('ns', params.ns, {});
     rb.path('name', params.name, {});
   }
 
@@ -33,4 +39,4 @@ export function listRequiredSecrets(http: HttpClient, rootUrl: string, params: L
   );
 }
 
-listRequiredSecrets.PATH = '/api/v1/clusters/{name}/secrets';
+listRequiredSecrets.PATH = '/api/v1/namespaces/{ns}/clusters/{name}/secrets';

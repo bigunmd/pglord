@@ -12,6 +12,11 @@ import { ClusterDetail } from '../../models/cluster-detail';
 export interface GetCluster$Params {
 
 /**
+ * Namespace
+ */
+  ns: string;
+
+/**
  * Cluster name
  */
   name: string;
@@ -20,6 +25,7 @@ export interface GetCluster$Params {
 export function getCluster(http: HttpClient, rootUrl: string, params: GetCluster$Params, context?: HttpContext): Observable<StrictHttpResponse<ClusterDetail>> {
   const rb = new RequestBuilder(rootUrl, getCluster.PATH, 'get');
   if (params) {
+    rb.path('ns', params.ns, {});
     rb.path('name', params.name, {});
   }
 
@@ -33,4 +39,4 @@ export function getCluster(http: HttpClient, rootUrl: string, params: GetCluster
   );
 }
 
-getCluster.PATH = '/api/v1/clusters/{name}';
+getCluster.PATH = '/api/v1/namespaces/{ns}/clusters/{name}';

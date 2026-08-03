@@ -11,6 +11,8 @@ export type { GetPreflight$Params as GetPreflight$Params } from './fn/system/get
 export { getPreflight as getPreflight } from './fn/system/get-preflight';
 export type { Version$Params as Version$Params } from './fn/system/version';
 export { version as version } from './fn/system/version';
+export type { ListAllClusters$Params as ListAllClusters$Params } from './fn/clusters/list-all-clusters';
+export { listAllClusters as listAllClusters } from './fn/clusters/list-all-clusters';
 export type { ListClusters$Params as ListClusters$Params } from './fn/clusters/list-clusters';
 export { listClusters as listClusters } from './fn/clusters/list-clusters';
 export type { CreateCluster$Params as CreateCluster$Params } from './fn/clusters/create-cluster';

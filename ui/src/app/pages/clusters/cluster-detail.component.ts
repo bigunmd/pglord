@@ -346,6 +346,13 @@ export class ImageDialogComponent {
       @if (detail(); as d) {
         <div class="mb-1 flex items-center gap-3">
           <h1 class="font-mono text-lg font-semibold">{{ d.name }}</h1>
+          <span
+            class="bg-muted text-muted-foreground rounded-full px-2 py-0.5 font-mono text-xs"
+            data-testid="ns-badge"
+            [attr.aria-label]="'clusterDetail.namespace' | transloco"
+          >
+            {{ d.namespace }}
+          </span>
           <span class="text-muted-foreground font-mono text-xs tabular-nums">
             {{ d.ready_replicas }}/{{ d.replicas }}
           </span>
@@ -1080,6 +1087,7 @@ export class ClusterDetailComponent implements OnDestroy {
   private readonly dialog = inject(HlmDialogService);
   private readonly router = inject(Router);
 
+  readonly ns = input.required<string>();
   readonly name = input.required<string>();
 
   protected readonly detail = signal<ClusterDetail | null>(null);
@@ -1106,6 +1114,7 @@ export class ClusterDetailComponent implements OnDestroy {
     // credentials_secret is fixed once a cluster exists, so it is not sent.
     await this.run(() =>
       this.api.invoke(patchCluster, {
+        ns: this.ns(),
         name: this.name(),
         body: { env: result.env, init: result.init },
       }),
@@ -1154,7 +1163,7 @@ export class ClusterDetailComponent implements OnDestroy {
       return;
     }
     const ok = await this.run(() =>
-      this.api.invoke(restoreCluster, { name: this.name(), body: req }),
+      this.api.invoke(restoreCluster, { ns: this.ns(), name: this.name(), body: req }),
     );
     if (ok) {
       await this.router.navigate(['/clusters', req.target_cluster]);
@@ -1171,7 +1180,7 @@ export class ClusterDetailComponent implements OnDestroy {
     if (!backup) {
       return;
     }
-    await this.run(() => this.api.invoke(patchCluster, { name: this.name(), body: { backup } }));
+    await this.run(() => this.api.invoke(patchCluster, { ns: this.ns(), name: this.name(), body: { backup } }));
   }
 
   protected readonly backupKinds = ['full', 'diff', 'incr'] as const;
@@ -1192,7 +1201,7 @@ export class ClusterDetailComponent implements OnDestroy {
   }
 
   async backupNow(kind: 'full' | 'diff' | 'incr'): Promise<void> {
-    await this.run(() => this.api.invoke(createBackup, { name: this.name(), body: { kind } }));
+    await this.run(() => this.api.invoke(createBackup, { ns: this.ns(), name: this.name(), body: { kind } }));
   }
   /** Blocks concurrent operations so a double-click cannot fire twice. */
   protected readonly busy = signal(false);
@@ -1232,7 +1241,7 @@ export class ClusterDetailComponent implements OnDestroy {
     if (!workload) {
       return;
     }
-    await this.run(() => this.api.invoke(patchCluster, { name: this.name(), body: { workload } }));
+    await this.run(() => this.api.invoke(patchCluster, { ns: this.ns(), name: this.name(), body: { workload } }));
   }
 
   async openConfig(d: ClusterDetail): Promise<void> {
@@ -1253,7 +1262,7 @@ export class ClusterDetailComponent implements OnDestroy {
       return;
     }
     await this.run(() =>
-      this.api.invoke(patchCluster, { name: this.name(), body: { parameters } }),
+      this.api.invoke(patchCluster, { ns: this.ns(), name: this.name(), body: { parameters } }),
     );
   }
 
@@ -1268,7 +1277,7 @@ export class ClusterDetailComponent implements OnDestroy {
       return;
     }
     await this.run(() =>
-      this.api.invoke(patchCluster, { name: this.name(), body: { tls: result } }),
+      this.api.invoke(patchCluster, { ns: this.ns(), name: this.name(), body: { tls: result } }),
     );
   }
 
@@ -1283,7 +1292,7 @@ export class ClusterDetailComponent implements OnDestroy {
       return;
     }
     await this.run(() =>
-      this.api.invoke(patchCluster, { name: this.name(), body: { pooler: result } }),
+      this.api.invoke(patchCluster, { ns: this.ns(), name: this.name(), body: { pooler: result } }),
     );
   }
 
@@ -1299,6 +1308,7 @@ export class ClusterDetailComponent implements OnDestroy {
     }
     await this.run(() =>
       this.api.invoke(patchCluster, {
+        ns: this.ns(),
         name: this.name(),
         body: { roles: result.roles, databases: result.databases },
       }),
@@ -1316,7 +1326,7 @@ export class ClusterDetailComponent implements OnDestroy {
       return;
     }
     await this.run(() =>
-      this.api.invoke(patchCluster, { name: this.name(), body: { pg_hba: rules } }),
+      this.api.invoke(patchCluster, { ns: this.ns(), name: this.name(), body: { pg_hba: rules } }),
     );
   }
 
@@ -1330,38 +1340,38 @@ export class ClusterDetailComponent implements OnDestroy {
     const enable = !d.synchronous;
     const confirmed = await firstValueFrom(
       this.dialog.open<boolean>(SyncDialogComponent, {
-        context: { name: this.name(), enable },
+        context: { ns: this.ns(), name: this.name(), enable },
       }).closed$,
     );
     if (!confirmed) {
       return;
     }
     await this.run(() =>
-      this.api.invoke(patchCluster, { name: this.name(), body: { synchronous: enable } }),
+      this.api.invoke(patchCluster, { ns: this.ns(), name: this.name(), body: { synchronous: enable } }),
     );
   }
 
   async openRestart(): Promise<void> {
     const confirmed = await firstValueFrom(
-      this.dialog.open<boolean>(RestartDialogComponent, { context: { name: this.name() } })
+      this.dialog.open<boolean>(RestartDialogComponent, { context: { ns: this.ns(), name: this.name() } })
         .closed$,
     );
     if (!confirmed) {
       return;
     }
-    await this.run(() => this.api.invoke(restartCluster, { name: this.name() }));
+    await this.run(() => this.api.invoke(restartCluster, { ns: this.ns(), name: this.name() }));
   }
 
   async openRotateCredentials(): Promise<void> {
     const confirmed = await firstValueFrom(
       this.dialog.open<boolean>(RotateCredentialsDialogComponent, {
-        context: { name: this.name() },
+        context: { ns: this.ns(), name: this.name() },
       }).closed$,
     );
     if (!confirmed) {
       return;
     }
-    await this.run(() => this.api.invoke(rotateCredentials, { name: this.name() }));
+    await this.run(() => this.api.invoke(rotateCredentials, { ns: this.ns(), name: this.name() }));
   }
 
   async openEdit(d: ClusterDetail): Promise<void> {
@@ -1374,13 +1384,13 @@ export class ClusterDetailComponent implements OnDestroy {
     if (!change) {
       return;
     }
-    await this.run(() => this.api.invoke(patchCluster, { name: this.name(), body: change }));
+    await this.run(() => this.api.invoke(patchCluster, { ns: this.ns(), name: this.name(), body: change }));
   }
 
   async openImage(d: ClusterDetail): Promise<void> {
     const next = await firstValueFrom(
       this.dialog.open<string | undefined>(ImageDialogComponent, {
-        context: { name: this.name(), image: d.image },
+        context: { ns: this.ns(), name: this.name(), image: d.image },
         contentClass: FORM_DIALOG_CLASS,
       }).closed$,
     );
@@ -1388,7 +1398,7 @@ export class ClusterDetailComponent implements OnDestroy {
       return;
     }
     await this.run(() =>
-      this.api.invoke(patchCluster, { name: this.name(), body: { image: next } }),
+      this.api.invoke(patchCluster, { ns: this.ns(), name: this.name(), body: { image: next } }),
     );
   }
 
@@ -1400,7 +1410,7 @@ export class ClusterDetailComponent implements OnDestroy {
       return;
     }
     await this.run(() =>
-      this.api.invoke(switchover, { name: this.name(), body: { target: pod } }),
+      this.api.invoke(switchover, { ns: this.ns(), name: this.name(), body: { target: pod } }),
     );
   }
 
@@ -1411,12 +1421,12 @@ export class ClusterDetailComponent implements OnDestroy {
     if (!confirmed) {
       return;
     }
-    await this.run(() => this.api.invoke(hibernate, { name: this.name() }));
+    await this.run(() => this.api.invoke(hibernate, { ns: this.ns(), name: this.name() }));
   }
 
   /** Waking is safe (it only restores instances) — no confirmation. */
   async wakeCluster(): Promise<void> {
-    await this.run(() => this.api.invoke(wake, { name: this.name() }));
+    await this.run(() => this.api.invoke(wake, { ns: this.ns(), name: this.name() }));
   }
 
   async openFence(pod: string): Promise<void> {
@@ -1426,11 +1436,11 @@ export class ClusterDetailComponent implements OnDestroy {
     if (!confirmed) {
       return;
     }
-    await this.run(() => this.api.invoke(fenceInstance, { name: this.name(), pod }));
+    await this.run(() => this.api.invoke(fenceInstance, { ns: this.ns(), name: this.name(), pod }));
   }
 
   async unfence(pod: string): Promise<void> {
-    await this.run(() => this.api.invoke(unfenceInstance, { name: this.name(), pod }));
+    await this.run(() => this.api.invoke(unfenceInstance, { ns: this.ns(), name: this.name(), pod }));
   }
 
   /** Returns whether the operation succeeded, so callers can act on it. */
@@ -1462,7 +1472,7 @@ export class ClusterDetailComponent implements OnDestroy {
 
   private async refresh(): Promise<void> {
     try {
-      this.detail.set(await this.api.invoke(getCluster, { name: this.name() }));
+      this.detail.set(await this.api.invoke(getCluster, { ns: this.ns(), name: this.name() }));
       this.error.set(null);
     } catch (err) {
       const e = err as { error?: { detail?: string; code?: string }; message?: string };
@@ -1472,14 +1482,14 @@ export class ClusterDetailComponent implements OnDestroy {
     // Reading the repository can be slow or unavailable; it must never take
     // the rest of the page down with it.
     try {
-      this.backups.set(await this.api.invoke(listBackups, { name: this.name() }));
+      this.backups.set(await this.api.invoke(listBackups, { ns: this.ns(), name: this.name() }));
     } catch {
       this.backups.set(null);
     }
     // Same reasoning: this reads other objects in the namespace, and a
     // permission gap there must not blank the whole page.
     try {
-      this.secrets.set(await this.api.invoke(listRequiredSecrets, { name: this.name() }));
+      this.secrets.set(await this.api.invoke(listRequiredSecrets, { ns: this.ns(), name: this.name() }));
     } catch {
       this.secrets.set(null);
     }

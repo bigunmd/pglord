@@ -1,4 +1,4 @@
-import { Component, OnDestroy, inject, signal } from '@angular/core';
+import { Component, OnDestroy, computed, inject, signal } from '@angular/core';
 import { Router } from '@angular/router';
 import { TranslocoModule } from '@jsverse/transloco';
 import { NgIcon, provideIcons } from '@ng-icons/core';
@@ -14,7 +14,7 @@ import { ClusterSpec } from '../../api/models/cluster-spec';
 import { ClusterSummary } from '../../api/models/cluster-summary';
 import { createCluster } from '../../api/fn/clusters/create-cluster';
 import { deleteCluster } from '../../api/fn/clusters/delete-cluster';
-import { listClusters } from '../../api/fn/clusters/list-clusters';
+import { listAllClusters } from '../../api/fn/clusters/list-all-clusters';
 import { ClusterCreateDialogComponent } from './cluster-create-dialog.component';
 
 const REFRESH_MS = 5000;
@@ -49,9 +49,29 @@ export class ClusterDeleteDialogComponent {
   providers: [provideIcons({ lucideDatabase, lucideMoon, lucidePlus, lucideTrash2 })],
   template: `
     <div class="mx-auto max-w-4xl">
-      <div class="mb-4 flex items-center justify-between">
+      <div class="mb-4 flex items-center justify-between gap-3">
         <h1 class="text-lg font-semibold">{{ 'clusters.title' | transloco }}</h1>
-        <button hlmBtn size="sm" data-testid="open-create" (click)="openCreate()">
+        @if (namespaces().length > 1) {
+          <select
+            class="border-border bg-background ml-auto rounded-md border px-2 py-1.5 text-sm"
+            data-testid="ns-switcher"
+            [attr.aria-label]="'clusters.namespace' | transloco"
+            [value]="selectedNs()"
+            (change)="selectNs($event)"
+          >
+            <option value="">{{ 'clusters.allNamespaces' | transloco }}</option>
+            @for (n of namespaces(); track n) {
+              <option [value]="n" [selected]="n === selectedNs()">{{ n }}</option>
+            }
+          </select>
+        }
+        <button
+          hlmBtn
+          size="sm"
+          [class.ml-auto]="namespaces().length <= 1"
+          data-testid="open-create"
+          (click)="openCreate()"
+        >
           <ng-icon name="lucidePlus" size="16" />
           {{ 'clusters.create' | transloco }}
         </button>
@@ -73,20 +93,26 @@ export class ClusterDeleteDialogComponent {
             <thead hlmTHead>
               <tr hlmTr>
                 <th hlmTh>{{ 'clusters.name' | transloco }}</th>
+                @if (!selectedNs()) {
+                  <th hlmTh>{{ 'clusters.namespace' | transloco }}</th>
+                }
                 <th hlmTh>{{ 'clusters.instances' | transloco }}</th>
                 <th hlmTh>{{ 'clusters.image' | transloco }}</th>
                 <th hlmTh class="w-12"></th>
               </tr>
             </thead>
             <tbody hlmTBody>
-              @for (c of clusters(); track c.name) {
+              @for (c of visible(); track c.namespace + '/' + c.name) {
                 <tr
                   hlmTr
                   class="hover:bg-muted/50 cursor-pointer transition-colors"
                   [attr.data-testid]="'cluster-row-' + c.name"
-                  (click)="openDetail(c.name)"
+                  (click)="openDetail(c)"
                 >
                   <td hlmTd class="font-mono text-sm font-medium">{{ c.name }}</td>
+                  @if (!selectedNs()) {
+                    <td hlmTd class="text-muted-foreground font-mono text-xs">{{ c.namespace }}</td>
+                  }
                   <td hlmTd>
                     @if (c.hibernated) {
                       <!-- Asleep on purpose: distinct from an outage's red strip. -->
@@ -156,13 +182,31 @@ export class ClustersComponent implements OnDestroy {
   private readonly dialog = inject(HlmDialogService);
   private readonly router = inject(Router);
 
-  openDetail(name: string): void {
-    void this.router.navigate(['/clusters', name]);
+  openDetail(c: ClusterSummary): void {
+    void this.router.navigate(['/namespaces', c.namespace, 'clusters', c.name]);
   }
 
   protected readonly clusters = signal<ClusterSummary[]>([]);
   protected readonly loaded = signal(false);
   protected readonly error = signal<string | null>(null);
+  /// "" = all namespaces; persisted so the choice survives reloads.
+  protected readonly selectedNs = signal<string>(
+    localStorage.getItem('pglord.namespace') ?? '',
+  );
+  protected readonly namespaces = computed(() =>
+    [...new Set(this.clusters().map((c) => c.namespace))].sort(),
+  );
+  protected readonly visible = computed(() =>
+    this.selectedNs()
+      ? this.clusters().filter((c) => c.namespace === this.selectedNs())
+      : this.clusters(),
+  );
+
+  protected selectNs(event: Event): void {
+    const value = (event.target as HTMLSelectElement).value;
+    this.selectedNs.set(value);
+    localStorage.setItem('pglord.namespace', value);
+  }
 
   protected range(n: number): number[] {
     return Array.from({ length: n }, (_, i) => i);
@@ -180,7 +224,7 @@ export class ClustersComponent implements OnDestroy {
 
   protected async refresh(): Promise<void> {
     try {
-      this.clusters.set(await this.api.invoke(listClusters));
+      this.clusters.set(await this.api.invoke(listAllClusters));
       this.error.set(null);
     } catch (err) {
       this.error.set(problemDetail(err));
@@ -199,7 +243,10 @@ export class ClustersComponent implements OnDestroy {
       return;
     }
     try {
-      await this.api.invoke(createCluster, { body: spec });
+      // Create in the selected namespace; "all" falls back to the first
+      // known namespace (or the server default when nothing exists yet).
+      const ns = this.selectedNs() || this.namespaces()[0] || 'default';
+      await this.api.invoke(createCluster, { ns, body: spec });
       await this.refresh();
     } catch (err) {
       this.error.set(problemDetail(err));
@@ -215,7 +262,7 @@ export class ClustersComponent implements OnDestroy {
       return;
     }
     try {
-      await this.api.invoke(deleteCluster, { name: c.name });
+      await this.api.invoke(deleteCluster, { ns: c.namespace, name: c.name });
       await this.refresh();
     } catch (err) {
       this.error.set(problemDetail(err));

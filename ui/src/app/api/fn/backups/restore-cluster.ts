@@ -13,6 +13,11 @@ import { RestoreRequest } from '../../models/restore-request';
 export interface RestoreCluster$Params {
 
 /**
+ * Namespace
+ */
+  ns: string;
+
+/**
  * Source cluster name
  */
   name: string;
@@ -22,6 +27,7 @@ export interface RestoreCluster$Params {
 export function restoreCluster(http: HttpClient, rootUrl: string, params: RestoreCluster$Params, context?: HttpContext): Observable<StrictHttpResponse<ClusterSpec>> {
   const rb = new RequestBuilder(rootUrl, restoreCluster.PATH, 'post');
   if (params) {
+    rb.path('ns', params.ns, {});
     rb.path('name', params.name, {});
     rb.body(params.body, 'application/json');
   }
@@ -36,4 +42,4 @@ export function restoreCluster(http: HttpClient, rootUrl: string, params: Restor
   );
 }
 
-restoreCluster.PATH = '/api/v1/clusters/{name}/restore';
+restoreCluster.PATH = '/api/v1/namespaces/{ns}/clusters/{name}/restore';

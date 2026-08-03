@@ -11,6 +11,11 @@ import { RequestBuilder } from '../../request-builder';
 export interface Hibernate$Params {
 
 /**
+ * Namespace
+ */
+  ns: string;
+
+/**
  * Cluster name
  */
   name: string;
@@ -19,6 +24,7 @@ export interface Hibernate$Params {
 export function hibernate(http: HttpClient, rootUrl: string, params: Hibernate$Params, context?: HttpContext): Observable<StrictHttpResponse<void>> {
   const rb = new RequestBuilder(rootUrl, hibernate.PATH, 'post');
   if (params) {
+    rb.path('ns', params.ns, {});
     rb.path('name', params.name, {});
   }
 
@@ -32,4 +38,4 @@ export function hibernate(http: HttpClient, rootUrl: string, params: Hibernate$P
   );
 }
 
-hibernate.PATH = '/api/v1/clusters/{name}/hibernate';
+hibernate.PATH = '/api/v1/namespaces/{ns}/clusters/{name}/hibernate';

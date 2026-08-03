@@ -12,6 +12,11 @@ import { SwitchoverRequest } from '../../models/switchover-request';
 export interface Switchover$Params {
 
 /**
+ * Namespace
+ */
+  ns: string;
+
+/**
  * Cluster name
  */
   name: string;
@@ -21,6 +26,7 @@ export interface Switchover$Params {
 export function switchover(http: HttpClient, rootUrl: string, params: Switchover$Params, context?: HttpContext): Observable<StrictHttpResponse<void>> {
   const rb = new RequestBuilder(rootUrl, switchover.PATH, 'post');
   if (params) {
+    rb.path('ns', params.ns, {});
     rb.path('name', params.name, {});
     rb.body(params.body, 'application/json');
   }
@@ -35,4 +41,4 @@ export function switchover(http: HttpClient, rootUrl: string, params: Switchover
   );
 }
 
-switchover.PATH = '/api/v1/clusters/{name}/switchover';
+switchover.PATH = '/api/v1/namespaces/{ns}/clusters/{name}/switchover';

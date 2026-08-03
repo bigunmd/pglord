@@ -13,6 +13,11 @@ import { SpecChange } from '../../models/spec-change';
 export interface PatchCluster$Params {
 
 /**
+ * Namespace
+ */
+  ns: string;
+
+/**
  * Cluster name
  */
   name: string;
@@ -22,6 +27,7 @@ export interface PatchCluster$Params {
 export function patchCluster(http: HttpClient, rootUrl: string, params: PatchCluster$Params, context?: HttpContext): Observable<StrictHttpResponse<ClusterDetail>> {
   const rb = new RequestBuilder(rootUrl, patchCluster.PATH, 'patch');
   if (params) {
+    rb.path('ns', params.ns, {});
     rb.path('name', params.name, {});
     rb.body(params.body, 'application/json');
   }
@@ -36,4 +42,4 @@ export function patchCluster(http: HttpClient, rootUrl: string, params: PatchClu
   );
 }
 
-patchCluster.PATH = '/api/v1/clusters/{name}';
+patchCluster.PATH = '/api/v1/namespaces/{ns}/clusters/{name}';

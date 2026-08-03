@@ -11,6 +11,11 @@ import { RequestBuilder } from '../../request-builder';
 export interface RestartCluster$Params {
 
 /**
+ * Namespace
+ */
+  ns: string;
+
+/**
  * Cluster name
  */
   name: string;
@@ -19,6 +24,7 @@ export interface RestartCluster$Params {
 export function restartCluster(http: HttpClient, rootUrl: string, params: RestartCluster$Params, context?: HttpContext): Observable<StrictHttpResponse<void>> {
   const rb = new RequestBuilder(rootUrl, restartCluster.PATH, 'post');
   if (params) {
+    rb.path('ns', params.ns, {});
     rb.path('name', params.name, {});
   }
 
@@ -32,4 +38,4 @@ export function restartCluster(http: HttpClient, rootUrl: string, params: Restar
   );
 }
 
-restartCluster.PATH = '/api/v1/clusters/{name}/restart';
+restartCluster.PATH = '/api/v1/namespaces/{ns}/clusters/{name}/restart';

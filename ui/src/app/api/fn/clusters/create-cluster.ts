@@ -10,12 +10,18 @@ import { RequestBuilder } from '../../request-builder';
 import { ClusterSpec } from '../../models/cluster-spec';
 
 export interface CreateCluster$Params {
+
+/**
+ * Namespace
+ */
+  ns: string;
       body: ClusterSpec
 }
 
 export function createCluster(http: HttpClient, rootUrl: string, params: CreateCluster$Params, context?: HttpContext): Observable<StrictHttpResponse<ClusterSpec>> {
   const rb = new RequestBuilder(rootUrl, createCluster.PATH, 'post');
   if (params) {
+    rb.path('ns', params.ns, {});
     rb.body(params.body, 'application/json');
   }
 
@@ -29,4 +35,4 @@ export function createCluster(http: HttpClient, rootUrl: string, params: CreateC
   );
 }
 
-createCluster.PATH = '/api/v1/clusters';
+createCluster.PATH = '/api/v1/namespaces/{ns}/clusters';

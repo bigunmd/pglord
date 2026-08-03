@@ -11,6 +11,11 @@ import { RequestBuilder } from '../../request-builder';
 export interface FenceInstance$Params {
 
 /**
+ * Namespace
+ */
+  ns: string;
+
+/**
  * Cluster name
  */
   name: string;
@@ -24,6 +29,7 @@ export interface FenceInstance$Params {
 export function fenceInstance(http: HttpClient, rootUrl: string, params: FenceInstance$Params, context?: HttpContext): Observable<StrictHttpResponse<void>> {
   const rb = new RequestBuilder(rootUrl, fenceInstance.PATH, 'post');
   if (params) {
+    rb.path('ns', params.ns, {});
     rb.path('name', params.name, {});
     rb.path('pod', params.pod, {});
   }
@@ -38,4 +44,4 @@ export function fenceInstance(http: HttpClient, rootUrl: string, params: FenceIn
   );
 }
 
-fenceInstance.PATH = '/api/v1/clusters/{name}/instances/{pod}/fence';
+fenceInstance.PATH = '/api/v1/namespaces/{ns}/clusters/{name}/instances/{pod}/fence';

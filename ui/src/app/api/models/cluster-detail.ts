@@ -56,6 +56,11 @@ export interface ClusterDetail {
   name: string;
 
   /**
+   * Namespace the cluster lives in.
+   */
+  namespace: string;
+
+  /**
    * PostgreSQL settings applied on top of the defaults.
    */
   parameters: {

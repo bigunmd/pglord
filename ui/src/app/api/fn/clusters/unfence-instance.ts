@@ -11,6 +11,11 @@ import { RequestBuilder } from '../../request-builder';
 export interface UnfenceInstance$Params {
 
 /**
+ * Namespace
+ */
+  ns: string;
+
+/**
  * Cluster name
  */
   name: string;
@@ -24,6 +29,7 @@ export interface UnfenceInstance$Params {
 export function unfenceInstance(http: HttpClient, rootUrl: string, params: UnfenceInstance$Params, context?: HttpContext): Observable<StrictHttpResponse<void>> {
   const rb = new RequestBuilder(rootUrl, unfenceInstance.PATH, 'post');
   if (params) {
+    rb.path('ns', params.ns, {});
     rb.path('name', params.name, {});
     rb.path('pod', params.pod, {});
   }
@@ -38,4 +44,4 @@ export function unfenceInstance(http: HttpClient, rootUrl: string, params: Unfen
   );
 }
 
-unfenceInstance.PATH = '/api/v1/clusters/{name}/instances/{pod}/unfence';
+unfenceInstance.PATH = '/api/v1/namespaces/{ns}/clusters/{name}/instances/{pod}/unfence';
