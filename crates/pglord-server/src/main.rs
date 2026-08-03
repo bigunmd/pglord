@@ -85,8 +85,16 @@ async fn main() -> anyhow::Result<()> {
                     );
                 }
             });
+            let store: std::sync::Arc<dyn pglord_server::spec_store::SpecStore> =
+                match cfg.spec_backend.as_str() {
+                    "crd" => std::sync::Arc::new(pglord_server::crd_store::CrdSpecStore::new(
+                        client.clone(),
+                        &ns,
+                    )),
+                    _ => std::sync::Arc::new(ConfigMapSpecStore::new(client.clone(), &ns)),
+                };
             let ops = ClusterOps {
-                store: std::sync::Arc::new(ConfigMapSpecStore::new(client.clone(), &ns)),
+                store,
                 kube: client,
                 http: reqwest::Client::builder()
                     .timeout(std::time::Duration::from_secs(2))

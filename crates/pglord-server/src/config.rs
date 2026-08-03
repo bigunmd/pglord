@@ -41,6 +41,14 @@ pub struct Config {
     /// Expected `aud` claim. Empty = defaults to the client ID.
     #[serde(default = "default_empty")]
     pub auth_oidc_audience: String,
+    /// Where cluster specs live: "configmap" (standalone, default) or "crd"
+    /// (operator mode: PostgresCluster resources are the truth).
+    #[serde(default = "default_spec_backend")]
+    pub spec_backend: String,
+}
+
+fn default_spec_backend() -> String {
+    "configmap".into()
 }
 
 fn default_agent_image() -> String {
@@ -125,6 +133,7 @@ impl Config {
             auth_oidc_issuer: String::new(),
             auth_oidc_client_id: String::new(),
             auth_oidc_audience: String::new(),
+            spec_backend: default_spec_backend(),
         }
     }
 }

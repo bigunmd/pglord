@@ -7,6 +7,7 @@ pub mod auth;
 pub mod backup_runs;
 pub mod backup_scheduler;
 pub mod config;
+pub mod crd_store;
 pub mod error;
 pub mod health;
 pub mod instance_probe;
