@@ -59,9 +59,12 @@ fn ops(state: &Option<ClusterOps>) -> Result<&ClusterOps, ApiError> {
 /// List the backups in a cluster's repository.
 #[utoipa::path(
     get,
-    path = "/api/v1/clusters/{name}/backups",
+    path = "/api/v1/namespaces/{ns}/clusters/{name}/backups",
     tag = "backups",
-    params(("name" = String, Path, description = "Cluster name")),
+    params(
+        ("ns" = String, Path, description = "Namespace"),
+        ("name" = String, Path, description = "Cluster name")
+    ),
     responses(
         (status = 200, description = "Backups in the repository", body = BackupList),
         (status = 404, description = "Not found", body = crate::error::ProblemDetails, content_type = "application/problem+json"),
@@ -69,12 +72,12 @@ fn ops(state: &Option<ClusterOps>) -> Result<&ClusterOps, ApiError> {
 )]
 pub async fn list_backups(
     State(state): State<Option<ClusterOps>>,
-    Path(name): Path<String>,
+    Path((ns, name)): Path<(String, String)>,
 ) -> Result<Json<BackupList>, ApiError> {
     let ops = ops(&state)?;
     let Some((spec, _owner)) = ops
         .store
-        .get(&ops.ns, &name)
+        .get(&ns, &name)
         .await
         .map_err(ApiError::internal)?
     else {
@@ -91,13 +94,13 @@ pub async fn list_backups(
     }
     let primary = ops
         .store
-        .primary(&ops.ns, &name)
+        .primary(&ns, &name)
         .await
         .map_err(ApiError::internal)?
         .unwrap_or_else(|| format!("{name}-0"));
     let url = format!(
         "http://{}:{}/backups",
-        pod_fqdn(&primary, &spec.name, &ops.ns),
+        pod_fqdn(&primary, &spec.name, &ns),
         AGENT_HTTP_PORT
     );
     // A repository that cannot be read right now is reported as empty rather
@@ -114,7 +117,7 @@ pub async fn list_backups(
         }
     };
     let runs = crate::backup_runs::stale_running_to_unknown(
-        crate::backup_runs::list(&ops.kube, &ops.ns, &name).await,
+        crate::backup_runs::list(&ops.kube, &ns, &name).await,
         now_seconds(),
     );
     Ok(Json(BackupList {
@@ -136,9 +139,12 @@ pub fn now_seconds() -> i64 {
 /// Take a full backup now, on the primary.
 #[utoipa::path(
     post,
-    path = "/api/v1/clusters/{name}/backups",
+    path = "/api/v1/namespaces/{ns}/clusters/{name}/backups",
     tag = "backups",
-    params(("name" = String, Path, description = "Cluster name")),
+    params(
+        ("ns" = String, Path, description = "Namespace"),
+        ("name" = String, Path, description = "Cluster name")
+    ),
     responses(
         (status = 202, description = "Backup started"),
         (status = 404, description = "Not found", body = crate::error::ProblemDetails, content_type = "application/problem+json"),
@@ -147,13 +153,13 @@ pub fn now_seconds() -> i64 {
 )]
 pub async fn create_backup(
     State(state): State<Option<ClusterOps>>,
-    Path(name): Path<String>,
+    Path((ns, name)): Path<(String, String)>,
     body: Option<Json<BackupRequest>>,
 ) -> Result<StatusCode, ApiError> {
     let ops = ops(&state)?;
     let Some((spec, _owner)) = ops
         .store
-        .get(&ops.ns, &name)
+        .get(&ns, &name)
         .await
         .map_err(ApiError::internal)?
     else {
@@ -166,7 +172,7 @@ pub async fn create_backup(
         ));
     }
     let runs = crate::backup_runs::stale_running_to_unknown(
-        crate::backup_runs::list(&ops.kube, &ops.ns, &name).await,
+        crate::backup_runs::list(&ops.kube, &ns, &name).await,
         now_seconds(),
     );
     if crate::backup_runs::has_run_in_flight(&runs) {
@@ -174,7 +180,7 @@ pub async fn create_backup(
             .with_detail("A backup of this cluster is already running."));
     }
     let kind = body.and_then(|Json(b)| b.kind).unwrap_or_default();
-    start_backup(ops, &spec, kind, "manual")
+    start_backup(ops, &ns, &spec, kind, "manual")
         .await
         .map_err(ApiError::internal)?;
     Ok(StatusCode::ACCEPTED)
@@ -184,6 +190,7 @@ pub async fn create_backup(
 /// API and the scheduler so both produce identical history.
 pub async fn start_backup(
     ops: &ClusterOps,
+    ns: &str,
     spec: &pglord_core::spec::ClusterSpec,
     kind: pglord_core::backup::BackupKind,
     trigger: &str,
@@ -191,7 +198,7 @@ pub async fn start_backup(
     let name = spec.name.clone();
     let primary = ops
         .store
-        .primary(&ops.ns, &name)
+        .primary(ns, &name)
         .await?
         .unwrap_or_else(|| format!("{name}-0"));
     let started = now_seconds();
@@ -199,7 +206,7 @@ pub async fn start_backup(
 
     crate::backup_runs::record_start(
         &ops.kube,
-        &ops.ns,
+        ns,
         &name,
         crate::backup_runs::BackupRun {
             id: id.clone(),
@@ -217,13 +224,13 @@ pub async fn start_backup(
     // outcome rather than holding a request open.
     let url = format!(
         "http://{}:{}/backup",
-        pod_fqdn(&primary, &name, &ops.ns),
+        pod_fqdn(&primary, &name, ns),
         AGENT_HTTP_PORT
     );
     let http = ops.http.clone();
     let kube = ops.kube.clone();
     let metrics = ops.metrics.clone();
-    let ns = ops.ns.clone();
+    let ns = ns.to_string();
     let run_id = id.clone();
     tokio::spawn(async move {
         tracing::info!(cluster = %name, %primary, kind = kind.as_str(), run = %run_id, "backup started");

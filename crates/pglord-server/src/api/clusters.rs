@@ -14,6 +14,8 @@ use crate::error::ApiError;
 #[derive(Serialize, ToSchema)]
 pub struct ClusterSummary {
     pub name: String,
+    /// Namespace the cluster lives in.
+    pub namespace: String,
     pub image: String,
     pub replicas: u8,
     /// Instances currently passing their readiness probe.
@@ -44,6 +46,8 @@ pub struct InstanceDto {
 #[derive(Serialize, ToSchema)]
 pub struct ClusterDetail {
     pub name: String,
+    /// Namespace the cluster lives in.
+    pub namespace: String,
     pub image: String,
     pub replicas: u8,
     pub storage_size: String,
@@ -172,8 +176,8 @@ fn ops(state: &Option<ClusterOps>) -> Result<&ClusterOps, ApiError> {
     })
 }
 
-async fn summarize(ops: &ClusterOps, spec: ClusterSpec) -> ClusterSummary {
-    let sts_api: Api<StatefulSet> = Api::namespaced(ops.kube.clone(), &ops.ns);
+async fn summarize(ops: &ClusterOps, ns: &str, spec: ClusterSpec) -> ClusterSummary {
+    let sts_api: Api<StatefulSet> = Api::namespaced(ops.kube.clone(), ns);
     let ready = match sts_api.get_opt(&spec.name).await {
         Ok(Some(sts)) => sts.status.and_then(|s| s.ready_replicas).unwrap_or(0),
         _ => 0,
@@ -183,6 +187,7 @@ async fn summarize(ops: &ClusterOps, spec: ClusterSpec) -> ClusterSummary {
         replicas: spec.replicas,
         ready_replicas: ready,
         hibernated: spec.hibernated,
+        namespace: ns.to_string(),
         name: spec.name,
     }
 }
@@ -190,8 +195,9 @@ async fn summarize(ops: &ClusterOps, spec: ClusterSpec) -> ClusterSummary {
 /// Create a new Postgres cluster.
 #[utoipa::path(
     post,
-    path = "/api/v1/clusters",
+    path = "/api/v1/namespaces/{ns}/clusters",
     tag = "clusters",
+    params(("ns" = String, Path, description = "Namespace")),
     request_body = ClusterSpec,
     responses(
         (status = 201, description = "Cluster spec stored", body = ClusterSpec),
@@ -202,6 +208,7 @@ async fn summarize(ops: &ClusterOps, spec: ClusterSpec) -> ClusterSummary {
 )]
 pub async fn create_cluster(
     State(state): State<Option<ClusterOps>>,
+    Path(ns): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<(StatusCode, Json<ClusterSpec>), ApiError> {
     let ops = ops(&state)?;
@@ -220,7 +227,7 @@ pub async fn create_cluster(
     })?;
     if ops
         .store
-        .get(&ops.ns, &spec.name)
+        .get(&ns, &spec.name)
         .await
         .map_err(ApiError::internal)?
         .is_some()
@@ -229,7 +236,7 @@ pub async fn create_cluster(
             .with_detail("A cluster with this name already exists."));
     }
     ops.store
-        .put(&ops.ns, &spec)
+        .put(&ns, &spec)
         .await
         .map_err(ApiError::internal)?;
     Ok((StatusCode::CREATED, Json(spec)))
@@ -238,21 +245,47 @@ pub async fn create_cluster(
 /// List clusters.
 #[utoipa::path(
     get,
-    path = "/api/v1/clusters",
+    path = "/api/v1/namespaces/{ns}/clusters",
     tag = "clusters",
+    params(("ns" = String, Path, description = "Namespace")),
     responses(
-        (status = 200, description = "Clusters", body = [ClusterSummary]),
+        (status = 200, description = "Clusters in the namespace", body = [ClusterSummary]),
         (status = 503, description = "No Kubernetes environment", body = crate::error::ProblemDetails, content_type = "application/problem+json"),
     )
 )]
 pub async fn list_clusters(
     State(state): State<Option<ClusterOps>>,
+    Path(ns): Path<String>,
+) -> Result<Json<Vec<ClusterSummary>>, ApiError> {
+    let ops = ops(&state)?;
+    let specs = ops.store.list_all().await.map_err(ApiError::internal)?;
+    let mut out = Vec::new();
+    for (spec_ns, spec) in specs {
+        if spec_ns == ns {
+            out.push(summarize(ops, &spec_ns, spec).await);
+        }
+    }
+    Ok(Json(out))
+}
+
+/// List every cluster the operator manages, across namespaces.
+#[utoipa::path(
+    get,
+    path = "/api/v1/clusters",
+    tag = "clusters",
+    responses(
+        (status = 200, description = "All managed clusters", body = [ClusterSummary]),
+        (status = 503, description = "No Kubernetes environment", body = crate::error::ProblemDetails, content_type = "application/problem+json"),
+    )
+)]
+pub async fn list_all_clusters(
+    State(state): State<Option<ClusterOps>>,
 ) -> Result<Json<Vec<ClusterSummary>>, ApiError> {
     let ops = ops(&state)?;
     let specs = ops.store.list_all().await.map_err(ApiError::internal)?;
     let mut out = Vec::with_capacity(specs.len());
-    for (_ns, spec) in specs {
-        out.push(summarize(ops, spec).await);
+    for (spec_ns, spec) in specs {
+        out.push(summarize(ops, &spec_ns, spec).await);
     }
     Ok(Json(out))
 }
@@ -260,9 +293,12 @@ pub async fn list_clusters(
 /// Get one cluster with per-instance topology.
 #[utoipa::path(
     get,
-    path = "/api/v1/clusters/{name}",
+    path = "/api/v1/namespaces/{ns}/clusters/{name}",
     tag = "clusters",
-    params(("name" = String, Path, description = "Cluster name")),
+    params(
+        ("ns" = String, Path, description = "Namespace"),
+        ("name" = String, Path, description = "Cluster name")
+    ),
     responses(
         (status = 200, description = "Cluster detail", body = ClusterDetail),
         (status = 404, description = "Not found", body = crate::error::ProblemDetails, content_type = "application/problem+json"),
@@ -270,12 +306,12 @@ pub async fn list_clusters(
 )]
 pub async fn get_cluster(
     State(state): State<Option<ClusterOps>>,
-    Path(name): Path<String>,
+    Path((ns, name)): Path<(String, String)>,
 ) -> Result<Json<ClusterDetail>, ApiError> {
     let ops = ops(&state)?;
     let Some((spec, _owner)) = ops
         .store
-        .get(&ops.ns, &name)
+        .get(&ns, &name)
         .await
         .map_err(ApiError::internal)?
     else {
@@ -283,12 +319,12 @@ pub async fn get_cluster(
     };
     let primary = ops
         .store
-        .primary(&ops.ns, &name)
+        .primary(&ns, &name)
         .await
         .map_err(ApiError::internal)?
         .unwrap_or_else(|| format!("{name}-0"));
     let observations =
-        crate::instance_probe::observe_cluster(&ops.http, &spec.name, &ops.ns, spec.replicas).await;
+        crate::instance_probe::observe_cluster(&ops.http, &spec.name, &ns, spec.replicas).await;
     let ready_replicas = observations.iter().filter(|o| o.ready).count() as i32;
     let pending_restart = observations.iter().any(|o| o.pending_restart);
     let sync_degraded = spec.synchronous
@@ -298,7 +334,7 @@ pub async fn get_cluster(
     // Deployment status only — never the pooler config Secret's contents.
     let pooler_ready = if spec.pooler.enabled {
         let deployments: kube::api::Api<k8s_openapi::api::apps::v1::Deployment> =
-            kube::api::Api::namespaced(ops.kube.clone(), &ops.ns);
+            kube::api::Api::namespaced(ops.kube.clone(), &ns);
         deployments
             .get_opt(&pglord_core::render::pooler_deployment_name(&spec.name))
             .await
@@ -333,6 +369,7 @@ pub async fn get_cluster(
         })
         .collect();
     Ok(Json(ClusterDetail {
+        namespace: ns,
         name: spec.name,
         image: spec.image,
         replicas: spec.replicas,
@@ -414,9 +451,12 @@ fn spec_error(e: SpecError) -> ApiError {
 /// Change a running cluster: scale instances or grow storage.
 #[utoipa::path(
     patch,
-    path = "/api/v1/clusters/{name}",
+    path = "/api/v1/namespaces/{ns}/clusters/{name}",
     tag = "clusters",
-    params(("name" = String, Path, description = "Cluster name")),
+    params(
+        ("ns" = String, Path, description = "Namespace"),
+        ("name" = String, Path, description = "Cluster name")
+    ),
     request_body = SpecChange,
     responses(
         (status = 200, description = "Updated cluster", body = ClusterDetail),
@@ -426,13 +466,13 @@ fn spec_error(e: SpecError) -> ApiError {
 )]
 pub async fn patch_cluster(
     State(state): State<Option<ClusterOps>>,
-    Path(name): Path<String>,
+    Path((ns, name)): Path<(String, String)>,
     Json(change): Json<SpecChange>,
 ) -> Result<Json<ClusterDetail>, ApiError> {
     let ops = ops(&state)?;
     let Some((current, owner)) = ops
         .store
-        .get(&ops.ns, &name)
+        .get(&ns, &name)
         .await
         .map_err(ApiError::internal)?
     else {
@@ -446,7 +486,7 @@ pub async fn patch_cluster(
     if next.storage_size != current.storage_size {
         crate::reconciler::expand_pvcs(
             &ops.kube,
-            &ops.ns,
+            &ns,
             &next.name,
             current.replicas,
             &next.storage_size,
@@ -461,14 +501,14 @@ pub async fn patch_cluster(
     }
 
     ops.store
-        .put(&ops.ns, &next)
+        .put(&ns, &next)
         .await
         .map_err(ApiError::internal)?;
 
     if next.replicas < current.replicas {
         crate::reconciler::delete_orphan_pvcs(
             &ops.kube,
-            &ops.ns,
+            &ns,
             &next.name,
             next.replicas,
             current.replicas,
@@ -476,38 +516,42 @@ pub async fn patch_cluster(
         .await;
     }
 
-    if pod_template_changed(&current, &next, &ops.ns) {
+    if pod_template_changed(&current, &next, &ns) {
         let primary = ops
             .store
-            .primary(&ops.ns, &name)
+            .primary(&ns, &name)
             .await
             .map_err(ApiError::internal)?
             .unwrap_or_else(|| format!("{name}-0"));
         // The StatefulSet must carry the new template before any pod dies, or
         // a deleted pod would come back on the old one. Same field manager as
         // the reconciler, so the level-triggered loop stays idempotent on top.
-        crate::reconciler::apply_cluster(&ops.kube, &ops.http, &ops.ns, &next, &owner, &primary)
+        crate::reconciler::apply_cluster(&ops.kube, &ops.http, &ns, &next, &owner, &primary)
             .await
             .map_err(ApiError::internal)?;
         let ops = ops.clone();
         let roll_spec = next.clone();
+        let roll_ns = ns.clone();
         tokio::spawn(async move {
             let order = roll_order(&roll_spec.name, roll_spec.replicas, &primary);
             tracing::info!(cluster = %roll_spec.name, ?order, "template change: rolling instances");
-            roll_pods(&ops, &roll_spec, order).await;
+            roll_pods(&ops, &roll_ns, &roll_spec, order).await;
             tracing::info!(cluster = %roll_spec.name, "template roll finished");
         });
     }
     tracing::info!(cluster = %next.name, replicas = next.replicas, storage = %next.storage_size, "cluster updated");
-    get_cluster(State(state.clone()), Path(name)).await
+    get_cluster(State(state.clone()), Path((ns, name))).await
 }
 
 /// Promote a specific standby (planned switchover).
 #[utoipa::path(
     post,
-    path = "/api/v1/clusters/{name}/switchover",
+    path = "/api/v1/namespaces/{ns}/clusters/{name}/switchover",
     tag = "clusters",
-    params(("name" = String, Path, description = "Cluster name")),
+    params(
+        ("ns" = String, Path, description = "Namespace"),
+        ("name" = String, Path, description = "Cluster name")
+    ),
     request_body = SwitchoverRequest,
     responses(
         (status = 202, description = "Switchover started"),
@@ -518,13 +562,13 @@ pub async fn patch_cluster(
 )]
 pub async fn switchover(
     State(state): State<Option<ClusterOps>>,
-    Path(name): Path<String>,
+    Path((ns, name)): Path<(String, String)>,
     Json(req): Json<SwitchoverRequest>,
 ) -> Result<StatusCode, ApiError> {
     let ops = ops(&state)?;
     let Some((spec, _owner)) = ops
         .store
-        .get(&ops.ns, &name)
+        .get(&ns, &name)
         .await
         .map_err(ApiError::internal)?
     else {
@@ -544,7 +588,7 @@ pub async fn switchover(
 
     let current = ops
         .store
-        .primary(&ops.ns, &name)
+        .primary(&ns, &name)
         .await
         .map_err(ApiError::internal)?
         .unwrap_or_else(|| format!("{name}-0"));
@@ -556,7 +600,7 @@ pub async fn switchover(
     // Only a ready standby may be promoted: promoting an instance that is not
     // streaming would silently lose whatever WAL it never received.
     let observations =
-        crate::instance_probe::observe_cluster(&ops.http, &spec.name, &ops.ns, spec.replicas).await;
+        crate::instance_probe::observe_cluster(&ops.http, &spec.name, &ns, spec.replicas).await;
     let target_ok = observations
         .iter()
         .find(|o| o.pod == req.target)
@@ -570,7 +614,7 @@ pub async fn switchover(
 
     if !ops
         .store
-        .set_primary(&ops.ns, &name, &req.target)
+        .set_primary(&ns, &name, &req.target)
         .await
         .map_err(ApiError::internal)?
     {
@@ -587,7 +631,7 @@ pub async fn switchover(
     // immediate.
     let url = format!(
         "http://{}:{}/promote",
-        pod_fqdn(&req.target, &spec.name, &ops.ns),
+        pod_fqdn(&req.target, &spec.name, &ns),
         AGENT_HTTP_PORT
     );
     if let Err(err) = ops.http.post(&url).send().await {
@@ -600,9 +644,12 @@ pub async fn switchover(
 /// and the primary last, keeping writes available for as long as possible.
 #[utoipa::path(
     post,
-    path = "/api/v1/clusters/{name}/restart",
+    path = "/api/v1/namespaces/{ns}/clusters/{name}/restart",
     tag = "clusters",
-    params(("name" = String, Path, description = "Cluster name")),
+    params(
+        ("ns" = String, Path, description = "Namespace"),
+        ("name" = String, Path, description = "Cluster name")
+    ),
     responses(
         (status = 202, description = "Rolling restart started"),
         (status = 404, description = "Not found", body = crate::error::ProblemDetails, content_type = "application/problem+json"),
@@ -610,12 +657,12 @@ pub async fn switchover(
 )]
 pub async fn restart_cluster(
     State(state): State<Option<ClusterOps>>,
-    Path(name): Path<String>,
+    Path((ns, name)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
     let ops = ops(&state)?;
     let Some((spec, _owner)) = ops
         .store
-        .get(&ops.ns, &name)
+        .get(&ns, &name)
         .await
         .map_err(ApiError::internal)?
     else {
@@ -624,16 +671,17 @@ pub async fn restart_cluster(
     reject_hibernated(&spec)?;
     let primary = ops
         .store
-        .primary(&ops.ns, &name)
+        .primary(&ns, &name)
         .await
         .map_err(ApiError::internal)?
         .unwrap_or_else(|| format!("{name}-0"));
 
     let ops = ops.clone();
+    let roll_ns = ns.clone();
     tokio::spawn(async move {
         let order = roll_order(&spec.name, spec.replicas, &primary);
         tracing::info!(cluster = %spec.name, ?order, "rolling restart started");
-        roll_pods(&ops, &spec, order).await;
+        roll_pods(&ops, &roll_ns, &spec, order).await;
         tracing::info!(cluster = %spec.name, "rolling restart finished");
     });
     Ok(StatusCode::ACCEPTED)
@@ -652,9 +700,12 @@ pub(crate) fn reject_hibernated(spec: &ClusterSpec) -> Result<(), ApiError> {
 /// Scale the cluster to zero pods, keeping volumes, credentials and the spec.
 #[utoipa::path(
     post,
-    path = "/api/v1/clusters/{name}/hibernate",
+    path = "/api/v1/namespaces/{ns}/clusters/{name}/hibernate",
     tag = "clusters",
-    params(("name" = String, Path, description = "Cluster name")),
+    params(
+        ("ns" = String, Path, description = "Namespace"),
+        ("name" = String, Path, description = "Cluster name")
+    ),
     responses(
         (status = 202, description = "Hibernation started"),
         (status = 404, description = "Not found", body = crate::error::ProblemDetails, content_type = "application/problem+json"),
@@ -663,12 +714,12 @@ pub(crate) fn reject_hibernated(spec: &ClusterSpec) -> Result<(), ApiError> {
 )]
 pub async fn hibernate(
     State(state): State<Option<ClusterOps>>,
-    Path(name): Path<String>,
+    Path((ns, name)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
     let ops = ops(&state)?;
     let Some((mut spec, _owner)) = ops
         .store
-        .get(&ops.ns, &name)
+        .get(&ns, &name)
         .await
         .map_err(ApiError::internal)?
     else {
@@ -680,7 +731,7 @@ pub async fn hibernate(
     }
     spec.hibernated = true;
     ops.store
-        .put(&ops.ns, &spec)
+        .put(&ns, &spec)
         .await
         .map_err(ApiError::internal)?;
     tracing::warn!(cluster = %name, "HIBERNATE: scaling to zero, PVCs retained");
@@ -690,9 +741,12 @@ pub async fn hibernate(
 /// Wake a hibernated cluster: restore its instances and pooler.
 #[utoipa::path(
     post,
-    path = "/api/v1/clusters/{name}/wake",
+    path = "/api/v1/namespaces/{ns}/clusters/{name}/wake",
     tag = "clusters",
-    params(("name" = String, Path, description = "Cluster name")),
+    params(
+        ("ns" = String, Path, description = "Namespace"),
+        ("name" = String, Path, description = "Cluster name")
+    ),
     responses(
         (status = 202, description = "Wake started"),
         (status = 404, description = "Not found", body = crate::error::ProblemDetails, content_type = "application/problem+json"),
@@ -701,12 +755,12 @@ pub async fn hibernate(
 )]
 pub async fn wake(
     State(state): State<Option<ClusterOps>>,
-    Path(name): Path<String>,
+    Path((ns, name)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
     let ops = ops(&state)?;
     let Some((mut spec, _owner)) = ops
         .store
-        .get(&ops.ns, &name)
+        .get(&ns, &name)
         .await
         .map_err(ApiError::internal)?
     else {
@@ -719,7 +773,7 @@ pub async fn wake(
     }
     spec.hibernated = false;
     ops.store
-        .put(&ops.ns, &spec)
+        .put(&ns, &spec)
         .await
         .map_err(ApiError::internal)?;
     tracing::warn!(cluster = %name, replicas = spec.replicas, "WAKE: restoring instances");
@@ -729,9 +783,10 @@ pub async fn wake(
 /// Stop postgres on one standby; the pod stays up for inspection.
 #[utoipa::path(
     post,
-    path = "/api/v1/clusters/{name}/instances/{pod}/fence",
+    path = "/api/v1/namespaces/{ns}/clusters/{name}/instances/{pod}/fence",
     tag = "clusters",
     params(
+        ("ns" = String, Path, description = "Namespace"),
         ("name" = String, Path, description = "Cluster name"),
         ("pod" = String, Path, description = "Instance pod name, e.g. \"demo-1\"")
     ),
@@ -744,12 +799,12 @@ pub async fn wake(
 )]
 pub async fn fence_instance(
     State(state): State<Option<ClusterOps>>,
-    Path((name, pod)): Path<(String, String)>,
+    Path((ns, name, pod)): Path<(String, String, String)>,
 ) -> Result<StatusCode, ApiError> {
     let ops = ops(&state)?;
     let Some((mut spec, _owner)) = ops
         .store
-        .get(&ops.ns, &name)
+        .get(&ns, &name)
         .await
         .map_err(ApiError::internal)?
     else {
@@ -765,7 +820,7 @@ pub async fn fence_instance(
     }
     let primary = ops
         .store
-        .primary(&ops.ns, &name)
+        .primary(&ns, &name)
         .await
         .map_err(ApiError::internal)?
         .unwrap_or_else(|| format!("{name}-0"));
@@ -780,7 +835,7 @@ pub async fn fence_instance(
     }
     spec.fenced.push(pod.clone());
     ops.store
-        .put(&ops.ns, &spec)
+        .put(&ns, &spec)
         .await
         .map_err(ApiError::internal)?;
     tracing::warn!(cluster = %name, %pod, "FENCE: instance held down by spec");
@@ -790,9 +845,10 @@ pub async fn fence_instance(
 /// Release a fenced instance so it rejoins as a standby.
 #[utoipa::path(
     post,
-    path = "/api/v1/clusters/{name}/instances/{pod}/unfence",
+    path = "/api/v1/namespaces/{ns}/clusters/{name}/instances/{pod}/unfence",
     tag = "clusters",
     params(
+        ("ns" = String, Path, description = "Namespace"),
         ("name" = String, Path, description = "Cluster name"),
         ("pod" = String, Path, description = "Instance pod name, e.g. \"demo-1\"")
     ),
@@ -805,12 +861,12 @@ pub async fn fence_instance(
 )]
 pub async fn unfence_instance(
     State(state): State<Option<ClusterOps>>,
-    Path((name, pod)): Path<(String, String)>,
+    Path((ns, name, pod)): Path<(String, String, String)>,
 ) -> Result<StatusCode, ApiError> {
     let ops = ops(&state)?;
     let Some((mut spec, _owner)) = ops
         .store
-        .get(&ops.ns, &name)
+        .get(&ns, &name)
         .await
         .map_err(ApiError::internal)?
     else {
@@ -830,7 +886,7 @@ pub async fn unfence_instance(
     }
     spec.fenced.retain(|p| p != &pod);
     ops.store
-        .put(&ops.ns, &spec)
+        .put(&ns, &spec)
         .await
         .map_err(ApiError::internal)?;
     tracing::warn!(cluster = %name, %pod, "UNFENCE: instance released");
@@ -851,10 +907,11 @@ pub(crate) fn roll_order(cluster: &str, replicas: u8, primary: &str) -> Vec<Stri
 /// next, so the cluster never loses more than one instance at a time.
 pub(crate) async fn roll_pods(
     ops: &ClusterOps,
+    ns: &str,
     spec: &pglord_core::spec::ClusterSpec,
     order: Vec<String>,
 ) {
-    let pods: Api<k8s_openapi::api::core::v1::Pod> = Api::namespaced(ops.kube.clone(), &ops.ns);
+    let pods: Api<k8s_openapi::api::core::v1::Pod> = Api::namespaced(ops.kube.clone(), ns);
     for pod in order {
         if let Err(err) = pods.delete(&pod, &Default::default()).await {
             tracing::warn!(%pod, %err, "roll: pod delete failed");
@@ -862,13 +919,9 @@ pub(crate) async fn roll_pods(
         }
         for _ in 0..60u32 {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-            let obs = crate::instance_probe::observe_cluster(
-                &ops.http,
-                &spec.name,
-                &ops.ns,
-                spec.replicas,
-            )
-            .await;
+            let obs =
+                crate::instance_probe::observe_cluster(&ops.http, &spec.name, ns, spec.replicas)
+                    .await;
             if obs.iter().any(|o| o.pod == pod && o.ready) {
                 break;
             }
@@ -880,9 +933,12 @@ pub(crate) async fn roll_pods(
 /// Delete a cluster (children are garbage-collected via ownerReferences).
 #[utoipa::path(
     delete,
-    path = "/api/v1/clusters/{name}",
+    path = "/api/v1/namespaces/{ns}/clusters/{name}",
     tag = "clusters",
-    params(("name" = String, Path, description = "Cluster name")),
+    params(
+        ("ns" = String, Path, description = "Namespace"),
+        ("name" = String, Path, description = "Cluster name")
+    ),
     responses(
         (status = 204, description = "Deleted"),
         (status = 404, description = "Not found", body = crate::error::ProblemDetails, content_type = "application/problem+json"),
@@ -890,12 +946,12 @@ pub(crate) async fn roll_pods(
 )]
 pub async fn delete_cluster(
     State(state): State<Option<ClusterOps>>,
-    Path(name): Path<String>,
+    Path((ns, name)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
     let ops = ops(&state)?;
     if ops
         .store
-        .delete(&ops.ns, &name)
+        .delete(&ns, &name)
         .await
         .map_err(ApiError::internal)?
     {

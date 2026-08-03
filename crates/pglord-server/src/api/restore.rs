@@ -111,9 +111,12 @@ pub fn restored_spec(source: &ClusterSpec, req: &RestoreRequest) -> ClusterSpec 
 /// Restore this cluster's backup into a new cluster.
 #[utoipa::path(
     post,
-    path = "/api/v1/clusters/{name}/restore",
+    path = "/api/v1/namespaces/{ns}/clusters/{name}/restore",
     tag = "backups",
-    params(("name" = String, Path, description = "Source cluster name")),
+    params(
+        ("ns" = String, Path, description = "Namespace"),
+        ("name" = String, Path, description = "Source cluster name")
+    ),
     request_body = RestoreRequest,
     responses(
         (status = 201, description = "Restored cluster created", body = ClusterSpec),
@@ -124,13 +127,13 @@ pub fn restored_spec(source: &ClusterSpec, req: &RestoreRequest) -> ClusterSpec 
 )]
 pub async fn restore_cluster(
     State(state): State<Option<ClusterOps>>,
-    Path(name): Path<String>,
+    Path((ns, name)): Path<(String, String)>,
     Json(req): Json<RestoreRequest>,
 ) -> Result<(StatusCode, Json<ClusterSpec>), ApiError> {
     let ops = ops(&state)?;
     let Some((source, _owner)) = ops
         .store
-        .get(&ops.ns, &name)
+        .get(&ns, &name)
         .await
         .map_err(ApiError::internal)?
     else {
@@ -154,7 +157,7 @@ pub async fn restore_cluster(
     })?;
     if ops
         .store
-        .get(&ops.ns, &spec.name)
+        .get(&ns, &spec.name)
         .await
         .map_err(ApiError::internal)?
         .is_some()
@@ -163,7 +166,7 @@ pub async fn restore_cluster(
             .with_detail("A cluster with this name already exists."));
     }
     ops.store
-        .put(&ops.ns, &spec)
+        .put(&ns, &spec)
         .await
         .map_err(ApiError::internal)?;
     tracing::info!(

@@ -167,6 +167,19 @@ async fn version_reports_workspace_version() {
 }
 
 #[tokio::test]
+async fn legacy_cluster_paths_alias_to_the_own_namespace() {
+    // Without kube both forms must resolve to the same handler -> same 503.
+    for path in [
+        "/api/v1/clusters/demo",
+        "/api/v1/namespaces/pglord/clusters/demo",
+    ] {
+        let (status, body) = send(test_app(), path, None).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{path}");
+        assert_eq!(body["code"], "kube_unavailable", "{path}");
+    }
+}
+
+#[tokio::test]
 async fn day2_operations_without_kube_answer_503_problem() {
     for (method, path, body) in [
         ("PATCH", "/api/v1/clusters/demo", r#"{"replicas":3}"#),
@@ -266,7 +279,7 @@ async fn rotate_credentials_is_in_the_openapi_contract() {
     assert!(
         api.paths
             .paths
-            .contains_key("/api/v1/clusters/{name}/rotate-credentials")
+            .contains_key("/api/v1/namespaces/{ns}/clusters/{name}/rotate-credentials")
     );
 }
 

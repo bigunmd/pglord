@@ -55,9 +55,12 @@ fn is_blocking(status: &ResourceStatus) -> bool {
 /// List the Secrets and ConfigMaps this cluster depends on.
 #[utoipa::path(
     get,
-    path = "/api/v1/clusters/{name}/secrets",
+    path = "/api/v1/namespaces/{ns}/clusters/{name}/secrets",
     tag = "clusters",
-    params(("name" = String, Path, description = "Cluster name")),
+    params(
+        ("ns" = String, Path, description = "Namespace"),
+        ("name" = String, Path, description = "Cluster name")
+    ),
     responses(
         (status = 200, description = "Required Secrets and ConfigMaps", body = ResourceList),
         (status = 404, description = "Not found", body = crate::error::ProblemDetails, content_type = "application/problem+json"),
@@ -65,20 +68,20 @@ fn is_blocking(status: &ResourceStatus) -> bool {
 )]
 pub async fn list_required_secrets(
     State(state): State<Option<ClusterOps>>,
-    Path(name): Path<String>,
+    Path((ns, name)): Path<(String, String)>,
 ) -> Result<Json<ResourceList>, ApiError> {
     let ops = ops(&state)?;
     let Some((spec, _owner)) = ops
         .store
-        .get(&ops.ns, &name)
+        .get(&ns, &name)
         .await
         .map_err(ApiError::internal)?
     else {
         return Err(ApiError::not_found());
     };
 
-    let secrets: Api<Secret> = Api::namespaced(ops.kube.clone(), &ops.ns);
-    let config_maps: Api<ConfigMap> = Api::namespaced(ops.kube.clone(), &ops.ns);
+    let secrets: Api<Secret> = Api::namespaced(ops.kube.clone(), &ns);
+    let config_maps: Api<ConfigMap> = Api::namespaced(ops.kube.clone(), &ns);
 
     let mut resources = Vec::new();
     for required in required_resources(&spec) {
@@ -161,9 +164,12 @@ mod tests {
 /// Secret, applied on the primary, then every instance is restarted.
 #[utoipa::path(
     post,
-    path = "/api/v1/clusters/{name}/rotate-credentials",
+    path = "/api/v1/namespaces/{ns}/clusters/{name}/rotate-credentials",
     tag = "clusters",
-    params(("name" = String, Path, description = "Cluster name")),
+    params(
+        ("ns" = String, Path, description = "Namespace"),
+        ("name" = String, Path, description = "Cluster name")
+    ),
     responses(
         (status = 202, description = "Rotation started"),
         (status = 404, description = "Not found", body = crate::error::ProblemDetails, content_type = "application/problem+json"),
@@ -172,12 +178,12 @@ mod tests {
 )]
 pub async fn rotate_credentials(
     State(state): State<Option<ClusterOps>>,
-    Path(name): Path<String>,
+    Path((ns, name)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
     let ops = ops(&state)?;
     let Some((spec, _owner)) = ops
         .store
-        .get(&ops.ns, &name)
+        .get(&ns, &name)
         .await
         .map_err(ApiError::internal)?
     else {
@@ -191,14 +197,15 @@ pub async fn rotate_credentials(
     crate::api::clusters::reject_hibernated(&spec)?;
     let primary = ops
         .store
-        .primary(&ops.ns, &name)
+        .primary(&ns, &name)
         .await
         .map_err(ApiError::internal)?
         .unwrap_or_else(|| format!("{name}-0"));
 
     let ops = ops.clone();
+    let rot_ns = ns.clone();
     tokio::spawn(async move {
-        let outcome = match run_rotation(&ops, &spec, &primary).await {
+        let outcome = match run_rotation(&ops, &rot_ns, &spec, &primary).await {
             Ok(()) => {
                 tracing::info!(cluster = %spec.name, "credentials rotation finished");
                 "succeeded"
@@ -221,6 +228,7 @@ pub async fn rotate_credentials(
 /// a plain restart.
 async fn run_rotation(
     ops: &ClusterOps,
+    ns: &str,
     spec: &pglord_core::spec::ClusterSpec,
     primary: &str,
 ) -> anyhow::Result<()> {
@@ -234,7 +242,7 @@ async fn run_rotation(
         .enabled
         .then(crate::reconciler::generate_password);
 
-    let secrets: Api<Secret> = Api::namespaced(ops.kube.clone(), &ops.ns);
+    let secrets: Api<Secret> = Api::namespaced(ops.kube.clone(), ns);
     let mut string_data = serde_json::json!({
         SUPERUSER_PASSWORD_KEY: su_pw.clone(),
         REPLICATION_PASSWORD_KEY: repl_pw.clone(),
@@ -262,7 +270,7 @@ async fn run_rotation(
 
     let url = format!(
         "http://{}:{}/roles/apply",
-        pod_fqdn(primary, &spec.name, &ops.ns),
+        pod_fqdn(primary, &spec.name, ns),
         AGENT_HTTP_PORT
     );
     let resp = ops
@@ -284,7 +292,7 @@ async fn run_rotation(
     if let Some(pw) = &pooler_pw {
         let url = format!(
             "http://{}:{}/pooler/ensure",
-            pod_fqdn(primary, &spec.name, &ops.ns),
+            pod_fqdn(primary, &spec.name, ns),
             AGENT_HTTP_PORT
         );
         let resp = ops
@@ -302,6 +310,6 @@ async fn run_rotation(
     }
 
     let order = crate::api::clusters::roll_order(&spec.name, spec.replicas, primary);
-    crate::api::clusters::roll_pods(ops, spec, order).await;
+    crate::api::clusters::roll_pods(ops, ns, spec, order).await;
     Ok(())
 }

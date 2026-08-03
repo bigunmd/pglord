@@ -67,6 +67,38 @@ impl FromRef<AppState> for crate::metrics::Metrics {
     }
 }
 
+/// Rewrite legacy `/api/v1/clusters...` paths onto the operator's own
+/// namespace. POST to the bare collection creates in the own namespace; GET
+/// of the bare collection stays as the all-namespaces list.
+async fn alias_legacy_paths(
+    axum::extract::State(own_ns): axum::extract::State<String>,
+    mut req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let path = req.uri().path();
+    let rewrite = match path.strip_prefix("/api/v1/clusters") {
+        Some("") | Some("/") => req.method() == axum::http::Method::POST,
+        Some(rest) => rest.starts_with('/'),
+        None => false,
+    };
+    if rewrite {
+        let rest = path.strip_prefix("/api/v1/clusters").unwrap_or_default();
+        let new = format!("/api/v1/namespaces/{own_ns}/clusters{rest}");
+        let new = match req.uri().query() {
+            Some(q) => format!("{new}?{q}"),
+            None => new,
+        };
+        let mut parts = req.uri().clone().into_parts();
+        if let Ok(pq) = new.parse() {
+            parts.path_and_query = Some(pq);
+            if let Ok(uri) = axum::http::Uri::from_parts(parts) {
+                *req.uri_mut() = uri;
+            }
+        }
+    }
+    next.run(req).await
+}
+
 pub fn build(
     readiness: Readiness,
     cfg: &Config,
@@ -81,6 +113,7 @@ pub fn build(
             crate::api::clusters::create_cluster,
             crate::api::clusters::list_clusters
         ))
+        .routes(routes!(crate::api::clusters::list_all_clusters))
         .routes(routes!(
             crate::api::clusters::get_cluster,
             crate::api::clusters::delete_cluster,
@@ -151,10 +184,21 @@ pub fn build(
     let state = AppState {
         readiness,
         cfg: Arc::new(cfg.clone()),
-        cluster_ops,
+        cluster_ops: cluster_ops.clone(),
         metrics,
     };
-    (router.with_state(state), api)
+    // Legacy unqualified cluster paths keep working by rewriting onto the
+    // operator's own namespace BEFORE routing — Router::layer runs after
+    // route matching, so the rewrite must wrap the finished router from
+    // outside (outer router with a fallback service).
+    let own_ns = cluster_ops
+        .as_ref()
+        .map(|o| o.ns.clone())
+        .unwrap_or_else(|| "default".to_string());
+    let inner = router.with_state(state);
+    let alias = axum::middleware::from_fn_with_state(own_ns, alias_legacy_paths);
+    let outer = Router::new().fallback_service(tower::Layer::layer(&alias, inner));
+    (outer, api)
 }
 
 /// Prometheus text format for the control plane. Merged after the API router:

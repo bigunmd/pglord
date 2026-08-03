@@ -88,6 +88,7 @@ pub async fn run(ops: ClusterOps) {
             tracing::info!(cluster = %spec.name, %schedule, "scheduled backup due");
             if let Err(err) = crate::api::backups::start_backup(
                 &ops,
+                &ops.ns,
                 &spec,
                 spec.backup.schedule_kind,
                 "schedule",
