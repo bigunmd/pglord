@@ -77,6 +77,11 @@ pub fn archive_recovery_in_progress(pgdata: &std::path::Path) -> bool {
     pgdata.join("recovery.signal").exists()
 }
 
+/// Whether the spec's fenced list names this instance (pure; unit-tested).
+pub fn is_fenced_in(fenced: &[String], me: &str) -> bool {
+    fenced.iter().any(|f| f == me)
+}
+
 /// Decide the bootstrap role from the record (pure; unit-tested).
 pub fn role_from_record(recorded: &str, me: &str) -> Role {
     if recorded == me {
@@ -106,6 +111,21 @@ pub async fn apply_record_to_config(
 pub async fn follow(reader: RecordReader, cfg: std::sync::Arc<Config>, me: String) {
     loop {
         tokio::time::sleep(Duration::from_secs(5)).await;
+        // Fencing wins over everything, and deliberately before the readiness
+        // gate: a crash-looping postgres must not dodge the fence. The pod
+        // restarts and boots into the fenced hold (main checks before
+        // starting postgres).
+        if let Some(spec) = reader.spec().await
+            && is_fenced_in(&spec.fenced, &me)
+        {
+            tracing::warn!("instance fenced by spec: stopping postgres; restart will hold it down");
+            let _ = Command::new("pg_ctl")
+                .args(["stop", "-m", "fast", "-D"])
+                .arg(&cfg.pgdata)
+                .status()
+                .await;
+            std::process::exit(1);
+        }
         let Some(recorded) = reader.recorded_primary().await else {
             continue;
         };
@@ -259,6 +279,13 @@ async fn fence(cfg: &Config, new_primary: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fence_list_matches_exact_pod_name() {
+        assert!(is_fenced_in(&["demo-1".into()], "demo-1"));
+        assert!(!is_fenced_in(&["demo-1".into()], "demo-0"));
+        assert!(!is_fenced_in(&[], "demo-0"));
+    }
 
     #[test]
     fn record_decides_role() {

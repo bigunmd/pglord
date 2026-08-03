@@ -4,6 +4,7 @@ pub mod backup;
 pub mod bootstrap;
 pub mod config;
 pub mod controldata;
+pub mod fenced;
 pub mod http;
 pub mod initdb;
 pub mod metrics;

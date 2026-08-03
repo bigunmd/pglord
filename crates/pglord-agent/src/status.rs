@@ -27,7 +27,32 @@ pub struct InstanceStatus {
     pub ssl: Option<bool>,
 }
 
+/// Process-wide fenced flag: set at boot when the spec lists this instance,
+/// so `/status` reports the truth while postgres is deliberately down.
+static FENCED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_fenced(v: bool) {
+    FENCED.store(v, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn is_fenced() -> bool {
+    FENCED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 pub async fn query_status(cfg: &Config) -> InstanceStatus {
+    if is_fenced() {
+        // Postgres is stopped on purpose; a connection attempt would only
+        // produce a misleading "unknown".
+        return InstanceStatus {
+            role: "fenced",
+            ready: false,
+            in_recovery: None,
+            lsn: None,
+            pending_restart: false,
+            sync_standby_count: None,
+            ssl: None,
+        };
+    }
     match try_query(cfg).await {
         Ok((in_recovery, lsn, pending_restart, sync_standby_count, ssl)) => InstanceStatus {
             role: if in_recovery { "standby" } else { "primary" },
@@ -93,4 +118,21 @@ async fn try_query(
     drop(client);
     conn_task.abort();
     Ok((in_recovery, lsn, pending_restart, sync_standby_count, ssl))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn fenced_flag_overrides_status() {
+        let cfg: Config = serde_json::from_value(serde_json::json!({ "role": "standby" }))
+            .expect("config from defaults");
+        set_fenced(true);
+        let st = query_status(&cfg).await;
+        assert_eq!(st.role, "fenced");
+        assert!(!st.ready);
+        assert_eq!(st.in_recovery, None);
+        set_fenced(false);
+    }
 }

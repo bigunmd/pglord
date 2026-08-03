@@ -45,6 +45,20 @@ async fn main() -> anyhow::Result<()> {
     let cfg = Arc::new(cfg);
     tracing::info!(role = ?cfg.role, %hostname, restored, version = env!("CARGO_PKG_VERSION"), "pglord-agent starting");
 
+    // A fenced instance never starts postgres: hold with the control endpoint
+    // up (status "fenced", readyz 503) until the spec unfences this pod, then
+    // restart the pod so the normal bootstrap path (demote, rewind, rejoin)
+    // runs from a clean slate.
+    if let Some(r) = &reader
+        && cluster_spec
+            .as_ref()
+            .is_some_and(|s| record::is_fenced_in(&s.fenced, &hostname))
+    {
+        pglord_agent::fenced::hold(cfg.clone(), r, &hostname).await?;
+        tracing::warn!("unfenced; exiting so the pod restarts into a normal boot");
+        std::process::exit(1);
+    }
+
     let hba_rules = cluster_spec
         .as_ref()
         .map(|s| s.pg_hba.clone())
