@@ -78,6 +78,16 @@ pub struct ClusterSpec {
     /// Declared databases, converged after the roles that own them.
     #[serde(default)]
     pub databases: Vec<crate::provision::DatabaseSpec>,
+    /// Scale to zero pods, keeping PVCs, credentials and the spec. The
+    /// desired replica count is preserved for wake. Flipped only by the
+    /// hibernate/wake endpoints, never by PATCH.
+    #[serde(default)]
+    pub hibernated: bool,
+    /// Instances (pod names) held down: the agent stops postgres and keeps
+    /// it stopped while listed. Standbys only — the fence endpoint refuses
+    /// the recorded primary. Flipped only by the fence/unfence endpoints.
+    #[serde(default)]
+    pub fenced: Vec<String>,
 }
 
 fn default_image() -> String {
@@ -137,6 +147,10 @@ pub enum SpecError {
     InvalidPooler(#[from] crate::pooler::PoolerError),
     #[error("{0}")]
     InvalidProvision(#[from] crate::provision::ProvisionError),
+    #[error("'{0}' is not an instance of this cluster and cannot be fenced")]
+    InvalidFenced(String),
+    #[error("instance '{0}' is listed as fenced more than once")]
+    DuplicateFenced(String),
 }
 
 /// The fields a running cluster may change. Name is deliberately absent:
@@ -316,6 +330,18 @@ impl ClusterSpec {
                 return Err(SpecError::SyncConflictsSynchronousCommit(v.clone()));
             }
         }
+        let mut seen_fenced = std::collections::BTreeSet::new();
+        for pod in &self.fenced {
+            // Exact-name match against the real instance names, so e.g.
+            // "demo-01" can never alias "demo-1".
+            let valid = (0..self.replicas).any(|i| format!("{}-{}", self.name, i) == *pod);
+            if !valid {
+                return Err(SpecError::InvalidFenced(pod.clone()));
+            }
+            if !seen_fenced.insert(pod.as_str()) {
+                return Err(SpecError::DuplicateFenced(pod.clone()));
+            }
+        }
         crate::hba::validate_rules(&self.pg_hba)?;
         crate::workload::validate(&self.workload)?;
         crate::backup::validate(&self.backup)?;
@@ -385,6 +411,47 @@ mod tests {
         assert_eq!(s.storage_size, "1Gi");
         assert!(!s.tls.enabled());
         assert_eq!(s.validate(), Ok(()));
+    }
+
+    #[test]
+    fn fenced_must_name_an_instance() {
+        let s: ClusterSpec = serde_json::from_value(
+            serde_json::json!({ "name": "demo", "replicas": 2, "fenced": ["demo-5"] }),
+        )
+        .expect("deserialize");
+        assert_eq!(s.validate(), Err(SpecError::InvalidFenced("demo-5".into())));
+        let s: ClusterSpec = serde_json::from_value(
+            serde_json::json!({ "name": "demo", "replicas": 2, "fenced": ["other-1"] }),
+        )
+        .expect("deserialize");
+        assert_eq!(s.validate(), Err(SpecError::InvalidFenced("other-1".into())));
+        // Exact-name match: leading zeros must not alias a real ordinal.
+        let s: ClusterSpec = serde_json::from_value(
+            serde_json::json!({ "name": "demo", "replicas": 2, "fenced": ["demo-01"] }),
+        )
+        .expect("deserialize");
+        assert_eq!(s.validate(), Err(SpecError::InvalidFenced("demo-01".into())));
+    }
+
+    #[test]
+    fn fenced_rejects_duplicates_and_accepts_valid_pods() {
+        let s: ClusterSpec = serde_json::from_value(
+            serde_json::json!({ "name": "demo", "replicas": 2, "fenced": ["demo-1", "demo-1"] }),
+        )
+        .expect("deserialize");
+        assert_eq!(s.validate(), Err(SpecError::DuplicateFenced("demo-1".into())));
+        let s: ClusterSpec = serde_json::from_value(serde_json::json!({
+            "name": "demo", "replicas": 2, "hibernated": true, "fenced": ["demo-1"]
+        }))
+        .expect("deserialize");
+        assert_eq!(s.validate(), Ok(()));
+    }
+
+    #[test]
+    fn hibernated_and_fenced_default_off() {
+        let s = spec("demo");
+        assert!(!s.hibernated);
+        assert!(s.fenced.is_empty());
     }
 
     #[test]

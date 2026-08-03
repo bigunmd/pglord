@@ -84,6 +84,11 @@ pub fn restored_spec(source: &ClusterSpec, req: &RestoreRequest) -> ClusterSpec 
         // start life with a broken backup configuration. Enabling backups here
         // is a deliberate step, with its own prefix.
         backup: Default::default(),
+        // A restored cluster starts awake with every instance running; the
+        // source being asleep or having a held-down standby is state of the
+        // source, not of the data.
+        hibernated: false,
+        fenced: Vec::new(),
         restore: Some(RestoreSpec {
             source_cluster: source.name.clone(),
             repository: source.backup.clone(),
