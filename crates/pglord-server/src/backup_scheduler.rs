@@ -43,7 +43,11 @@ pub fn is_due(schedule: &str, last_run_started: Option<i64>, now: DateTime<Utc>)
 }
 
 pub async fn run(ops: ClusterOps) {
-    let cms: Api<ConfigMap> = Api::namespaced(ops.kube.clone(), &ops.ns);
+    let cms: Api<ConfigMap> = if ops.all_namespaces {
+        Api::all(ops.kube.clone())
+    } else {
+        Api::namespaced(ops.kube.clone(), &ops.ns)
+    };
     loop {
         tokio::time::sleep(TICK).await;
         let specs = match cms
@@ -60,6 +64,13 @@ pub async fn run(ops: ClusterOps) {
             let Ok((spec, _owner)) = configmap_to_spec(cm) else {
                 continue;
             };
+            // Cluster-wide listing: run history and the backup itself live in
+            // the item's own namespace.
+            let item_ns = cm
+                .metadata
+                .namespace
+                .clone()
+                .unwrap_or_else(|| ops.ns.clone());
             let Some(schedule) = spec
                 .backup
                 .schedule
@@ -74,7 +85,7 @@ pub async fn run(ops: ClusterOps) {
             };
 
             let runs = crate::backup_runs::stale_running_to_unknown(
-                crate::backup_runs::list(&ops.kube, &ops.ns, &spec.name).await,
+                crate::backup_runs::list(&ops.kube, &item_ns, &spec.name).await,
                 crate::api::backups::now_seconds(),
             );
             if crate::backup_runs::has_run_in_flight(&runs) {
@@ -88,7 +99,7 @@ pub async fn run(ops: ClusterOps) {
             tracing::info!(cluster = %spec.name, %schedule, "scheduled backup due");
             if let Err(err) = crate::api::backups::start_backup(
                 &ops,
-                &ops.ns,
+                &item_ns,
                 &spec,
                 spec.backup.schedule_kind,
                 "schedule",

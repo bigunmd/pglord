@@ -60,13 +60,23 @@ async fn main() -> anyhow::Result<()> {
             let ns = kube_client::current_namespace();
             tracing::info!(%ns, "kubernetes environment detected");
             tokio::spawn(kube_client::health_loop(client.clone(), readiness.clone()));
-            tokio::spawn(reconciler::run(client.clone(), ns.clone(), metrics.clone()));
+            tokio::spawn(reconciler::run(
+                client.clone(),
+                ns.clone(),
+                cfg.all_namespaces,
+                metrics.clone(),
+            ));
             if cfg.spec_backend == "crd" {
-                tokio::spawn(pglord_server::cr_sync::run(client.clone(), ns.clone()));
+                tokio::spawn(pglord_server::cr_sync::run(
+                    client.clone(),
+                    ns.clone(),
+                    cfg.all_namespaces,
+                ));
             }
             tokio::spawn(pglord_server::orchestrator::run(
                 client.clone(),
                 ns.clone(),
+                cfg.all_namespaces,
                 metrics.clone(),
             ));
 
@@ -118,6 +128,7 @@ async fn main() -> anyhow::Result<()> {
                 ns,
                 default_agent_image: cfg.default_agent_image.clone(),
                 spec_backend: cfg.spec_backend.clone(),
+                all_namespaces: cfg.all_namespaces,
                 metrics: metrics.clone(),
             };
             tokio::spawn(pglord_server::backup_scheduler::run(ops.clone()));

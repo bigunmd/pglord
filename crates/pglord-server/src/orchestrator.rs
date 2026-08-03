@@ -32,7 +32,12 @@ pub fn elect_candidate(
         .map(|(pod, _)| pod)
 }
 
-pub async fn run(client: kube::Client, ns: String, metrics: crate::metrics::Metrics) {
+pub async fn run(
+    client: kube::Client,
+    ns: String,
+    all_namespaces: bool,
+    metrics: crate::metrics::Metrics,
+) {
     let http = match reqwest::Client::builder().timeout(STATUS_TIMEOUT).build() {
         Ok(c) => c,
         Err(err) => {
@@ -40,9 +45,13 @@ pub async fn run(client: kube::Client, ns: String, metrics: crate::metrics::Metr
             return;
         }
     };
-    let cms: Api<ConfigMap> = Api::namespaced(client.clone(), &ns);
-    // cluster -> consecutive failed polls of its recorded primary
-    let mut failures: HashMap<String, u32> = HashMap::new();
+    let cms: Api<ConfigMap> = if all_namespaces {
+        Api::all(client.clone())
+    } else {
+        Api::namespaced(client.clone(), &ns)
+    };
+    // (namespace, cluster) -> consecutive failed polls of its recorded primary
+    let mut failures: HashMap<(String, String), u32> = HashMap::new();
 
     loop {
         tokio::time::sleep(POLL_INTERVAL).await;
@@ -60,15 +69,18 @@ pub async fn run(client: kube::Client, ns: String, metrics: crate::metrics::Metr
             let Ok((spec, owner)) = configmap_to_spec(cm) else {
                 continue;
             };
+            // Cluster-wide watches carry items from many namespaces; every
+            // probe, CAS and apply targets the item's own.
+            let item_ns = cm.metadata.namespace.clone().unwrap_or_else(|| ns.clone());
             let primary = recorded_primary(cm, &spec.name);
-            let observations = observe_cluster(&http, &spec.name, &ns, spec.replicas).await;
+            let observations = observe_cluster(&http, &spec.name, &item_ns, spec.replicas).await;
             metrics
                 .instances
-                .with_label_values(&[spec.name.as_str()])
+                .with_label_values(&[item_ns.as_str(), spec.name.as_str()])
                 .set(i64::from(spec.replicas));
             metrics
                 .instances_ready
-                .with_label_values(&[spec.name.as_str()])
+                .with_label_values(&[item_ns.as_str(), spec.name.as_str()])
                 .set(observations.iter().filter(|o| o.ready).count() as i64);
             let degraded = spec.synchronous
                 && observations
@@ -76,18 +88,18 @@ pub async fn run(client: kube::Client, ns: String, metrics: crate::metrics::Metr
                     .any(|o| o.pod == primary && o.ready && o.sync_standby_count == Some(0));
             metrics
                 .sync_degraded
-                .with_label_values(&[spec.name.as_str()])
+                .with_label_values(&[item_ns.as_str(), spec.name.as_str()])
                 .set(i64::from(degraded));
             metrics
                 .hibernated
-                .with_label_values(&[spec.name.as_str()])
+                .with_label_values(&[item_ns.as_str(), spec.name.as_str()])
                 .set(i64::from(spec.hibernated));
 
             // A hibernated cluster has zero instances on purpose: no failure
             // counting, no election. Resetting the counter keeps a stale
             // count from firing a failover mid-wake.
             if spec.hibernated {
-                failures.insert(spec.name.clone(), 0);
+                failures.insert((item_ns.clone(), spec.name.clone()), 0);
                 continue;
             }
 
@@ -97,7 +109,9 @@ pub async fn run(client: kube::Client, ns: String, metrics: crate::metrics::Metr
                 .map(|o| o.ready)
                 .unwrap_or(false);
 
-            let count = failures.entry(spec.name.clone()).or_insert(0);
+            let count = failures
+                .entry((item_ns.clone(), spec.name.clone()))
+                .or_insert(0);
             if primary_ok {
                 *count = 0;
                 continue;
@@ -122,28 +136,32 @@ pub async fn run(client: kube::Client, ns: String, metrics: crate::metrics::Metr
 
             let rv = cm.metadata.resource_version.clone().unwrap_or_default();
             let cm_name = cm.metadata.name.clone().unwrap_or_default();
-            match cas_set_primary(&cms, &cm_name, &rv, &candidate).await {
+            // CAS through a namespaced Api: patch-by-name on Api::all has no
+            // namespace to resolve against.
+            let cas_api: Api<ConfigMap> = Api::namespaced(client.clone(), &item_ns);
+            match cas_set_primary(&cas_api, &cm_name, &rv, &candidate).await {
                 Ok(true) => {
                     tracing::warn!(cluster = %spec.name, old = %primary, new = %candidate, "FAILOVER: primary record updated");
                     metrics
                         .failover_total
-                        .with_label_values(&[spec.name.as_str(), "auto"])
+                        .with_label_values(&[item_ns.as_str(), spec.name.as_str(), "auto"])
                         .inc();
                     *count = 0;
                     // Belt and suspenders: the candidate also self-promotes by
                     // following the record; POST is just faster.
                     let url = format!(
                         "http://{}:{}/promote",
-                        pod_fqdn(&candidate, &spec.name, &ns),
+                        pod_fqdn(&candidate, &spec.name, &item_ns),
                         AGENT_HTTP_PORT
                     );
                     if let Err(err) = http.post(&url).send().await {
                         tracing::debug!(%err, "promote POST failed (agent will self-promote)");
                     }
                     // Repoint -rw immediately instead of waiting for resync.
-                    if let Err(err) =
-                        reconciler::apply_cluster(&client, &http, &ns, &spec, &owner, &candidate)
-                            .await
+                    if let Err(err) = reconciler::apply_cluster(
+                        &client, &http, &item_ns, &spec, &owner, &candidate,
+                    )
+                    .await
                     {
                         tracing::warn!(%err, "post-failover apply failed (resync will retry)");
                     }

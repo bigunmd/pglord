@@ -38,6 +38,8 @@ pub struct ClusterOps {
     /// "configmap" or "crd" — preflight reports the CR permissions only when
     /// the CRD backend is actually in use.
     pub spec_backend: String,
+    /// Operator mode: loops that receive ClusterOps watch every namespace.
+    pub all_namespaces: bool,
     pub metrics: crate::metrics::Metrics,
 }
 

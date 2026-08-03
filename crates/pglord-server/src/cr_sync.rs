@@ -60,8 +60,12 @@ pub fn phase_for(spec: &ClusterSpec, ready: i32, sync_degraded: bool) -> &'stati
     }
 }
 
-pub async fn run(client: kube::Client, ns: String) {
-    let crs: Api<PostgresCluster> = Api::namespaced(client.clone(), &ns);
+pub async fn run(client: kube::Client, ns: String, all_namespaces: bool) {
+    let crs: Api<PostgresCluster> = if all_namespaces {
+        Api::all(client.clone())
+    } else {
+        Api::namespaced(client.clone(), &ns)
+    };
 
     let (tx, mut rx) = tokio::sync::mpsc::channel::<()>(1);
     let watch_crs = crs.clone();
@@ -102,7 +106,13 @@ async fn sync_all(
 ) -> anyhow::Result<()> {
     let list = crs.list(&Default::default()).await?;
     for cr in &list.items {
-        if let Err(err) = sync_one(client, crs, ns, cr).await {
+        // Each CR's mirror and status live in the CR's own namespace.
+        let item_ns = cr
+            .metadata
+            .namespace
+            .clone()
+            .unwrap_or_else(|| ns.to_string());
+        if let Err(err) = sync_one(client, &item_ns, cr).await {
             let name = cr.metadata.name.as_deref().unwrap_or("?");
             tracing::warn!(cluster = %name, %err, "cr sync failed; next pass retries");
         }
@@ -110,12 +120,8 @@ async fn sync_all(
     Ok(())
 }
 
-async fn sync_one(
-    client: &kube::Client,
-    crs: &Api<PostgresCluster>,
-    ns: &str,
-    cr: &PostgresCluster,
-) -> anyhow::Result<()> {
+async fn sync_one(client: &kube::Client, ns: &str, cr: &PostgresCluster) -> anyhow::Result<()> {
+    let crs: Api<PostgresCluster> = Api::namespaced(client.clone(), ns);
     let name = cr.metadata.name.clone().unwrap_or_default();
     let cms: Api<ConfigMap> = Api::namespaced(client.clone(), ns);
     let effective = effective_spec(cr);
@@ -155,7 +161,7 @@ async fn sync_one(
             }
         }
     };
-    write_status_if_changed(crs, cr, status).await
+    write_status_if_changed(&crs, cr, status).await
 }
 
 /// Compute status from the mirror (record annotation) and the StatefulSet.

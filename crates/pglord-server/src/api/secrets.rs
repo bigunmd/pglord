@@ -217,7 +217,7 @@ pub async fn rotate_credentials(
         };
         ops.metrics
             .rotations_total
-            .with_label_values(&[spec.name.as_str(), outcome])
+            .with_label_values(&[rot_ns.as_str(), spec.name.as_str(), outcome])
             .inc();
     });
     Ok(StatusCode::ACCEPTED)

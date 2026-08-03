@@ -47,7 +47,12 @@ pub fn desired_objects(
     )
 }
 
-pub async fn run(client: kube::Client, ns: String, metrics: crate::metrics::Metrics) {
+pub async fn run(
+    client: kube::Client,
+    ns: String,
+    all_namespaces: bool,
+    metrics: crate::metrics::Metrics,
+) {
     // For the best-effort pooler auth ensure against the primary's agent.
     let http = match reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
@@ -59,7 +64,11 @@ pub async fn run(client: kube::Client, ns: String, metrics: crate::metrics::Metr
             return;
         }
     };
-    let cms: Api<ConfigMap> = Api::namespaced(client.clone(), &ns);
+    let cms: Api<ConfigMap> = if all_namespaces {
+        Api::all(client.clone())
+    } else {
+        Api::namespaced(client.clone(), &ns)
+    };
     let watch_cfg = watcher::Config::default().labels(&spec_label_selector());
 
     // Watch events only wake the loop; the work is always a full sync so a
@@ -84,7 +93,7 @@ pub async fn run(client: kube::Client, ns: String, metrics: crate::metrics::Metr
         }
     });
 
-    let mut known: std::collections::HashSet<String> = Default::default();
+    let mut known: std::collections::HashSet<(String, String)> = Default::default();
     loop {
         if let Err(err) = sync_all(&client, &http, &cms, &ns, &metrics, &mut known).await {
             tracing::warn!(%err, "reconcile pass failed");
@@ -103,7 +112,7 @@ async fn sync_all(
     cms: &Api<ConfigMap>,
     ns: &str,
     metrics: &crate::metrics::Metrics,
-    known: &mut std::collections::HashSet<String>,
+    known: &mut std::collections::HashSet<(String, String)>,
 ) -> anyhow::Result<()> {
     let specs = cms
         .list(&kube::api::ListParams::default().labels(&spec_label_selector()))
@@ -118,28 +127,35 @@ async fn sync_all(
                 continue;
             }
         };
-        current.insert(spec.name.clone());
+        // Cluster-wide watches carry items from many namespaces; every apply
+        // targets the item's own.
+        let item_ns = cm
+            .metadata
+            .namespace
+            .clone()
+            .unwrap_or_else(|| ns.to_string());
+        current.insert((item_ns.clone(), spec.name.clone()));
         if let Err(err) = spec.validate() {
             tracing::warn!(cluster = %spec.name, %err, "skipping invalid spec");
             continue;
         }
         let primary_pod = recorded_primary(cm, &spec.name);
-        if let Err(err) = apply_cluster(client, http, ns, &spec, &owner, &primary_pod).await {
+        if let Err(err) = apply_cluster(client, http, &item_ns, &spec, &owner, &primary_pod).await {
             metrics
                 .reconcile_total
-                .with_label_values(&[spec.name.as_str(), "error"])
+                .with_label_values(&[item_ns.as_str(), spec.name.as_str(), "error"])
                 .inc();
-            tracing::warn!(cluster = %spec.name, %err, "apply failed");
+            tracing::warn!(cluster = %spec.name, ns = %item_ns, %err, "apply failed");
         } else {
             metrics
                 .reconcile_total
-                .with_label_values(&[spec.name.as_str(), "ok"])
+                .with_label_values(&[item_ns.as_str(), spec.name.as_str(), "ok"])
                 .inc();
-            tracing::debug!(cluster = %spec.name, "reconciled");
+            tracing::debug!(cluster = %spec.name, ns = %item_ns, "reconciled");
         }
     }
-    for removed in known.difference(&current) {
-        metrics.forget_cluster(removed);
+    for (removed_ns, removed) in known.difference(&current) {
+        metrics.forget_cluster(removed_ns, removed);
     }
     *known = current;
     Ok(())

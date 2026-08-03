@@ -265,7 +265,7 @@ pub async fn start_backup(
         };
         metrics
             .backup_runs_total
-            .with_label_values(&[name.as_str(), kind.as_str(), outcome])
+            .with_label_values(&[ns.as_str(), name.as_str(), kind.as_str(), outcome])
             .inc();
         if let Err(err) = crate::backup_runs::record_finish(
             &kube,
