@@ -143,7 +143,7 @@ Switchover to a fenced target already fails with the existing
   409 anyway.
 - **Instance rows:** fence/unfence action per standby row (hidden on the
   primary); `fenced` role badge styled distinctly from an unready instance.
-- All strings through Transloco, both locales.
+- All strings through Transloco (`ui/public/i18n/en.json`).
 
 ## Error handling
 
