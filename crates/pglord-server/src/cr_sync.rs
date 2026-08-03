@@ -27,7 +27,7 @@ const RESYNC_INTERVAL: Duration = Duration::from_secs(60);
 const ERROR_BACKOFF: Duration = Duration::from_secs(5);
 
 pub enum SyncDecision {
-    Sync(ClusterSpec),
+    Sync(Box<ClusterSpec>),
     Invalid(String),
 }
 
@@ -43,7 +43,7 @@ pub fn decide(metadata_name: &str, effective: &ClusterSpec) -> SyncDecision {
         ));
     }
     match effective.validate() {
-        Ok(()) => SyncDecision::Sync(effective.clone()),
+        Ok(()) => SyncDecision::Sync(Box::new(effective.clone())),
         Err(e) => SyncDecision::Invalid(e.to_string()),
     }
 }
