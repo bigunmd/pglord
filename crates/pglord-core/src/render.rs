@@ -505,7 +505,11 @@ pub fn render_statefulset(spec: &ClusterSpec, ns: &str, owner: &OwnerRef) -> Sta
     StatefulSet {
         metadata: meta(&spec.name, ns, &spec.name, owner),
         spec: Some(StatefulSetSpec {
-            replicas: Some(i32::from(spec.replicas)),
+            replicas: Some(if spec.hibernated {
+                0
+            } else {
+                i32::from(spec.replicas)
+            }),
             service_name: Some(headless_service_name(&spec.name)),
             // pglord owns rolls (standbys first, primary last, ready-gated);
             // the controller must not race it on template changes.
@@ -514,11 +518,14 @@ pub fn render_statefulset(spec: &ClusterSpec, ns: &str, owner: &OwnerRef) -> Sta
                 rolling_update: None,
             }),
             // PVCs created from volumeClaimTemplates carry no ownerReferences,
-            // so without this they outlive the cluster as orphaned storage.
+            // so without whenDeleted they outlive the cluster as orphaned
+            // storage. whenScaled is Retain: hibernation scales to zero and
+            // must keep every volume; a real scale-down's orphans are deleted
+            // explicitly by the reconciler (delete_orphan_pvcs), never here.
             persistent_volume_claim_retention_policy: Some(
                 StatefulSetPersistentVolumeClaimRetentionPolicy {
                     when_deleted: Some("Delete".to_string()),
-                    when_scaled: Some("Delete".to_string()),
+                    when_scaled: Some("Retain".to_string()),
                 },
             ),
             selector: LabelSelector {
@@ -721,7 +728,12 @@ pub fn render_pooler_deployment(
     Deployment {
         metadata: meta(&pooler_deployment_name(&spec.name), ns, &spec.name, owner),
         spec: Some(DeploymentSpec {
-            replicas: Some(i32::from(spec.pooler.replicas)),
+            // A hibernated cluster has no primary to pool for.
+            replicas: Some(if spec.hibernated {
+                0
+            } else {
+                i32::from(spec.pooler.replicas)
+            }),
             selector: LabelSelector {
                 match_labels: Some(pooler_labels(&spec.name)),
                 ..Default::default()
@@ -809,6 +821,43 @@ mod tests {
             uid: "uid-123".into(),
         };
         (spec, owner)
+    }
+
+    #[test]
+    fn hibernated_renders_zero_instances_and_pooler_replicas() {
+        let (_, owner) = demo();
+        let spec: ClusterSpec = serde_json::from_value(serde_json::json!({
+            "name": "demo", "replicas": 3, "hibernated": true,
+            "pooler": { "enabled": true, "replicas": 2 }
+        }))
+        .expect("spec");
+        let sts = render_statefulset(&spec, "pglord", &owner);
+        assert_eq!(sts.spec.as_ref().and_then(|s| s.replicas), Some(0));
+        let dep = render_pooler_deployment(&spec, "pglord", &owner, "h");
+        assert_eq!(dep.spec.as_ref().and_then(|s| s.replicas), Some(0));
+    }
+
+    #[test]
+    fn pvcs_are_retained_on_scale_down_but_deleted_with_the_cluster() {
+        let (spec, owner) = demo();
+        let policy = render_statefulset(&spec, "pglord", &owner)
+            .spec
+            .and_then(|s| s.persistent_volume_claim_retention_policy)
+            .expect("policy");
+        assert_eq!(policy.when_scaled.as_deref(), Some("Retain"));
+        assert_eq!(policy.when_deleted.as_deref(), Some("Delete"));
+    }
+
+    #[test]
+    fn hibernation_and_fencing_do_not_touch_the_pod_template() {
+        let (awake, owner) = demo();
+        let asleep: ClusterSpec = serde_json::from_value(serde_json::json!({
+            "name": "demo", "replicas": 2, "hibernated": true, "fenced": ["demo-1"]
+        }))
+        .expect("spec");
+        let template =
+            |s: &ClusterSpec| render_statefulset(s, "pglord", &owner).spec.map(|x| x.template);
+        assert_eq!(template(&awake), template(&asleep));
     }
 
     #[test]
@@ -1307,7 +1356,8 @@ mod tests {
     #[test]
     fn volumes_are_deleted_with_the_cluster() {
         // Without this policy, deleting a cluster silently leaves its data
-        // volumes (and their cost) behind.
+        // volumes (and their cost) behind. Scale-down is the opposite case:
+        // pvcs_are_retained_on_scale_down_but_deleted_with_the_cluster.
         let (spec, owner) = demo();
         let policy = render_statefulset(&spec, "ns", &owner)
             .spec
@@ -1315,7 +1365,6 @@ mod tests {
             .persistent_volume_claim_retention_policy
             .expect("retention policy");
         assert_eq!(policy.when_deleted.as_deref(), Some("Delete"));
-        assert_eq!(policy.when_scaled.as_deref(), Some("Delete"));
     }
 
     #[test]
