@@ -135,7 +135,7 @@ echo "==> admin token bypasses RBAC everywhere"
 code=$(code_as "$ADMIN" GET "/api/v1/clusters")
 [ "$code" = "200" ] || { echo "FAIL: admin global list returned $code"; exit 1; }
 code=$(code_as "$ADMIN" DELETE "/api/v1/namespaces/team-b/clusters/demo")
-[ "$code" = "200" ] || { echo "FAIL: admin delete returned $code"; exit 1; }
+[ "$code" = "204" ] || { echo "FAIL: admin delete returned $code, expected 204"; exit 1; }
 echo "OK static admin unaffected"
 
 echo "PASS: kubernetes rbac auth e2e"
