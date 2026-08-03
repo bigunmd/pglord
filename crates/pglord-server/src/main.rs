@@ -105,6 +105,7 @@ async fn main() -> anyhow::Result<()> {
                     "crd" => std::sync::Arc::new(pglord_server::crd_store::CrdSpecStore::new(
                         client.clone(),
                         &ns,
+                        cfg.all_namespaces,
                     )),
                     _ => std::sync::Arc::new(ConfigMapSpecStore::new(client.clone(), &ns)),
                 };

@@ -128,7 +128,12 @@ pub async fn restore_cluster(
     Json(req): Json<RestoreRequest>,
 ) -> Result<(StatusCode, Json<ClusterSpec>), ApiError> {
     let ops = ops(&state)?;
-    let Some((source, _owner)) = ops.store.get(&name).await.map_err(ApiError::internal)? else {
+    let Some((source, _owner)) = ops
+        .store
+        .get(&ops.ns, &name)
+        .await
+        .map_err(ApiError::internal)?
+    else {
         return Err(ApiError::not_found());
     };
     if !source.backup.enabled {
@@ -149,7 +154,7 @@ pub async fn restore_cluster(
     })?;
     if ops
         .store
-        .get(&spec.name)
+        .get(&ops.ns, &spec.name)
         .await
         .map_err(ApiError::internal)?
         .is_some()
@@ -157,7 +162,10 @@ pub async fn restore_cluster(
         return Err(ApiError::conflict("already_exists")
             .with_detail("A cluster with this name already exists."));
     }
-    ops.store.put(&spec).await.map_err(ApiError::internal)?;
+    ops.store
+        .put(&ops.ns, &spec)
+        .await
+        .map_err(ApiError::internal)?;
     tracing::info!(
         source = %name,
         target = %spec.name,

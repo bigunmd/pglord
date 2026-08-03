@@ -90,57 +90,64 @@ pub fn configmap_to_spec(cm: &ConfigMap) -> anyhow::Result<(ClusterSpec, OwnerRe
 
 #[async_trait::async_trait]
 pub trait SpecStore: Send + Sync {
-    async fn list(&self) -> anyhow::Result<Vec<ClusterSpec>>;
-    async fn get(&self, name: &str) -> anyhow::Result<Option<(ClusterSpec, OwnerRef)>>;
-    async fn put(&self, spec: &ClusterSpec) -> anyhow::Result<()>;
-    async fn delete(&self, name: &str) -> anyhow::Result<bool>;
+    /// Every cluster this store manages, with the namespace it lives in.
+    async fn list_all(&self) -> anyhow::Result<Vec<(String, ClusterSpec)>>;
+    async fn get(&self, ns: &str, name: &str) -> anyhow::Result<Option<(ClusterSpec, OwnerRef)>>;
+    async fn put(&self, ns: &str, spec: &ClusterSpec) -> anyhow::Result<()>;
+    async fn delete(&self, ns: &str, name: &str) -> anyhow::Result<bool>;
     /// The recorded primary pod for the cluster, if the spec exists
     /// (annotation on the spec object; caller applies the `<name>-0` default).
-    async fn primary(&self, name: &str) -> anyhow::Result<Option<String>>;
+    async fn primary(&self, ns: &str, name: &str) -> anyhow::Result<Option<String>>;
     /// Record a new primary via compare-and-swap. False = another writer won
     /// the race; the caller should re-read and decide again.
-    async fn set_primary(&self, name: &str, target: &str) -> anyhow::Result<bool>;
+    async fn set_primary(&self, ns: &str, name: &str, target: &str) -> anyhow::Result<bool>;
 }
 
 pub struct ConfigMapSpecStore {
-    api: Api<ConfigMap>,
-    ns: String,
+    client: kube::Client,
+    /// Standalone mode is single-namespace by design; list_all only ever
+    /// reports this namespace.
+    own_ns: String,
 }
 
 impl ConfigMapSpecStore {
-    pub fn new(client: kube::Client, ns: &str) -> Self {
+    pub fn new(client: kube::Client, own_ns: &str) -> Self {
         ConfigMapSpecStore {
-            api: Api::namespaced(client, ns),
-            ns: ns.to_string(),
+            client,
+            own_ns: own_ns.to_string(),
         }
+    }
+
+    fn api(&self, ns: &str) -> Api<ConfigMap> {
+        Api::namespaced(self.client.clone(), ns)
     }
 }
 
 #[async_trait::async_trait]
 impl SpecStore for ConfigMapSpecStore {
-    async fn list(&self) -> anyhow::Result<Vec<ClusterSpec>> {
+    async fn list_all(&self) -> anyhow::Result<Vec<(String, ClusterSpec)>> {
         let cms = self
-            .api
+            .api(&self.own_ns)
             .list(&ListParams::default().labels(&spec_label_selector()))
             .await?;
         Ok(cms
             .items
             .iter()
             .filter_map(|cm| configmap_to_spec(cm).ok())
-            .map(|(spec, _)| spec)
+            .map(|(spec, _)| (self.own_ns.clone(), spec))
             .collect())
     }
 
-    async fn get(&self, name: &str) -> anyhow::Result<Option<(ClusterSpec, OwnerRef)>> {
-        match self.api.get_opt(&spec_cm_name(name)).await? {
+    async fn get(&self, ns: &str, name: &str) -> anyhow::Result<Option<(ClusterSpec, OwnerRef)>> {
+        match self.api(ns).get_opt(&spec_cm_name(name)).await? {
             Some(cm) => Ok(Some(configmap_to_spec(&cm)?)),
             None => Ok(None),
         }
     }
 
-    async fn put(&self, spec: &ClusterSpec) -> anyhow::Result<()> {
-        let cm = spec_to_configmap(spec, &self.ns)?;
-        self.api
+    async fn put(&self, ns: &str, spec: &ClusterSpec) -> anyhow::Result<()> {
+        let cm = spec_to_configmap(spec, ns)?;
+        self.api(ns)
             .patch(
                 &spec_cm_name(&spec.name),
                 &PatchParams::apply(FIELD_MANAGER).force(),
@@ -150,9 +157,9 @@ impl SpecStore for ConfigMapSpecStore {
         Ok(())
     }
 
-    async fn delete(&self, name: &str) -> anyhow::Result<bool> {
+    async fn delete(&self, ns: &str, name: &str) -> anyhow::Result<bool> {
         match self
-            .api
+            .api(ns)
             .delete(&spec_cm_name(name), &Default::default())
             .await
         {
@@ -162,17 +169,18 @@ impl SpecStore for ConfigMapSpecStore {
         }
     }
 
-    async fn set_primary(&self, name: &str, target: &str) -> anyhow::Result<bool> {
+    async fn set_primary(&self, ns: &str, name: &str, target: &str) -> anyhow::Result<bool> {
+        let api = self.api(ns);
         let cm_name = spec_cm_name(name);
-        let Some(cm) = self.api.get_opt(&cm_name).await? else {
+        let Some(cm) = api.get_opt(&cm_name).await? else {
             return Ok(false);
         };
         let rv = cm.metadata.resource_version.unwrap_or_default();
-        crate::primary_record::cas_set_primary(&self.api, &cm_name, &rv, target).await
+        crate::primary_record::cas_set_primary(&api, &cm_name, &rv, target).await
     }
 
-    async fn primary(&self, name: &str) -> anyhow::Result<Option<String>> {
-        Ok(self.api.get_opt(&spec_cm_name(name)).await?.map(|cm| {
+    async fn primary(&self, ns: &str, name: &str) -> anyhow::Result<Option<String>> {
+        Ok(self.api(ns).get_opt(&spec_cm_name(name)).await?.map(|cm| {
             cm.metadata
                 .annotations
                 .as_ref()

@@ -68,7 +68,12 @@ pub async fn list_required_secrets(
     Path(name): Path<String>,
 ) -> Result<Json<ResourceList>, ApiError> {
     let ops = ops(&state)?;
-    let Some((spec, _owner)) = ops.store.get(&name).await.map_err(ApiError::internal)? else {
+    let Some((spec, _owner)) = ops
+        .store
+        .get(&ops.ns, &name)
+        .await
+        .map_err(ApiError::internal)?
+    else {
         return Err(ApiError::not_found());
     };
 
@@ -170,7 +175,12 @@ pub async fn rotate_credentials(
     Path(name): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     let ops = ops(&state)?;
-    let Some((spec, _owner)) = ops.store.get(&name).await.map_err(ApiError::internal)? else {
+    let Some((spec, _owner)) = ops
+        .store
+        .get(&ops.ns, &name)
+        .await
+        .map_err(ApiError::internal)?
+    else {
         return Err(ApiError::not_found());
     };
     if spec.credentials_secret().is_some() {
@@ -181,7 +191,7 @@ pub async fn rotate_credentials(
     crate::api::clusters::reject_hibernated(&spec)?;
     let primary = ops
         .store
-        .primary(&name)
+        .primary(&ops.ns, &name)
         .await
         .map_err(ApiError::internal)?
         .unwrap_or_else(|| format!("{name}-0"));

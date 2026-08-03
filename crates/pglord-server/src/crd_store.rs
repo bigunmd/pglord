@@ -10,17 +10,25 @@ use pglord_core::spec::ClusterSpec;
 use crate::spec_store::{ConfigMapSpecStore, FIELD_MANAGER, SpecStore};
 
 pub struct CrdSpecStore {
-    api: Api<PostgresCluster>,
+    client: kube::Client,
+    own_ns: String,
+    all_namespaces: bool,
     /// Delegation target for the primary record on the mirror ConfigMap.
     mirror: ConfigMapSpecStore,
 }
 
 impl CrdSpecStore {
-    pub fn new(client: kube::Client, ns: &str) -> CrdSpecStore {
+    pub fn new(client: kube::Client, own_ns: &str, all_namespaces: bool) -> CrdSpecStore {
         CrdSpecStore {
-            api: Api::namespaced(client.clone(), ns),
-            mirror: ConfigMapSpecStore::new(client, ns),
+            mirror: ConfigMapSpecStore::new(client.clone(), own_ns),
+            own_ns: own_ns.to_string(),
+            all_namespaces,
+            client,
         }
+    }
+
+    fn api(&self, ns: &str) -> Api<PostgresCluster> {
+        Api::namespaced(self.client.clone(), ns)
     }
 }
 
@@ -48,22 +56,40 @@ pub fn cr_owner_ref(cr: &PostgresCluster) -> OwnerRef {
 
 #[async_trait::async_trait]
 impl SpecStore for CrdSpecStore {
-    async fn list(&self) -> anyhow::Result<Vec<ClusterSpec>> {
-        let crs = self.api.list(&Default::default()).await?;
-        Ok(crs.items.iter().map(effective_spec).collect())
+    async fn list_all(&self) -> anyhow::Result<Vec<(String, ClusterSpec)>> {
+        let crs = if self.all_namespaces {
+            Api::<PostgresCluster>::all(self.client.clone())
+                .list(&Default::default())
+                .await?
+        } else {
+            self.api(&self.own_ns).list(&Default::default()).await?
+        };
+        Ok(crs
+            .items
+            .iter()
+            .map(|cr| {
+                (
+                    cr.metadata
+                        .namespace
+                        .clone()
+                        .unwrap_or_else(|| self.own_ns.clone()),
+                    effective_spec(cr),
+                )
+            })
+            .collect())
     }
 
-    async fn get(&self, name: &str) -> anyhow::Result<Option<(ClusterSpec, OwnerRef)>> {
+    async fn get(&self, ns: &str, name: &str) -> anyhow::Result<Option<(ClusterSpec, OwnerRef)>> {
         Ok(self
-            .api
+            .api(ns)
             .get_opt(name)
             .await?
             .map(|cr| (effective_spec(&cr), cr_owner_ref(&cr))))
     }
 
-    async fn put(&self, spec: &ClusterSpec) -> anyhow::Result<()> {
+    async fn put(&self, ns: &str, spec: &ClusterSpec) -> anyhow::Result<()> {
         let cr = PostgresCluster::new(&spec.name, spec.clone());
-        self.api
+        self.api(ns)
             .patch(
                 &spec.name,
                 &PatchParams::apply(FIELD_MANAGER).force(),
@@ -73,20 +99,20 @@ impl SpecStore for CrdSpecStore {
         Ok(())
     }
 
-    async fn delete(&self, name: &str) -> anyhow::Result<bool> {
-        match self.api.delete(name, &Default::default()).await {
+    async fn delete(&self, ns: &str, name: &str) -> anyhow::Result<bool> {
+        match self.api(ns).delete(name, &Default::default()).await {
             Ok(_) => Ok(true),
             Err(kube::Error::Api(ae)) if ae.code == 404 => Ok(false),
             Err(e) => Err(e.into()),
         }
     }
 
-    async fn primary(&self, name: &str) -> anyhow::Result<Option<String>> {
-        self.mirror.primary(name).await
+    async fn primary(&self, ns: &str, name: &str) -> anyhow::Result<Option<String>> {
+        self.mirror.primary(ns, name).await
     }
 
-    async fn set_primary(&self, name: &str, target: &str) -> anyhow::Result<bool> {
-        self.mirror.set_primary(name, target).await
+    async fn set_primary(&self, ns: &str, name: &str, target: &str) -> anyhow::Result<bool> {
+        self.mirror.set_primary(ns, name, target).await
     }
 }
 

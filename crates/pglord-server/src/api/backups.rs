@@ -72,7 +72,12 @@ pub async fn list_backups(
     Path(name): Path<String>,
 ) -> Result<Json<BackupList>, ApiError> {
     let ops = ops(&state)?;
-    let Some((spec, _owner)) = ops.store.get(&name).await.map_err(ApiError::internal)? else {
+    let Some((spec, _owner)) = ops
+        .store
+        .get(&ops.ns, &name)
+        .await
+        .map_err(ApiError::internal)?
+    else {
         return Err(ApiError::not_found());
     };
     if !spec.backup.enabled {
@@ -86,7 +91,7 @@ pub async fn list_backups(
     }
     let primary = ops
         .store
-        .primary(&name)
+        .primary(&ops.ns, &name)
         .await
         .map_err(ApiError::internal)?
         .unwrap_or_else(|| format!("{name}-0"));
@@ -146,7 +151,12 @@ pub async fn create_backup(
     body: Option<Json<BackupRequest>>,
 ) -> Result<StatusCode, ApiError> {
     let ops = ops(&state)?;
-    let Some((spec, _owner)) = ops.store.get(&name).await.map_err(ApiError::internal)? else {
+    let Some((spec, _owner)) = ops
+        .store
+        .get(&ops.ns, &name)
+        .await
+        .map_err(ApiError::internal)?
+    else {
         return Err(ApiError::not_found());
     };
     crate::api::clusters::reject_hibernated(&spec)?;
@@ -181,7 +191,7 @@ pub async fn start_backup(
     let name = spec.name.clone();
     let primary = ops
         .store
-        .primary(&name)
+        .primary(&ops.ns, &name)
         .await?
         .unwrap_or_else(|| format!("{name}-0"));
     let started = now_seconds();

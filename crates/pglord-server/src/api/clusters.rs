@@ -220,7 +220,7 @@ pub async fn create_cluster(
     })?;
     if ops
         .store
-        .get(&spec.name)
+        .get(&ops.ns, &spec.name)
         .await
         .map_err(ApiError::internal)?
         .is_some()
@@ -228,7 +228,10 @@ pub async fn create_cluster(
         return Err(ApiError::conflict("already_exists")
             .with_detail("A cluster with this name already exists."));
     }
-    ops.store.put(&spec).await.map_err(ApiError::internal)?;
+    ops.store
+        .put(&ops.ns, &spec)
+        .await
+        .map_err(ApiError::internal)?;
     Ok((StatusCode::CREATED, Json(spec)))
 }
 
@@ -246,9 +249,9 @@ pub async fn list_clusters(
     State(state): State<Option<ClusterOps>>,
 ) -> Result<Json<Vec<ClusterSummary>>, ApiError> {
     let ops = ops(&state)?;
-    let specs = ops.store.list().await.map_err(ApiError::internal)?;
+    let specs = ops.store.list_all().await.map_err(ApiError::internal)?;
     let mut out = Vec::with_capacity(specs.len());
-    for spec in specs {
+    for (_ns, spec) in specs {
         out.push(summarize(ops, spec).await);
     }
     Ok(Json(out))
@@ -270,12 +273,17 @@ pub async fn get_cluster(
     Path(name): Path<String>,
 ) -> Result<Json<ClusterDetail>, ApiError> {
     let ops = ops(&state)?;
-    let Some((spec, _owner)) = ops.store.get(&name).await.map_err(ApiError::internal)? else {
+    let Some((spec, _owner)) = ops
+        .store
+        .get(&ops.ns, &name)
+        .await
+        .map_err(ApiError::internal)?
+    else {
         return Err(ApiError::not_found());
     };
     let primary = ops
         .store
-        .primary(&name)
+        .primary(&ops.ns, &name)
         .await
         .map_err(ApiError::internal)?
         .unwrap_or_else(|| format!("{name}-0"));
@@ -422,7 +430,12 @@ pub async fn patch_cluster(
     Json(change): Json<SpecChange>,
 ) -> Result<Json<ClusterDetail>, ApiError> {
     let ops = ops(&state)?;
-    let Some((current, owner)) = ops.store.get(&name).await.map_err(ApiError::internal)? else {
+    let Some((current, owner)) = ops
+        .store
+        .get(&ops.ns, &name)
+        .await
+        .map_err(ApiError::internal)?
+    else {
         return Err(ApiError::not_found());
     };
     reject_hibernated(&current)?;
@@ -447,7 +460,10 @@ pub async fn patch_cluster(
         })?;
     }
 
-    ops.store.put(&next).await.map_err(ApiError::internal)?;
+    ops.store
+        .put(&ops.ns, &next)
+        .await
+        .map_err(ApiError::internal)?;
 
     if next.replicas < current.replicas {
         crate::reconciler::delete_orphan_pvcs(
@@ -463,7 +479,7 @@ pub async fn patch_cluster(
     if pod_template_changed(&current, &next, &ops.ns) {
         let primary = ops
             .store
-            .primary(&name)
+            .primary(&ops.ns, &name)
             .await
             .map_err(ApiError::internal)?
             .unwrap_or_else(|| format!("{name}-0"));
@@ -506,7 +522,12 @@ pub async fn switchover(
     Json(req): Json<SwitchoverRequest>,
 ) -> Result<StatusCode, ApiError> {
     let ops = ops(&state)?;
-    let Some((spec, _owner)) = ops.store.get(&name).await.map_err(ApiError::internal)? else {
+    let Some((spec, _owner)) = ops
+        .store
+        .get(&ops.ns, &name)
+        .await
+        .map_err(ApiError::internal)?
+    else {
         return Err(ApiError::not_found());
     };
     reject_hibernated(&spec)?;
@@ -523,7 +544,7 @@ pub async fn switchover(
 
     let current = ops
         .store
-        .primary(&name)
+        .primary(&ops.ns, &name)
         .await
         .map_err(ApiError::internal)?
         .unwrap_or_else(|| format!("{name}-0"));
@@ -549,7 +570,7 @@ pub async fn switchover(
 
     if !ops
         .store
-        .set_primary(&name, &req.target)
+        .set_primary(&ops.ns, &name, &req.target)
         .await
         .map_err(ApiError::internal)?
     {
@@ -592,13 +613,18 @@ pub async fn restart_cluster(
     Path(name): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     let ops = ops(&state)?;
-    let Some((spec, _owner)) = ops.store.get(&name).await.map_err(ApiError::internal)? else {
+    let Some((spec, _owner)) = ops
+        .store
+        .get(&ops.ns, &name)
+        .await
+        .map_err(ApiError::internal)?
+    else {
         return Err(ApiError::not_found());
     };
     reject_hibernated(&spec)?;
     let primary = ops
         .store
-        .primary(&name)
+        .primary(&ops.ns, &name)
         .await
         .map_err(ApiError::internal)?
         .unwrap_or_else(|| format!("{name}-0"));
@@ -640,7 +666,12 @@ pub async fn hibernate(
     Path(name): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     let ops = ops(&state)?;
-    let Some((mut spec, _owner)) = ops.store.get(&name).await.map_err(ApiError::internal)? else {
+    let Some((mut spec, _owner)) = ops
+        .store
+        .get(&ops.ns, &name)
+        .await
+        .map_err(ApiError::internal)?
+    else {
         return Err(ApiError::not_found());
     };
     if spec.hibernated {
@@ -648,7 +679,10 @@ pub async fn hibernate(
             .with_detail("The cluster is already hibernated."));
     }
     spec.hibernated = true;
-    ops.store.put(&spec).await.map_err(ApiError::internal)?;
+    ops.store
+        .put(&ops.ns, &spec)
+        .await
+        .map_err(ApiError::internal)?;
     tracing::warn!(cluster = %name, "HIBERNATE: scaling to zero, PVCs retained");
     Ok(StatusCode::ACCEPTED)
 }
@@ -670,7 +704,12 @@ pub async fn wake(
     Path(name): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     let ops = ops(&state)?;
-    let Some((mut spec, _owner)) = ops.store.get(&name).await.map_err(ApiError::internal)? else {
+    let Some((mut spec, _owner)) = ops
+        .store
+        .get(&ops.ns, &name)
+        .await
+        .map_err(ApiError::internal)?
+    else {
         return Err(ApiError::not_found());
     };
     if !spec.hibernated {
@@ -679,7 +718,10 @@ pub async fn wake(
         );
     }
     spec.hibernated = false;
-    ops.store.put(&spec).await.map_err(ApiError::internal)?;
+    ops.store
+        .put(&ops.ns, &spec)
+        .await
+        .map_err(ApiError::internal)?;
     tracing::warn!(cluster = %name, replicas = spec.replicas, "WAKE: restoring instances");
     Ok(StatusCode::ACCEPTED)
 }
@@ -705,7 +747,12 @@ pub async fn fence_instance(
     Path((name, pod)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
     let ops = ops(&state)?;
-    let Some((mut spec, _owner)) = ops.store.get(&name).await.map_err(ApiError::internal)? else {
+    let Some((mut spec, _owner)) = ops
+        .store
+        .get(&ops.ns, &name)
+        .await
+        .map_err(ApiError::internal)?
+    else {
         return Err(ApiError::not_found());
     };
     reject_hibernated(&spec)?;
@@ -718,7 +765,7 @@ pub async fn fence_instance(
     }
     let primary = ops
         .store
-        .primary(&name)
+        .primary(&ops.ns, &name)
         .await
         .map_err(ApiError::internal)?
         .unwrap_or_else(|| format!("{name}-0"));
@@ -732,7 +779,10 @@ pub async fn fence_instance(
         );
     }
     spec.fenced.push(pod.clone());
-    ops.store.put(&spec).await.map_err(ApiError::internal)?;
+    ops.store
+        .put(&ops.ns, &spec)
+        .await
+        .map_err(ApiError::internal)?;
     tracing::warn!(cluster = %name, %pod, "FENCE: instance held down by spec");
     Ok(StatusCode::ACCEPTED)
 }
@@ -758,7 +808,12 @@ pub async fn unfence_instance(
     Path((name, pod)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
     let ops = ops(&state)?;
-    let Some((mut spec, _owner)) = ops.store.get(&name).await.map_err(ApiError::internal)? else {
+    let Some((mut spec, _owner)) = ops
+        .store
+        .get(&ops.ns, &name)
+        .await
+        .map_err(ApiError::internal)?
+    else {
         return Err(ApiError::not_found());
     };
     // No hibernated guard: editing the fenced list while asleep is harmless
@@ -774,7 +829,10 @@ pub async fn unfence_instance(
         return Err(ApiError::conflict("not_fenced").with_detail("That instance is not fenced."));
     }
     spec.fenced.retain(|p| p != &pod);
-    ops.store.put(&spec).await.map_err(ApiError::internal)?;
+    ops.store
+        .put(&ops.ns, &spec)
+        .await
+        .map_err(ApiError::internal)?;
     tracing::warn!(cluster = %name, %pod, "UNFENCE: instance released");
     Ok(StatusCode::ACCEPTED)
 }
@@ -835,7 +893,12 @@ pub async fn delete_cluster(
     Path(name): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     let ops = ops(&state)?;
-    if ops.store.delete(&name).await.map_err(ApiError::internal)? {
+    if ops
+        .store
+        .delete(&ops.ns, &name)
+        .await
+        .map_err(ApiError::internal)?
+    {
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::not_found())
