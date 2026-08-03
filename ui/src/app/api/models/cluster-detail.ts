@@ -35,6 +35,17 @@ export interface ClusterDetail {
    * only — never their values).
    */
   env: Array<EnvVarSpec>;
+
+  /**
+   * Instances held down by the fence operation (pods may not exist while
+   * hibernated; the list is the declared state).
+   */
+  fenced: Array<string>;
+
+  /**
+   * Scaled to zero on purpose; volumes retained. Not an outage.
+   */
+  hibernated: boolean;
   image: string;
 
   /**

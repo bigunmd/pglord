@@ -38,6 +38,20 @@ export interface ClusterSpec {
   env?: Array<EnvVarSpec>;
 
   /**
+   * Instances (pod names) held down: the agent stops postgres and keeps
+   * it stopped while listed. Standbys only — the fence endpoint refuses
+   * the recorded primary. Flipped only by the fence/unfence endpoints.
+   */
+  fenced?: Array<string>;
+
+  /**
+   * Scale to zero pods, keeping PVCs, credentials and the spec. The
+   * desired replica count is preserved for wake. Flipped only by the
+   * hibernate/wake endpoints, never by PATCH.
+   */
+  hibernated?: boolean;
+
+  /**
    * Image containing postgres + pglord-agent (agent is the entrypoint).
    */
   image?: string;

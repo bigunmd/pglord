@@ -224,6 +224,114 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
+  /api/v1/clusters/{name}/hibernate:
+    post:
+      tags:
+      - clusters
+      summary: Scale the cluster to zero pods, keeping volumes, credentials and the spec.
+      operationId: hibernate
+      parameters:
+      - name: name
+        in: path
+        description: Cluster name
+        required: true
+        schema:
+          type: string
+      responses:
+        '202':
+          description: Hibernation started
+        '404':
+          description: Not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '409':
+          description: Already hibernated
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+  /api/v1/clusters/{name}/instances/{pod}/fence:
+    post:
+      tags:
+      - clusters
+      summary: Stop postgres on one standby; the pod stays up for inspection.
+      operationId: fence_instance
+      parameters:
+      - name: name
+        in: path
+        description: Cluster name
+        required: true
+        schema:
+          type: string
+      - name: pod
+        in: path
+        description: Instance pod name, e.g. "demo-1"
+        required: true
+        schema:
+          type: string
+      responses:
+        '202':
+          description: Fencing started
+        '404':
+          description: Not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '409':
+          description: Primary, already fenced, or cluster hibernated
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '422':
+          description: Not an instance of this cluster
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+  /api/v1/clusters/{name}/instances/{pod}/unfence:
+    post:
+      tags:
+      - clusters
+      summary: Release a fenced instance so it rejoins as a standby.
+      operationId: unfence_instance
+      parameters:
+      - name: name
+        in: path
+        description: Cluster name
+        required: true
+        schema:
+          type: string
+      - name: pod
+        in: path
+        description: Instance pod name, e.g. "demo-1"
+        required: true
+        schema:
+          type: string
+      responses:
+        '202':
+          description: Unfencing started
+        '404':
+          description: Not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '409':
+          description: Not fenced
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '422':
+          description: Not an instance of this cluster
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
   /api/v1/clusters/{name}/restart:
     post:
       tags:
@@ -384,6 +492,34 @@ paths:
                 $ref: '#/components/schemas/ProblemDetails'
         '422':
           description: Target is not part of this cluster
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+  /api/v1/clusters/{name}/wake:
+    post:
+      tags:
+      - clusters
+      summary: 'Wake a hibernated cluster: restore its instances and pooler.'
+      operationId: wake
+      parameters:
+      - name: name
+        in: path
+        description: Cluster name
+        required: true
+        schema:
+          type: string
+      responses:
+        '202':
+          description: Wake started
+        '404':
+          description: Not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '409':
+          description: Not hibernated
           content:
             application/problem+json:
               schema:
@@ -648,6 +784,8 @@ components:
       - pooler
       - roles
       - databases
+      - hibernated
+      - fenced
       - instances
       properties:
         backup:
@@ -672,6 +810,16 @@ components:
           description: |-
             Custom environment variables on the instances (secret *references*
             only — never their values).
+        fenced:
+          type: array
+          items:
+            type: string
+          description: |-
+            Instances held down by the fence operation (pods may not exist while
+            hibernated; the list is the declared state).
+        hibernated:
+          type: boolean
+          description: Scaled to zero on purpose; volumes retained. Not an outage.
         image:
           type: string
         init:
@@ -771,6 +919,20 @@ components:
           description: |-
             Extra environment variables on the instance containers, for init
             scripts and anything else in the container to read.
+        fenced:
+          type: array
+          items:
+            type: string
+          description: |-
+            Instances (pod names) held down: the agent stops postgres and keeps
+            it stopped while listed. Standbys only — the fence endpoint refuses
+            the recorded primary. Flipped only by the fence/unfence endpoints.
+        hibernated:
+          type: boolean
+          description: |-
+            Scale to zero pods, keeping PVCs, credentials and the spec. The
+            desired replica count is preserved for wake. Flipped only by the
+            hibernate/wake endpoints, never by PATCH.
         image:
           type: string
           description: Image containing postgres + pglord-agent (agent is the entrypoint).
@@ -848,7 +1010,11 @@ components:
       - image
       - replicas
       - ready_replicas
+      - hibernated
       properties:
+        hibernated:
+          type: boolean
+          description: Scaled to zero on purpose; volumes retained. Not an outage.
         image:
           type: string
         name:
@@ -996,7 +1162,9 @@ components:
           type: boolean
         role:
           type: string
-          description: '"primary" | "standby" | "unknown" (agent unreachable).'
+          description: |-
+            "primary" | "standby" | "fenced" (held down on purpose) | "unknown"
+            (agent unreachable).
         ssl:
           type:
           - boolean

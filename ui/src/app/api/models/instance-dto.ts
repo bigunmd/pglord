@@ -20,7 +20,8 @@ export interface InstanceDto {
   ready: boolean;
 
   /**
-   * "primary" | "standby" | "unknown" (agent unreachable).
+   * "primary" | "standby" | "fenced" (held down on purpose) | "unknown"
+   * (agent unreachable).
    */
   role: string;
 

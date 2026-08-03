@@ -21,6 +21,12 @@ export type { DeleteCluster$Params as DeleteCluster$Params } from './fn/clusters
 export { deleteCluster as deleteCluster } from './fn/clusters/delete-cluster';
 export type { PatchCluster$Params as PatchCluster$Params } from './fn/clusters/patch-cluster';
 export { patchCluster as patchCluster } from './fn/clusters/patch-cluster';
+export type { Hibernate$Params as Hibernate$Params } from './fn/clusters/hibernate';
+export { hibernate as hibernate } from './fn/clusters/hibernate';
+export type { FenceInstance$Params as FenceInstance$Params } from './fn/clusters/fence-instance';
+export { fenceInstance as fenceInstance } from './fn/clusters/fence-instance';
+export type { UnfenceInstance$Params as UnfenceInstance$Params } from './fn/clusters/unfence-instance';
+export { unfenceInstance as unfenceInstance } from './fn/clusters/unfence-instance';
 export type { RestartCluster$Params as RestartCluster$Params } from './fn/clusters/restart-cluster';
 export { restartCluster as restartCluster } from './fn/clusters/restart-cluster';
 export type { RotateCredentials$Params as RotateCredentials$Params } from './fn/clusters/rotate-credentials';
@@ -29,6 +35,8 @@ export type { ListRequiredSecrets$Params as ListRequiredSecrets$Params } from '.
 export { listRequiredSecrets as listRequiredSecrets } from './fn/clusters/list-required-secrets';
 export type { Switchover$Params as Switchover$Params } from './fn/clusters/switchover';
 export { switchover as switchover } from './fn/clusters/switchover';
+export type { Wake$Params as Wake$Params } from './fn/clusters/wake';
+export { wake as wake } from './fn/clusters/wake';
 export type { ListBackups$Params as ListBackups$Params } from './fn/backups/list-backups';
 export { listBackups as listBackups } from './fn/backups/list-backups';
 export type { CreateBackup$Params as CreateBackup$Params } from './fn/backups/create-backup';
