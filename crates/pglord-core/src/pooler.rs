@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 /// The role PgBouncer connects and runs `auth_query` as.
 pub const POOLER_ROLE: &str = "pglord_pooler";
 
+#[cfg_attr(feature = "crd", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum PoolMode {
@@ -33,6 +34,7 @@ impl PoolMode {
     }
 }
 
+#[cfg_attr(feature = "crd", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct PoolerSpec {
     /// Run a PgBouncer Deployment for this cluster. Disabling deletes the

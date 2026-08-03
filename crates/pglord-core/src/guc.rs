@@ -9,6 +9,7 @@
 
 use std::collections::BTreeMap;
 
+#[cfg_attr(feature = "crd", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum ApplyMethod {
@@ -18,6 +19,7 @@ pub enum ApplyMethod {
     Restart,
 }
 
+#[cfg_attr(feature = "crd", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum GucType {
@@ -34,6 +36,7 @@ pub enum GucType {
     StringLike,
 }
 
+#[cfg_attr(feature = "crd", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, serde::Serialize, utoipa::ToSchema)]
 pub struct Guc {
     pub name: &'static str,

@@ -23,6 +23,7 @@ pub const SCRIPTS_SECRET_VOLUME: &str = "init-scripts-secret";
 /// re-run initialisation against data that already exists.
 pub const INIT_MARKER: &str = "pglord.init-complete";
 
+#[cfg_attr(feature = "crd", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct InitSpec {
     /// ConfigMap whose `.sql` keys are run in filename order.

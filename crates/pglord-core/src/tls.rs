@@ -17,6 +17,7 @@ pub const TLS_KEY_KEY: &str = "tls.key";
 /// Optional CA bundle key (cert-manager writes it); required for `cert` auth.
 pub const TLS_CA_KEY: &str = "ca.crt";
 
+#[cfg_attr(feature = "crd", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct TlsSpec {
     /// kubernetes.io/tls Secret holding the server certificate. TLS is

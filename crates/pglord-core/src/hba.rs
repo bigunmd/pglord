@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 /// Generous ceiling; real deployments have a handful of rules.
 pub const MAX_RULES: usize = 100;
 
+#[cfg_attr(feature = "crd", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum HbaConn {
@@ -34,6 +35,7 @@ impl HbaConn {
 /// shrinking it is not. `cert` authenticates by client certificate (CN =
 /// role name, verify-full); it is only meaningful over TLS, so it is valid
 /// only on `hostssl` rules and only when the cluster has TLS enabled.
+#[cfg_attr(feature = "crd", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub enum HbaMethod {
     #[serde(rename = "scram-sha-256")]
@@ -60,6 +62,7 @@ impl HbaMethod {
 /// One user-supplied pg_hba rule. `local` is not expressible: the managed
 /// prefix owns socket access, and a user local rule after `local all all peer`
 /// could never match anyway.
+#[cfg_attr(feature = "crd", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct HbaRule {
     pub conn: HbaConn,

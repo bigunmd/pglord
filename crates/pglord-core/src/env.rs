@@ -42,6 +42,7 @@ pub const RESERVED_ENV_NAMES: &[&str] = &[
     "LD_LIBRARY_PATH",
 ];
 
+#[cfg_attr(feature = "crd", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SecretKeyRefSpec {
     /// Secret in the same namespace. pglord never reads its contents.
@@ -49,6 +50,7 @@ pub struct SecretKeyRefSpec {
     pub key: String,
 }
 
+#[cfg_attr(feature = "crd", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct EnvVarSpec {
     pub name: String,

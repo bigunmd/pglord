@@ -13,6 +13,7 @@ use crate::render::{
 };
 use crate::spec::ClusterSpec;
 
+#[cfg_attr(feature = "crd", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum ResourceKind {
@@ -22,6 +23,7 @@ pub enum ResourceKind {
 
 /// Why a cluster needs this object. The UI translates these; keeping them
 /// machine-readable means the reason survives translation.
+#[cfg_attr(feature = "crd", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ResourcePurpose {
@@ -41,6 +43,7 @@ pub enum ResourcePurpose {
     RolePassword,
 }
 
+#[cfg_attr(feature = "crd", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct RequiredResource {
     pub name: String,

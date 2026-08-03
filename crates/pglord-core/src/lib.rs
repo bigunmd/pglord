@@ -1,6 +1,8 @@
 //! Shared pglord domain types. Grows into the cluster spec model (see design doc).
 
 pub mod backup;
+#[cfg(feature = "crd")]
+pub mod crd;
 pub mod deps;
 pub mod env;
 pub mod guc;

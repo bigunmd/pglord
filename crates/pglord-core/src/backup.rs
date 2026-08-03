@@ -11,6 +11,7 @@ pub const CONF_PATH: &str = "/etc/pgbackrest/pgbackrest.conf";
 pub const ACCESS_KEY_KEY: &str = "access-key";
 pub const SECRET_KEY_KEY: &str = "secret-key";
 
+#[cfg_attr(feature = "crd", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct BackupSpec {
     /// Backups (and therefore WAL archiving) are off unless this is set.
@@ -44,6 +45,7 @@ pub struct BackupSpec {
     pub schedule_kind: BackupKind,
 }
 
+#[cfg_attr(feature = "crd", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum BackupKind {

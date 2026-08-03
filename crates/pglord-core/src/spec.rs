@@ -11,8 +11,26 @@ const MAX_NAME_LEN: usize = 40; // leaves room for "-pods"/"-rw"/ordinal suffixe
 const MAX_REPLICAS: u8 = 5;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
+#[cfg_attr(
+    feature = "crd",
+    derive(kube::CustomResource, schemars::JsonSchema),
+    kube(
+        group = "pglord.dev",
+        version = "v1alpha1",
+        kind = "PostgresCluster",
+        namespaced,
+        shortname = "pgc",
+        status = "crate::crd::PostgresClusterStatus",
+        printcolumn = r#"{"name":"Ready","type":"integer","jsonPath":".status.ready_replicas"}"#,
+        printcolumn = r#"{"name":"Primary","type":"string","jsonPath":".status.primary"}"#,
+        printcolumn = r#"{"name":"Phase","type":"string","jsonPath":".status.phase"}"#
+    )
+)]
 pub struct ClusterSpec {
     /// RFC1123 label; used as the prefix of every derived object name.
+    /// Empty is invalid through the API; in operator mode the CR sync fills
+    /// it from metadata.name, so kubectl users write the name once.
+    #[serde(default)]
     pub name: String,
     /// Image containing postgres + pglord-agent (agent is the entrypoint).
     #[serde(default = "default_image")]
@@ -162,6 +180,7 @@ pub enum SpecError {
 /// new Secret would be rejected while the cluster looked healthy. Rotating
 /// credentials is a real operation and needs its own workflow, not a field
 /// edit that silently half-applies.
+#[cfg_attr(feature = "crd", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SpecChange {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -454,6 +473,15 @@ mod tests {
         }))
         .expect("deserialize");
         assert_eq!(s.validate(), Ok(()));
+    }
+
+    #[test]
+    fn empty_name_is_still_invalid() {
+        // spec.name is serde(default) for the CRD path (metadata.name fills
+        // it); the REST path must keep rejecting an omitted name.
+        let s: ClusterSpec = serde_json::from_value(serde_json::json!({})).expect("deserialize");
+        assert_eq!(s.name, "");
+        assert!(matches!(s.validate(), Err(SpecError::InvalidName(_))));
     }
 
     #[test]

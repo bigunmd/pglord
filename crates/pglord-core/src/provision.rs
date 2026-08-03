@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::env::SecretKeyRefSpec;
 
+#[cfg_attr(feature = "crd", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct RoleSpec {
     /// Strict lowercase identifier — interpolated into DDL as a quoted
@@ -35,6 +36,7 @@ pub struct RoleSpec {
     pub in_roles: Vec<String>,
 }
 
+#[cfg_attr(feature = "crd", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DatabaseSpec {
     pub name: String,

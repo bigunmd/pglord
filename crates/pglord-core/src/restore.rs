@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::backup::{self, BackupSpec};
 
+#[cfg_attr(feature = "crd", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct RestoreSpec {
     /// Cluster whose repository holds the backup. Names the pgBackRest stanza

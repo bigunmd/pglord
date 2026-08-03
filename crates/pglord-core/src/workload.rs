@@ -16,6 +16,7 @@ pub const RESERVED_KEY_PREFIXES: &[&str] = &[
     "statefulset.kubernetes.io/",
 ];
 
+#[cfg_attr(feature = "crd", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum AntiAffinity {
@@ -27,6 +28,7 @@ pub enum AntiAffinity {
     Disabled,
 }
 
+#[cfg_attr(feature = "crd", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Resources {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -48,6 +50,7 @@ impl Resources {
     }
 }
 
+#[cfg_attr(feature = "crd", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Toleration {
     pub key: String,
@@ -61,6 +64,7 @@ pub struct Toleration {
     pub effect: Option<String>,
 }
 
+#[cfg_attr(feature = "crd", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct WorkloadSpec {
     /// Extra labels on instance pods (cost allocation, scrape selection).
