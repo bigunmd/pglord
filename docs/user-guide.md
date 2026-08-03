@@ -697,6 +697,43 @@ Three things worth knowing:
   restarts, so nothing is silently half-applied. Write them to be repeatable
   (`CREATE ... IF NOT EXISTS`) if you want a retry to succeed.
 
+### Hibernate a cluster
+
+**Hibernate** in the cluster header stops every instance and scales the cluster
+to zero pods. Data volumes, credentials and configuration are all kept — only
+the compute goes away. A hibernated cluster shows a distinct *Hibernated* state
+(not a red outage strip) and a **Wake** button that brings back exactly the
+instances it had, with the data intact.
+
+While hibernated, pglord refuses everything that assumes running instances
+with `409 hibernated`: editing the spec, switchover, rolling restart,
+credential rotation, taking a backup, fencing. Wake the cluster first. Deleting
+a hibernated cluster works and still removes its volumes.
+
+Two interactions worth knowing:
+
+- **Backups.** Scheduled backups pause while asleep. After wake, the scheduler
+  runs at most one catch-up backup rather than one per missed window.
+- **Failover.** The failover orchestrator ignores hibernated clusters, so the
+  intentional zero-instances state is never "repaired".
+
+### Fence an instance
+
+**Fence** on a standby's row stops PostgreSQL on that instance and keeps it
+stopped — the pod stays up, so the data directory can be inspected
+(`kubectl exec`) while the rest of the cluster keeps serving. The instance
+shows a *Fenced* badge, drops out of the read Service, and is never considered
+for promotion. **Unfence** restarts it; it rewinds if needed and rejoins as a
+streaming standby.
+
+The recorded primary cannot be fenced (`409 cannot_fence_primary`): fencing it
+would stop writes for the whole cluster behind an innocuous-looking button.
+To take the primary down, **Make primary** on another instance first, then
+fence the ex-primary once it has stepped down.
+
+Fenced state survives pod restarts and even hibernation: a fenced instance
+wakes up still fenced, postgres held down, until it is unfenced.
+
 ## 8. Delete a cluster
 
 **Clusters → trash icon → Delete.** This removes the instances, their persistent
