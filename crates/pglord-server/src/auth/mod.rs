@@ -25,11 +25,19 @@ const PUBLIC_PATH: &str = "/api/v1/auth/config";
 pub struct AuthState {
     tokens: Vec<String>,
     pub oidc: Option<jwks::OidcValidator>,
+    /// Kubernetes TokenReview/SAR mode; None when the mode is off or no
+    /// Kubernetes environment exists (tokens then fall through to 401 —
+    /// never a 500).
+    pub kubernetes: Option<kubernetes::KubernetesAuthorizer>,
 }
 
 impl AuthState {
     /// None = auth disabled (no middleware installed, API runs open).
-    pub fn from_config(cfg: &Config, http: reqwest::Client) -> Option<Arc<AuthState>> {
+    pub fn from_config(
+        cfg: &Config,
+        http: reqwest::Client,
+        kube: Option<kube::Client>,
+    ) -> Option<Arc<AuthState>> {
         if !cfg.auth_enabled() {
             return None;
         }
@@ -41,9 +49,20 @@ impl AuthState {
                 http,
             )
         });
+        let kubernetes = match (cfg.auth_kubernetes, kube) {
+            (true, Some(client)) => Some(kubernetes::KubernetesAuthorizer::new(client)),
+            (true, None) => {
+                tracing::warn!(
+                    "PGLORD_AUTH_KUBERNETES is on but no Kubernetes environment exists;                      kubernetes tokens will be rejected"
+                );
+                None
+            }
+            _ => None,
+        };
         Some(Arc::new(AuthState {
             tokens: cfg.auth_token_list(),
             oidc,
+            kubernetes,
         }))
     }
 
@@ -92,6 +111,17 @@ pub async fn middleware(
     {
         return next.run(req).await;
     }
+    if let Some(k8s) = &auth.kubernetes {
+        let access = kubernetes::authz_target(req.method(), req.uri().path());
+        if let Some(user) = k8s.authenticate(token).await {
+            if k8s.authorize(token, &user, &access).await {
+                return next.run(req).await;
+            }
+            return ApiError::new(axum::http::StatusCode::FORBIDDEN, "forbidden")
+                .with_detail(kubernetes::denial_detail(&user, &access))
+                .into_response();
+        }
+    }
     ApiError::unauthorized("auth_invalid")
         .with_detail("The presented credential was not accepted.")
         .into_response()
@@ -119,7 +149,7 @@ mod tests {
             auth_tokens: tokens.into(),
             ..Config::test_default()
         };
-        AuthState::from_config(&cfg, reqwest::Client::new())
+        AuthState::from_config(&cfg, reqwest::Client::new(), None)
     }
 
     async fn get_with(

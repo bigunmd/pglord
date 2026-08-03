@@ -102,6 +102,21 @@ async fn auth_on_locks_api_but_not_health_metrics_or_auth_config() {
 }
 
 #[tokio::test]
+async fn kubernetes_mode_without_kube_env_rejects_bearers_but_never_500s() {
+    // TokenReview unavailable = unauthenticated; static tokens still work.
+    let cfg = || pglord_server::config::Config {
+        auth_kubernetes: true,
+        auth_tokens: "admin-token".into(),
+        ..pglord_server::config::Config::test_default()
+    };
+    let (status, body) = send(test_app_with(cfg()), "/api/v1/ping", Some("some-k8s-token")).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(body["code"], "auth_invalid");
+    let (status, _) = send(test_app_with(cfg()), "/api/v1/ping", Some("admin-token")).await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
 async fn auth_config_reports_oidc_when_configured() {
     let cfg = pglord_server::config::Config {
         auth_oidc_issuer: "https://idp.example.com/realms/x".into(),

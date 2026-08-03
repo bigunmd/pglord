@@ -155,7 +155,11 @@ pub fn build(
     // middleware itself lets non-/api paths and the public auth-config
     // endpoint through). CORS is layered after so browser preflights are
     // answered before auth sees them.
-    let auth_state = crate::auth::AuthState::from_config(cfg, reqwest::Client::new());
+    let auth_state = crate::auth::AuthState::from_config(
+        cfg,
+        reqwest::Client::new(),
+        cluster_ops.as_ref().map(|o| o.kube.clone()),
+    );
     let api_router = api_router.layer(axum::middleware::from_fn_with_state(
         auth_state,
         crate::auth::middleware,
