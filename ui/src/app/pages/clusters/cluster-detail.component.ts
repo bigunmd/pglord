@@ -5,10 +5,13 @@ import { TranslocoModule } from '@jsverse/transloco';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   lucideArrowLeft,
+  lucideBan,
   lucideCrown,
   lucideLock,
+  lucideMoon,
   lucideNetwork,
   lucidePencil,
+  lucidePlay,
   lucideUsers,
   lucidePower,
   lucideRefreshCw,
@@ -16,6 +19,7 @@ import {
   lucideServer,
   lucideSettings,
   lucideShield,
+  lucideSun,
   lucideTriangleAlert,
 } from '@ng-icons/lucide';
 import { BrnDialogRef, injectBrnDialogContext } from '@spartan-ng/brain/dialog';
@@ -40,6 +44,10 @@ import { getCluster } from '../../api/fn/clusters/get-cluster';
 import { listGucs } from '../../api/fn/system/list-gucs';
 import { patchCluster } from '../../api/fn/clusters/patch-cluster';
 import { restartCluster } from '../../api/fn/clusters/restart-cluster';
+import { hibernate } from '../../api/fn/clusters/hibernate';
+import { wake } from '../../api/fn/clusters/wake';
+import { fenceInstance } from '../../api/fn/clusters/fence-instance';
+import { unfenceInstance } from '../../api/fn/clusters/unfence-instance';
 import { rotateCredentials } from '../../api/fn/clusters/rotate-credentials';
 import { switchover } from '../../api/fn/clusters/switchover';
 import { WorkloadSpec } from '../../api/models/workload-spec';
@@ -102,6 +110,58 @@ export const FORM_DIALOG_CLASS = 'sm:max-w-lg p-6 gap-6';
   `,
 })
 export class SwitchoverDialogComponent {
+  protected readonly ref = inject<BrnDialogRef<boolean>>(BrnDialogRef);
+  protected readonly pod = injectBrnDialogContext<{ pod: string }>().pod;
+}
+
+/** Confirm hibernation: every instance stops and connections drop. */
+@Component({
+  selector: 'pg-hibernate-dialog',
+  imports: [TranslocoModule, HlmButton, HlmDialogFooter, HlmDialogHeader, HlmDialogTitle],
+  template: `
+    <div hlmDialogHeader>
+      <h2 hlmDialogTitle>{{ 'clusterDetail.hibernateTitle' | transloco: { name: name } }}</h2>
+    </div>
+    <p class="text-muted-foreground py-2 text-sm">
+      {{ 'clusterDetail.hibernateWarning' | transloco }}
+    </p>
+    <div hlmDialogFooter>
+      <button hlmBtn variant="ghost" (click)="ref.close(false)">
+        {{ 'common.cancel' | transloco }}
+      </button>
+      <button hlmBtn data-testid="confirm-hibernate" (click)="ref.close(true)">
+        {{ 'clusterDetail.hibernate' | transloco }}
+      </button>
+    </div>
+  `,
+})
+export class HibernateDialogComponent {
+  protected readonly ref = inject<BrnDialogRef<boolean>>(BrnDialogRef);
+  protected readonly name = injectBrnDialogContext<{ name: string }>().name;
+}
+
+/** Confirm fencing one instance: postgres stops, the pod stays. */
+@Component({
+  selector: 'pg-fence-dialog',
+  imports: [TranslocoModule, HlmButton, HlmDialogFooter, HlmDialogHeader, HlmDialogTitle],
+  template: `
+    <div hlmDialogHeader>
+      <h2 hlmDialogTitle>{{ 'clusterDetail.fenceTitle' | transloco: { pod: pod } }}</h2>
+    </div>
+    <p class="text-muted-foreground py-2 text-sm">
+      {{ 'clusterDetail.fenceWarning' | transloco }}
+    </p>
+    <div hlmDialogFooter>
+      <button hlmBtn variant="ghost" (click)="ref.close(false)">
+        {{ 'common.cancel' | transloco }}
+      </button>
+      <button hlmBtn data-testid="confirm-fence" (click)="ref.close(true)">
+        {{ 'clusterDetail.fence' | transloco }}
+      </button>
+    </div>
+  `,
+})
+export class FenceDialogComponent {
   protected readonly ref = inject<BrnDialogRef<boolean>>(BrnDialogRef);
   protected readonly pod = injectBrnDialogContext<{ pod: string }>().pod;
 }
@@ -254,10 +314,13 @@ export class ImageDialogComponent {
   providers: [
     provideIcons({
       lucideArrowLeft,
+      lucideBan,
       lucideCrown,
       lucideLock,
+      lucideMoon,
       lucideNetwork,
       lucidePencil,
+      lucidePlay,
       lucideUsers,
       lucidePower,
       lucideRefreshCw,
@@ -265,6 +328,7 @@ export class ImageDialogComponent {
       lucideServer,
       lucideSettings,
       lucideShield,
+      lucideSun,
       lucideTriangleAlert,
     }),
   ],
@@ -285,13 +349,27 @@ export class ImageDialogComponent {
           <span class="text-muted-foreground font-mono text-xs tabular-nums">
             {{ d.ready_replicas }}/{{ d.replicas }}
           </span>
+          @if (!d.hibernated) {
+            <button
+              hlmBtn
+              variant="outline"
+              size="sm"
+              class="ml-auto"
+              data-testid="open-hibernate"
+              [disabled]="busy()"
+              (click)="openHibernate(d)"
+            >
+              <ng-icon name="lucideMoon" size="14" />
+              {{ 'clusterDetail.hibernate' | transloco }}
+            </button>
+          }
           <button
             hlmBtn
             variant="outline"
             size="sm"
-            class="ml-auto"
+            [class.ml-auto]="d.hibernated"
             data-testid="open-edit"
-            [disabled]="busy()"
+            [disabled]="busy() || d.hibernated"
             (click)="openEdit(d)"
           >
             <ng-icon name="lucidePencil" size="14" />
@@ -306,7 +384,7 @@ export class ImageDialogComponent {
             size="sm"
             class="h-6 px-1.5"
             data-testid="open-image"
-            [disabled]="busy()"
+            [disabled]="busy() || d.hibernated"
             [attr.aria-label]="'image.edit' | transloco"
             (click)="openImage(d)"
           >
@@ -314,6 +392,30 @@ export class ImageDialogComponent {
           </button>
           · {{ d.storage_size }} · {{ 'clusterDetail.primaryIs' | transloco: { pod: d.primary } }}
         </p>
+
+        @if (d.hibernated) {
+          <!-- Asleep on purpose: instances are gone but every volume is kept.
+               Rendered instead of the instance table, whose probes would all
+               read "unknown" and look like an outage. -->
+          <div
+            class="border-border bg-muted/40 mb-4 flex items-center gap-2 rounded-lg border p-3 text-sm"
+            data-testid="hibernated-banner"
+          >
+            <ng-icon name="lucideMoon" size="18" class="text-muted-foreground" />
+            <span>{{ 'clusterDetail.hibernatedBanner' | transloco: { count: d.replicas } }}</span>
+            <button
+              hlmBtn
+              size="sm"
+              class="ml-auto"
+              data-testid="open-wake"
+              [disabled]="busy()"
+              (click)="wakeCluster()"
+            >
+              <ng-icon name="lucideSun" size="14" />
+              {{ 'clusterDetail.wake' | transloco }}
+            </button>
+          </div>
+        }
 
         @if (d.restore; as r) {
           <!-- Provenance matters: someone looking at this cluster months later
@@ -336,6 +438,7 @@ export class ImageDialogComponent {
           </p>
         }
 
+        @if (!d.hibernated) {
         <div class="border-border overflow-x-auto rounded-lg border">
           <table hlmTable class="w-full">
             <thead hlmTHead>
@@ -372,6 +475,8 @@ export class ImageDialogComponent {
                       [class.text-secondary-foreground]="i.role === 'standby'"
                       [class.bg-warning]="i.role === 'unknown'"
                       [class.text-background]="i.role === 'unknown'"
+                      [class.bg-muted]="i.role === 'fenced'"
+                      [class.text-muted-foreground]="i.role === 'fenced'"
                     >
                       {{ 'clusterDetail.roles.' + i.role | transloco }}
                     </span>
@@ -402,12 +507,38 @@ export class ImageDialogComponent {
                         hlmBtn
                         variant="ghost"
                         size="sm"
-                        [disabled]="busy()"
+                        [disabled]="busy() || d.hibernated"
                         [attr.data-testid]="'switchover-' + i.pod"
                         (click)="openSwitchover(d, i.pod)"
                       >
                         <ng-icon name="lucideRefreshCw" size="14" />
                         {{ 'clusterDetail.makePrimary' | transloco }}
+                      </button>
+                    }
+                    @if (i.role === 'fenced') {
+                      <button
+                        hlmBtn
+                        variant="ghost"
+                        size="sm"
+                        [disabled]="busy()"
+                        [attr.data-testid]="'unfence-' + i.pod"
+                        (click)="unfence(i.pod)"
+                      >
+                        <ng-icon name="lucidePlay" size="14" />
+                        {{ 'clusterDetail.unfence' | transloco }}
+                      </button>
+                    } @else if (i.pod !== d.primary) {
+                      <button
+                        hlmBtn
+                        variant="ghost"
+                        size="sm"
+                        class="text-muted-foreground"
+                        [disabled]="busy()"
+                        [attr.data-testid]="'fence-' + i.pod"
+                        (click)="openFence(i.pod)"
+                      >
+                        <ng-icon name="lucideBan" size="14" />
+                        {{ 'clusterDetail.fence' | transloco }}
                       </button>
                     }
                   </td>
@@ -416,6 +547,7 @@ export class ImageDialogComponent {
             </tbody>
           </table>
         </div>
+        }
 
         <!-- Placement and resources -->
         <div class="mt-6 flex items-center justify-between">
@@ -425,7 +557,7 @@ export class ImageDialogComponent {
             variant="outline"
             size="sm"
             data-testid="open-workload"
-            [disabled]="busy()"
+            [disabled]="busy() || d.hibernated"
             (click)="openWorkload(d)"
           >
             <ng-icon name="lucideServer" size="14" />
@@ -490,7 +622,7 @@ export class ImageDialogComponent {
               variant="outline"
               size="sm"
               data-testid="open-backup-config"
-              [disabled]="busy()"
+              [disabled]="busy() || d.hibernated"
               (click)="openBackupConfig(d)"
             >
               {{ 'backups.configure' | transloco }}
@@ -598,7 +730,7 @@ export class ImageDialogComponent {
                             variant="outline"
                             size="sm"
                             [attr.data-testid]="'restore-' + bk.label"
-                            [disabled]="busy()"
+                            [disabled]="busy() || d.hibernated"
                             (click)="openRestore(d, bk.label, bk.finished)"
                           >
                             {{ 'restore.action' | transloco }}
@@ -625,7 +757,7 @@ export class ImageDialogComponent {
                 variant="outline"
                 size="sm"
                 data-testid="rotate-credentials"
-                [disabled]="busy()"
+                [disabled]="busy() || d.hibernated"
                 (click)="openRotateCredentials()"
               >
                 {{ 'secrets.rotate' | transloco }}
@@ -636,7 +768,7 @@ export class ImageDialogComponent {
               variant="outline"
               size="sm"
               data-testid="open-env"
-              [disabled]="busy()"
+              [disabled]="busy() || d.hibernated"
               (click)="openEnv(d)"
             >
               {{ 'secrets.edit' | transloco }}
@@ -707,7 +839,7 @@ export class ImageDialogComponent {
             variant="outline"
             size="sm"
             data-testid="open-config"
-            [disabled]="busy()"
+            [disabled]="busy() || d.hibernated"
             (click)="openConfig(d)"
           >
             <ng-icon name="lucideSettings" size="14" />
@@ -727,7 +859,7 @@ export class ImageDialogComponent {
               size="sm"
               class="ml-auto"
               data-testid="open-restart"
-              [disabled]="busy()"
+              [disabled]="busy() || d.hibernated"
               (click)="openRestart()"
             >
               <ng-icon name="lucidePower" size="14" />
@@ -767,7 +899,7 @@ export class ImageDialogComponent {
             variant="outline"
             size="sm"
             data-testid="toggle-sync"
-            [disabled]="busy()"
+            [disabled]="busy() || d.hibernated"
             (click)="openSync(d)"
           >
             <ng-icon name="lucideRefreshCw" size="14" />
@@ -801,7 +933,7 @@ export class ImageDialogComponent {
             variant="outline"
             size="sm"
             data-testid="open-hba"
-            [disabled]="busy()"
+            [disabled]="busy() || d.hibernated"
             (click)="openHba(d)"
           >
             <ng-icon name="lucideShield" size="14" />
@@ -846,7 +978,7 @@ export class ImageDialogComponent {
             variant="outline"
             size="sm"
             data-testid="open-tls"
-            [disabled]="busy()"
+            [disabled]="busy() || d.hibernated"
             (click)="openTls(d)"
           >
             <ng-icon name="lucideLock" size="14" />
@@ -869,7 +1001,7 @@ export class ImageDialogComponent {
             variant="outline"
             size="sm"
             data-testid="open-pooler"
-            [disabled]="busy()"
+            [disabled]="busy() || d.hibernated"
             (click)="openPooler(d)"
           >
             <ng-icon name="lucideNetwork" size="14" />
@@ -905,7 +1037,7 @@ export class ImageDialogComponent {
             variant="outline"
             size="sm"
             data-testid="open-provision"
-            [disabled]="busy()"
+            [disabled]="busy() || d.hibernated"
             (click)="openProvision(d)"
           >
             <ng-icon name="lucideUsers" size="14" />
@@ -1270,6 +1402,35 @@ export class ClusterDetailComponent implements OnDestroy {
     await this.run(() =>
       this.api.invoke(switchover, { name: this.name(), body: { target: pod } }),
     );
+  }
+
+  async openHibernate(d: ClusterDetail): Promise<void> {
+    const confirmed = await firstValueFrom(
+      this.dialog.open<boolean>(HibernateDialogComponent, { context: { name: d.name } }).closed$,
+    );
+    if (!confirmed) {
+      return;
+    }
+    await this.run(() => this.api.invoke(hibernate, { name: this.name() }));
+  }
+
+  /** Waking is safe (it only restores instances) — no confirmation. */
+  async wakeCluster(): Promise<void> {
+    await this.run(() => this.api.invoke(wake, { name: this.name() }));
+  }
+
+  async openFence(pod: string): Promise<void> {
+    const confirmed = await firstValueFrom(
+      this.dialog.open<boolean>(FenceDialogComponent, { context: { pod } }).closed$,
+    );
+    if (!confirmed) {
+      return;
+    }
+    await this.run(() => this.api.invoke(fenceInstance, { name: this.name(), pod }));
+  }
+
+  async unfence(pod: string): Promise<void> {
+    await this.run(() => this.api.invoke(unfenceInstance, { name: this.name(), pod }));
   }
 
   /** Returns whether the operation succeeded, so callers can act on it. */

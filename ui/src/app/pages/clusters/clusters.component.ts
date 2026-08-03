@@ -2,7 +2,7 @@ import { Component, OnDestroy, inject, signal } from '@angular/core';
 import { Router } from '@angular/router';
 import { TranslocoModule } from '@jsverse/transloco';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { lucideDatabase, lucidePlus, lucideTrash2 } from '@ng-icons/lucide';
+import { lucideDatabase, lucideMoon, lucidePlus, lucideTrash2 } from '@ng-icons/lucide';
 import { HlmButton } from '@spartan-ng/helm/button';
 import { HlmDialogFooter, HlmDialogHeader, HlmDialogService, HlmDialogTitle } from '@spartan-ng/helm/dialog';
 import { HlmTableImports } from '@spartan-ng/helm/table';
@@ -46,7 +46,7 @@ export class ClusterDeleteDialogComponent {
 @Component({
   selector: 'pg-clusters',
   imports: [TranslocoModule, NgIcon, HlmButton, HlmTableImports],
-  providers: [provideIcons({ lucideDatabase, lucidePlus, lucideTrash2 })],
+  providers: [provideIcons({ lucideDatabase, lucideMoon, lucidePlus, lucideTrash2 })],
   template: `
     <div class="mx-auto max-w-4xl">
       <div class="mb-4 flex items-center justify-between">
@@ -88,27 +88,38 @@ export class ClusterDeleteDialogComponent {
                 >
                   <td hlmTd class="font-mono text-sm font-medium">{{ c.name }}</td>
                   <td hlmTd>
-                    <span class="inline-flex items-center gap-2">
-                      <!-- Health strip: one dot per instance, filled = ready. -->
+                    @if (c.hibernated) {
+                      <!-- Asleep on purpose: distinct from an outage's red strip. -->
                       <span
-                        class="inline-flex gap-1"
-                        role="img"
-                        [attr.aria-label]="
-                          'clusters.readyOf' | transloco: { ready: c.ready_replicas, total: c.replicas }
-                        "
+                        class="text-muted-foreground border-border inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs"
+                        [attr.data-testid]="'hibernated-' + c.name"
                       >
-                        @for (i of range(c.replicas); track i) {
-                          <span
-                            class="h-2.5 w-2.5 rounded-full transition-colors"
-                            [class.bg-success]="i < c.ready_replicas"
-                            [class.bg-border]="i >= c.ready_replicas"
-                          ></span>
-                        }
+                        <ng-icon name="lucideMoon" size="12" />
+                        {{ 'clusters.hibernated' | transloco }}
                       </span>
-                      <span class="text-muted-foreground font-mono text-xs tabular-nums">
-                        {{ c.ready_replicas }}/{{ c.replicas }}
+                    } @else {
+                      <span class="inline-flex items-center gap-2">
+                        <!-- Health strip: one dot per instance, filled = ready. -->
+                        <span
+                          class="inline-flex gap-1"
+                          role="img"
+                          [attr.aria-label]="
+                            'clusters.readyOf' | transloco: { ready: c.ready_replicas, total: c.replicas }
+                          "
+                        >
+                          @for (i of range(c.replicas); track i) {
+                            <span
+                              class="h-2.5 w-2.5 rounded-full transition-colors"
+                              [class.bg-success]="i < c.ready_replicas"
+                              [class.bg-border]="i >= c.ready_replicas"
+                            ></span>
+                          }
+                        </span>
+                        <span class="text-muted-foreground font-mono text-xs tabular-nums">
+                          {{ c.ready_replicas }}/{{ c.replicas }}
+                        </span>
                       </span>
-                    </span>
+                    }
                   </td>
                   <td hlmTd class="text-muted-foreground font-mono text-xs">{{ c.image }}</td>
                   <td hlmTd>

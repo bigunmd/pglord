@@ -348,7 +348,8 @@
     "showAdvanced": "Secrets, environment and init scripts",
     "hideAdvanced": "Hide secrets, environment and init scripts",
     "imageDefault": "Server default",
-    "imageHelp": "Leave empty to use the image this pglord was configured with. Set one only to pin a specific agent image."
+    "imageHelp": "Leave empty to use the image this pglord was configured with. Set one only to pin a specific agent image.",
+    "hibernated": "Hibernated"
   },
   "clusterDetail": {
     "back": "Clusters",
@@ -371,7 +372,17 @@
     "roles": {
       "primary": "Primary",
       "standby": "Standby",
-      "unknown": "Unknown"
-    }
+      "unknown": "Unknown",
+      "fenced": "Fenced"
+    },
+    "hibernate": "Hibernate",
+    "hibernateTitle": "Hibernate {{name}}?",
+    "hibernateWarning": "Every instance stops and client connections drop. Data volumes, credentials and configuration are kept; wake the cluster to bring it back exactly as it was.",
+    "wake": "Wake",
+    "hibernatedBanner": "Cluster is hibernated — {{count}} instances stopped, volumes retained.",
+    "fence": "Fence",
+    "fenceTitle": "Fence {{pod}}?",
+    "fenceWarning": "PostgreSQL stops on this instance and stays down until it is unfenced. The pod keeps running so the disk can be inspected. The rest of the cluster continues to serve.",
+    "unfence": "Unfence"
   }
 }
