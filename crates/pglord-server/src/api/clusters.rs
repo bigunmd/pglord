@@ -18,13 +18,16 @@ pub struct ClusterSummary {
     pub replicas: u8,
     /// Instances currently passing their readiness probe.
     pub ready_replicas: i32,
+    /// Scaled to zero on purpose; volumes retained. Not an outage.
+    pub hibernated: bool,
 }
 
 #[derive(Serialize, ToSchema)]
 pub struct InstanceDto {
     /// Pod name, e.g. "demo-0".
     pub pod: String,
-    /// "primary" | "standby" | "unknown" (agent unreachable).
+    /// "primary" | "standby" | "fenced" (held down on purpose) | "unknown"
+    /// (agent unreachable).
     pub role: String,
     pub ready: bool,
     /// Current/receive WAL LSN as reported by the agent.
@@ -82,6 +85,11 @@ pub struct ClusterDetail {
     pub roles: Vec<pglord_core::provision::RoleSpec>,
     /// Declared databases.
     pub databases: Vec<pglord_core::provision::DatabaseSpec>,
+    /// Scaled to zero on purpose; volumes retained. Not an outage.
+    pub hibernated: bool,
+    /// Instances held down by the fence operation (pods may not exist while
+    /// hibernated; the list is the declared state).
+    pub fenced: Vec<String>,
     pub instances: Vec<InstanceDto>,
 }
 
@@ -171,10 +179,11 @@ async fn summarize(ops: &ClusterOps, spec: ClusterSpec) -> ClusterSummary {
         _ => 0,
     };
     ClusterSummary {
-        name: spec.name,
         image: spec.image,
         replicas: spec.replicas,
         ready_replicas: ready,
+        hibernated: spec.hibernated,
+        name: spec.name,
     }
 }
 
@@ -300,7 +309,13 @@ pub async fn get_cluster(
     let instances = observations
         .into_iter()
         .map(|o| InstanceDto {
-            role: role_of(o.in_recovery).to_string(),
+            // The declared fenced state wins: during the stop window the
+            // agent may still answer, and "unknown" would read as an outage.
+            role: if spec.fenced.contains(&o.pod) {
+                "fenced".to_string()
+            } else {
+                role_of(o.in_recovery).to_string()
+            },
             pod: o.pod,
             ready: o.ready,
             lsn: o.lsn,
@@ -331,6 +346,8 @@ pub async fn get_cluster(
         pooler,
         roles: spec.roles,
         databases: spec.databases,
+        hibernated: spec.hibernated,
+        fenced: spec.fenced,
         instances,
     }))
 }
@@ -408,6 +425,7 @@ pub async fn patch_cluster(
     let Some((current, owner)) = ops.store.get(&name).await.map_err(ApiError::internal)? else {
         return Err(ApiError::not_found());
     };
+    reject_hibernated(&current)?;
     let next = current.apply_change(&change).map_err(spec_error)?;
 
     // Grow volumes before the spec lands so a rejected expansion (StorageClass
@@ -491,6 +509,7 @@ pub async fn switchover(
     let Some((spec, _owner)) = ops.store.get(&name).await.map_err(ApiError::internal)? else {
         return Err(ApiError::not_found());
     };
+    reject_hibernated(&spec)?;
 
     let valid_pods: Vec<String> = (0..spec.replicas).map(|i| format!("{name}-{i}")).collect();
     if !valid_pods.contains(&req.target) {
@@ -576,6 +595,7 @@ pub async fn restart_cluster(
     let Some((spec, _owner)) = ops.store.get(&name).await.map_err(ApiError::internal)? else {
         return Err(ApiError::not_found());
     };
+    reject_hibernated(&spec)?;
     let primary = ops
         .store
         .primary(&name)
@@ -590,6 +610,172 @@ pub async fn restart_cluster(
         roll_pods(&ops, &spec, order).await;
         tracing::info!(cluster = %spec.name, "rolling restart finished");
     });
+    Ok(StatusCode::ACCEPTED)
+}
+
+/// 409 guard shared by every mutating operation: a hibernated cluster
+/// accepts exactly wake, unfence and delete.
+pub(crate) fn reject_hibernated(spec: &ClusterSpec) -> Result<(), ApiError> {
+    if spec.hibernated {
+        return Err(ApiError::conflict("hibernated")
+            .with_detail("The cluster is hibernated; wake it first."));
+    }
+    Ok(())
+}
+
+/// Scale the cluster to zero pods, keeping volumes, credentials and the spec.
+#[utoipa::path(
+    post,
+    path = "/api/v1/clusters/{name}/hibernate",
+    tag = "clusters",
+    params(("name" = String, Path, description = "Cluster name")),
+    responses(
+        (status = 202, description = "Hibernation started"),
+        (status = 404, description = "Not found", body = crate::error::ProblemDetails, content_type = "application/problem+json"),
+        (status = 409, description = "Already hibernated", body = crate::error::ProblemDetails, content_type = "application/problem+json"),
+    )
+)]
+pub async fn hibernate(
+    State(state): State<Option<ClusterOps>>,
+    Path(name): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let ops = ops(&state)?;
+    let Some((mut spec, _owner)) = ops.store.get(&name).await.map_err(ApiError::internal)? else {
+        return Err(ApiError::not_found());
+    };
+    if spec.hibernated {
+        return Err(ApiError::conflict("already_hibernated")
+            .with_detail("The cluster is already hibernated."));
+    }
+    spec.hibernated = true;
+    ops.store.put(&spec).await.map_err(ApiError::internal)?;
+    tracing::warn!(cluster = %name, "HIBERNATE: scaling to zero, PVCs retained");
+    Ok(StatusCode::ACCEPTED)
+}
+
+/// Wake a hibernated cluster: restore its instances and pooler.
+#[utoipa::path(
+    post,
+    path = "/api/v1/clusters/{name}/wake",
+    tag = "clusters",
+    params(("name" = String, Path, description = "Cluster name")),
+    responses(
+        (status = 202, description = "Wake started"),
+        (status = 404, description = "Not found", body = crate::error::ProblemDetails, content_type = "application/problem+json"),
+        (status = 409, description = "Not hibernated", body = crate::error::ProblemDetails, content_type = "application/problem+json"),
+    )
+)]
+pub async fn wake(
+    State(state): State<Option<ClusterOps>>,
+    Path(name): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let ops = ops(&state)?;
+    let Some((mut spec, _owner)) = ops.store.get(&name).await.map_err(ApiError::internal)? else {
+        return Err(ApiError::not_found());
+    };
+    if !spec.hibernated {
+        return Err(
+            ApiError::conflict("not_hibernated").with_detail("The cluster is not hibernated.")
+        );
+    }
+    spec.hibernated = false;
+    ops.store.put(&spec).await.map_err(ApiError::internal)?;
+    tracing::warn!(cluster = %name, replicas = spec.replicas, "WAKE: restoring instances");
+    Ok(StatusCode::ACCEPTED)
+}
+
+/// Stop postgres on one standby; the pod stays up for inspection.
+#[utoipa::path(
+    post,
+    path = "/api/v1/clusters/{name}/instances/{pod}/fence",
+    tag = "clusters",
+    params(
+        ("name" = String, Path, description = "Cluster name"),
+        ("pod" = String, Path, description = "Instance pod name, e.g. \"demo-1\"")
+    ),
+    responses(
+        (status = 202, description = "Fencing started"),
+        (status = 404, description = "Not found", body = crate::error::ProblemDetails, content_type = "application/problem+json"),
+        (status = 409, description = "Primary, already fenced, or cluster hibernated", body = crate::error::ProblemDetails, content_type = "application/problem+json"),
+        (status = 422, description = "Not an instance of this cluster", body = crate::error::ProblemDetails, content_type = "application/problem+json"),
+    )
+)]
+pub async fn fence_instance(
+    State(state): State<Option<ClusterOps>>,
+    Path((name, pod)): Path<(String, String)>,
+) -> Result<StatusCode, ApiError> {
+    let ops = ops(&state)?;
+    let Some((mut spec, _owner)) = ops.store.get(&name).await.map_err(ApiError::internal)? else {
+        return Err(ApiError::not_found());
+    };
+    reject_hibernated(&spec)?;
+    let valid_pods: Vec<String> = (0..spec.replicas).map(|i| format!("{name}-{i}")).collect();
+    if !valid_pods.contains(&pod) {
+        return Err(
+            ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, "invalid_target")
+                .with_detail(format!("'{pod}' is not an instance of this cluster.")),
+        );
+    }
+    let primary = ops
+        .store
+        .primary(&name)
+        .await
+        .map_err(ApiError::internal)?
+        .unwrap_or_else(|| format!("{name}-0"));
+    if pod == primary {
+        return Err(ApiError::conflict("cannot_fence_primary")
+            .with_detail("That instance is the recorded primary; switch over first."));
+    }
+    if spec.fenced.contains(&pod) {
+        return Err(
+            ApiError::conflict("already_fenced").with_detail("That instance is already fenced.")
+        );
+    }
+    spec.fenced.push(pod.clone());
+    ops.store.put(&spec).await.map_err(ApiError::internal)?;
+    tracing::warn!(cluster = %name, %pod, "FENCE: instance held down by spec");
+    Ok(StatusCode::ACCEPTED)
+}
+
+/// Release a fenced instance so it rejoins as a standby.
+#[utoipa::path(
+    post,
+    path = "/api/v1/clusters/{name}/instances/{pod}/unfence",
+    tag = "clusters",
+    params(
+        ("name" = String, Path, description = "Cluster name"),
+        ("pod" = String, Path, description = "Instance pod name, e.g. \"demo-1\"")
+    ),
+    responses(
+        (status = 202, description = "Unfencing started"),
+        (status = 404, description = "Not found", body = crate::error::ProblemDetails, content_type = "application/problem+json"),
+        (status = 409, description = "Not fenced", body = crate::error::ProblemDetails, content_type = "application/problem+json"),
+        (status = 422, description = "Not an instance of this cluster", body = crate::error::ProblemDetails, content_type = "application/problem+json"),
+    )
+)]
+pub async fn unfence_instance(
+    State(state): State<Option<ClusterOps>>,
+    Path((name, pod)): Path<(String, String)>,
+) -> Result<StatusCode, ApiError> {
+    let ops = ops(&state)?;
+    let Some((mut spec, _owner)) = ops.store.get(&name).await.map_err(ApiError::internal)? else {
+        return Err(ApiError::not_found());
+    };
+    // No hibernated guard: editing the fenced list while asleep is harmless
+    // and converges on wake.
+    let valid_pods: Vec<String> = (0..spec.replicas).map(|i| format!("{name}-{i}")).collect();
+    if !valid_pods.contains(&pod) {
+        return Err(
+            ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, "invalid_target")
+                .with_detail(format!("'{pod}' is not an instance of this cluster.")),
+        );
+    }
+    if !spec.fenced.contains(&pod) {
+        return Err(ApiError::conflict("not_fenced").with_detail("That instance is not fenced."));
+    }
+    spec.fenced.retain(|p| p != &pod);
+    ops.store.put(&spec).await.map_err(ApiError::internal)?;
+    tracing::warn!(cluster = %name, %pod, "UNFENCE: instance released");
     Ok(StatusCode::ACCEPTED)
 }
 

@@ -85,6 +85,10 @@ pub fn build(
         ))
         .routes(routes!(crate::api::clusters::switchover))
         .routes(routes!(crate::api::clusters::restart_cluster))
+        .routes(routes!(crate::api::clusters::hibernate))
+        .routes(routes!(crate::api::clusters::wake))
+        .routes(routes!(crate::api::clusters::fence_instance))
+        .routes(routes!(crate::api::clusters::unfence_instance))
         .routes(routes!(crate::api::gucs::list_gucs))
         .routes(routes!(
             crate::api::backups::list_backups,

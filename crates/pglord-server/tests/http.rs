@@ -175,6 +175,14 @@ async fn day2_operations_without_kube_answer_503_problem() {
             "/api/v1/clusters/demo/switchover",
             r#"{"target":"demo-1"}"#,
         ),
+        ("POST", "/api/v1/clusters/demo/hibernate", "{}"),
+        ("POST", "/api/v1/clusters/demo/wake", "{}"),
+        ("POST", "/api/v1/clusters/demo/instances/demo-1/fence", "{}"),
+        (
+            "POST",
+            "/api/v1/clusters/demo/instances/demo-1/unfence",
+            "{}",
+        ),
     ] {
         let resp = test_app()
             .oneshot(

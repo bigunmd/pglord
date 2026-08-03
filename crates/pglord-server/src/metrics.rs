@@ -14,6 +14,7 @@ pub struct Metrics {
     pub instances_ready: IntGaugeVec,
     pub instances: IntGaugeVec,
     pub sync_degraded: IntGaugeVec,
+    pub hibernated: IntGaugeVec,
     pub clusters: IntGauge,
 }
 
@@ -73,6 +74,11 @@ impl Metrics {
             "pglord_sync_degraded",
             "1 when synchronous replication is on but no sync standby is connected (writes blocking).",
         );
+        let hibernated = gauge_vec(
+            &registry,
+            "pglord_cluster_hibernated",
+            "1 while the cluster is hibernated (scaled to zero on purpose).",
+        );
         let clusters = IntGauge::new("pglord_clusters", "Number of cluster specs.")
             .expect("static metric name");
         registry
@@ -87,6 +93,7 @@ impl Metrics {
             instances_ready,
             instances,
             sync_degraded,
+            hibernated,
             clusters,
         }
     }
@@ -108,6 +115,7 @@ impl Metrics {
         let _ = self.instances_ready.remove_label_values(&[cluster]);
         let _ = self.instances.remove_label_values(&[cluster]);
         let _ = self.sync_degraded.remove_label_values(&[cluster]);
+        let _ = self.hibernated.remove_label_values(&[cluster]);
         for outcome in ["ok", "error"] {
             let _ = self
                 .reconcile_total

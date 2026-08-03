@@ -149,6 +149,7 @@ pub async fn create_backup(
     let Some((spec, _owner)) = ops.store.get(&name).await.map_err(ApiError::internal)? else {
         return Err(ApiError::not_found());
     };
+    crate::api::clusters::reject_hibernated(&spec)?;
     if !spec.backup.enabled {
         return Err(ApiError::conflict("backups_disabled").with_detail(
             "Configure a backup repository for this cluster before taking a backup.",

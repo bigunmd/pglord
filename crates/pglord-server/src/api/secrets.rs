@@ -178,6 +178,7 @@ pub async fn rotate_credentials(
             "This cluster reads credentials from your own Secret; pglord only rotates the Secret it manages.",
         ));
     }
+    crate::api::clusters::reject_hibernated(&spec)?;
     let primary = ops
         .store
         .primary(&name)
