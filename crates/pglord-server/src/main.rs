@@ -22,6 +22,16 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    // Early exit: emit the CRD manifest without touching the network.
+    if std::env::args().any(|a| a == "--dump-crd") {
+        use kube::CustomResourceExt;
+        std::fs::create_dir_all("deploy/crds")?;
+        let yaml = serde_yaml::to_string(&pglord_core::crd::PostgresCluster::crd())?;
+        std::fs::write("deploy/crds/postgresclusters.pglord.dev.yaml", yaml)?;
+        println!("wrote deploy/crds/postgresclusters.pglord.dev.yaml");
+        return Ok(());
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_new(&cfg.log_level)

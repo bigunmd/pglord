@@ -19,7 +19,8 @@ futures = "0.3.33"
 k8s-openapi = { version = "0.28.0", features = ["latest"] }
 kube = { version = "4.2.0", features = ["client", "runtime"] }
 mime_guess = { version = "2", optional = true }
-pglord-core = { path = "../pglord-core" }
+pglord-core = { path = "../pglord-core", features = ["crd"] }
+serde_yaml = "0.9"
 rand = "0.10.2"
 reqwest = { version = "0.13.4", default-features = false, features = ["json"] }
 rust-embed = { version = "8", optional = true }

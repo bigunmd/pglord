@@ -30,6 +30,12 @@ lint: ## fmt --check + clippy -D warnings
 openapi: ## Regenerate spec/openapi.yaml
 	cargo run -p pglord-server -- --dump-openapi
 
+crd: ## Regenerate deploy/crds from code
+	cargo run -p pglord-server -- --dump-crd
+
+crd-check: crd ## Fail if the committed CRD manifest drifts from code
+	git diff --exit-code deploy/crds
+
 openapi-check: openapi ## Fail if committed spec drifts from code
 	git diff --exit-code spec/
 

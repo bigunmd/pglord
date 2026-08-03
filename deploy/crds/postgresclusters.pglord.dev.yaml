@@ -1,0 +1,590 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: postgresclusters.pglord.dev
+spec:
+  group: pglord.dev
+  names:
+    kind: PostgresCluster
+    plural: postgresclusters
+    shortNames:
+    - pgc
+    singular: postgrescluster
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.ready_replicas
+      name: Ready
+      type: integer
+    - jsonPath: .status.primary
+      name: Primary
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Auto-generated derived type for ClusterSpec via `CustomResource`
+        properties:
+          spec:
+            properties:
+              backup:
+                default:
+                  enabled: false
+                  retention_full: 0
+                  s3_region: ''
+                  schedule_kind: full
+                  verify_tls: false
+                description: |-
+                  Backup repository. Disabled by default; enabling it also turns on WAL
+                  archiving, which needs a restart.
+                properties:
+                  enabled:
+                    default: false
+                    description: Backups (and therefore WAL archiving) are off unless this is set.
+                    type: boolean
+                  path_prefix:
+                    description: Optional prefix inside the bucket, so several clusters can share one.
+                    nullable: true
+                    type: string
+                  retention_full:
+                    default: 2
+                    description: Full backups to keep. pgBackRest expires older ones automatically.
+                    format: uint8
+                    maximum: 255.0
+                    minimum: 0.0
+                    type: integer
+                  s3_bucket:
+                    nullable: true
+                    type: string
+                  s3_credentials_secret:
+                    description: Secret holding `access-key` and `secret-key`. Values never live here.
+                    nullable: true
+                    type: string
+                  s3_endpoint:
+                    description: S3-compatible endpoint, e.g. "https://s3.amazonaws.com" or a MinIO URL.
+                    nullable: true
+                    type: string
+                  s3_region:
+                    default: us-east-1
+                    type: string
+                  schedule:
+                    description: Cron expression (UTC) for automatic backups. None = manual only.
+                    nullable: true
+                    type: string
+                  schedule_kind:
+                    default: full
+                    description: Backup type the schedule takes.
+                    enum:
+                    - full
+                    - diff
+                    - incr
+                    type: string
+                  verify_tls:
+                    default: true
+                    description: |-
+                      Verify the endpoint's TLS certificate. Turn off only for storage with a
+                      self-signed certificate (a dev MinIO, typically).
+                    type: boolean
+                type: object
+              credentials_secret:
+                description: |-
+                  Secret holding the superuser and replication passwords. When set,
+                  pglord uses it instead of generating one — so the cluster has a single
+                  source of truth for its credentials rather than two.
+                nullable: true
+                type: string
+              databases:
+                default: []
+                description: Declared databases, converged after the roles that own them.
+                items:
+                  properties:
+                    name:
+                      type: string
+                    owner:
+                      description: Owning role; must be declared above.
+                      type: string
+                  required:
+                  - name
+                  - owner
+                  type: object
+                type: array
+              env:
+                default: []
+                description: |-
+                  Extra environment variables on the instance containers, for init
+                  scripts and anything else in the container to read.
+                items:
+                  properties:
+                    name:
+                      type: string
+                    secret:
+                      description: Value taken from a Secret at pod start. Mutually exclusive with `value`.
+                      nullable: true
+                      properties:
+                        key:
+                          type: string
+                        name:
+                          description: Secret in the same namespace. pglord never reads its contents.
+                          type: string
+                      required:
+                      - key
+                      - name
+                      type: object
+                    value:
+                      description: Literal value. Mutually exclusive with `secret`.
+                      nullable: true
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
+              fenced:
+                default: []
+                description: |-
+                  Instances (pod names) held down: the agent stops postgres and keeps
+                  it stopped while listed. Standbys only — the fence endpoint refuses
+                  the recorded primary. Flipped only by the fence/unfence endpoints.
+                items:
+                  type: string
+                type: array
+              hibernated:
+                default: false
+                description: |-
+                  Scale to zero pods, keeping PVCs, credentials and the spec. The
+                  desired replica count is preserved for wake. Flipped only by the
+                  hibernate/wake endpoints, never by PATCH.
+                type: boolean
+              image:
+                default: pglord-agent:dev
+                description: Image containing postgres + pglord-agent (agent is the entrypoint).
+                type: string
+              init:
+                default: {}
+                description: SQL run once, when the data directory is first created.
+                properties:
+                  scripts_config_map:
+                    description: ConfigMap whose `.sql` keys are run in filename order.
+                    nullable: true
+                    type: string
+                  scripts_secret:
+                    description: |-
+                      Secret whose `.sql` keys are run after the ConfigMap's, in filename
+                      order. For init SQL that contains credentials.
+                    nullable: true
+                    type: string
+                type: object
+              name:
+                default: ''
+                description: |-
+                  RFC1123 label; used as the prefix of every derived object name.
+                  Empty is invalid through the API; in operator mode the CR sync fills
+                  it from metadata.name, so kubectl users write the name once.
+                type: string
+              parameters:
+                additionalProperties:
+                  type: string
+                default: {}
+                description: |-
+                  PostgreSQL settings applied on top of the defaults. Only settings in the
+                  GUC catalog are accepted; pglord-managed settings are rejected.
+                type: object
+              pg_hba:
+                default: []
+                description: |-
+                  Client access rules (pg_hba.conf) inserted between pglord's managed
+                  prefix and its scram catch-all. First match wins; use `reject` rules
+                  to tighten access. Applied with a reload — no restart.
+                items:
+                  description: |-
+                    One user-supplied pg_hba rule. `local` is not expressible: the managed
+                    prefix owns socket access, and a user local rule after `local all all peer`
+                    could never match anyway.
+                  properties:
+                    address:
+                      description: CIDR ("10.0.0.0/8", "::1/128") or all | samehost | samenet.
+                      type: string
+                    conn:
+                      enum:
+                      - host
+                      - hostssl
+                      - hostnossl
+                      type: string
+                    database:
+                      description: '"all", "replication", or a single database name.'
+                      type: string
+                    method:
+                      description: |-
+                        Deliberately small: ldap/radius need auth options this schema does not
+                        carry, md5 is deprecated. Growing the list later is backwards-compatible;
+                        shrinking it is not. `cert` authenticates by client certificate (CN =
+                        role name, verify-full); it is only meaningful over TLS, so it is valid
+                        only on `hostssl` rules and only when the cluster has TLS enabled.
+                      enum:
+                      - scram-sha-256
+                      - reject
+                      - trust
+                      - cert
+                      type: string
+                    user:
+                      description: '"all" or a single role name.'
+                      type: string
+                  required:
+                  - address
+                  - conn
+                  - database
+                  - method
+                  - user
+                  type: object
+                type: array
+              pooler:
+                default:
+                  default_pool_size: 20
+                  enabled: false
+                  image: ghcr.io/cloudnative-pg/pgbouncer:1.25.2
+                  max_client_conn: 100
+                  pool_mode: transaction
+                  replicas: 1
+                  resources: {}
+                description: |-
+                  Managed PgBouncer in front of the primary. Pooler changes never touch
+                  the postgres instances.
+                properties:
+                  default_pool_size:
+                    default: 20
+                    description: Server connections per database/user pair.
+                    format: uint32
+                    minimum: 0.0
+                    type: integer
+                  enabled:
+                    default: false
+                    description: |-
+                      Run a PgBouncer Deployment for this cluster. Disabling deletes the
+                      pooler objects; postgres instances are never touched by pooler changes.
+                    type: boolean
+                  image:
+                    default: ghcr.io/cloudnative-pg/pgbouncer:1.25.2
+                    description: PgBouncer image; pinned default, overridable like the cluster image.
+                    type: string
+                  max_client_conn:
+                    default: 100
+                    description: Client connections PgBouncer accepts, across all databases.
+                    format: uint32
+                    minimum: 0.0
+                    type: integer
+                  pool_mode:
+                    default: transaction
+                    enum:
+                    - transaction
+                    - session
+                    type: string
+                  replicas:
+                    default: 1
+                    description: Pooler pods — independent of postgres replicas.
+                    format: uint8
+                    maximum: 255.0
+                    minimum: 0.0
+                    type: integer
+                  resources:
+                    default: {}
+                    description: Resources of the pooler container.
+                    properties:
+                      cpu_limit:
+                        nullable: true
+                        type: string
+                      cpu_request:
+                        nullable: true
+                        type: string
+                      memory_limit:
+                        nullable: true
+                        type: string
+                      memory_request:
+                        nullable: true
+                        type: string
+                    type: object
+                type: object
+              replicas:
+                default: 1
+                description: 'Total instances: 1 primary + (replicas - 1) streaming standbys.'
+                format: uint8
+                maximum: 255.0
+                minimum: 0.0
+                type: integer
+              restore:
+                description: |-
+                  Where this cluster's data came from, when it was created by restoring
+                  someone's backup. A one-shot bootstrap source: it is consumed the first
+                  time PGDATA is created and has no effect on a running cluster.
+                nullable: true
+                properties:
+                  backup_label:
+                    description: Which backup to restore. None restores the most recent one.
+                    nullable: true
+                    type: string
+                  repository:
+                    description: |-
+                      The repository to read, copied from the source when the restore was
+                      requested rather than referenced. The source can afterwards be
+                      reconfigured or deleted without stranding this cluster's bootstrap.
+                    properties:
+                      enabled:
+                        default: false
+                        description: Backups (and therefore WAL archiving) are off unless this is set.
+                        type: boolean
+                      path_prefix:
+                        description: Optional prefix inside the bucket, so several clusters can share one.
+                        nullable: true
+                        type: string
+                      retention_full:
+                        default: 2
+                        description: Full backups to keep. pgBackRest expires older ones automatically.
+                        format: uint8
+                        maximum: 255.0
+                        minimum: 0.0
+                        type: integer
+                      s3_bucket:
+                        nullable: true
+                        type: string
+                      s3_credentials_secret:
+                        description: Secret holding `access-key` and `secret-key`. Values never live here.
+                        nullable: true
+                        type: string
+                      s3_endpoint:
+                        description: S3-compatible endpoint, e.g. "https://s3.amazonaws.com" or a MinIO URL.
+                        nullable: true
+                        type: string
+                      s3_region:
+                        default: us-east-1
+                        type: string
+                      schedule:
+                        description: Cron expression (UTC) for automatic backups. None = manual only.
+                        nullable: true
+                        type: string
+                      schedule_kind:
+                        default: full
+                        description: Backup type the schedule takes.
+                        enum:
+                        - full
+                        - diff
+                        - incr
+                        type: string
+                      verify_tls:
+                        default: true
+                        description: |-
+                          Verify the endpoint's TLS certificate. Turn off only for storage with a
+                          self-signed certificate (a dev MinIO, typically).
+                        type: boolean
+                    type: object
+                  source_cluster:
+                    description: |-
+                      Cluster whose repository holds the backup. Names the pgBackRest stanza
+                      that is read — which is the *source's* stanza, not this cluster's.
+                    type: string
+                  target_time:
+                    description: Recover to this instant (RFC3339, UTC) instead of the end of the WAL.
+                    nullable: true
+                    type: string
+                required:
+                - repository
+                - source_cluster
+                type: object
+              roles:
+                default: []
+                description: |-
+                  Declared roles, converged on the primary. Additive: removing an entry
+                  stops managing it, nothing is dropped.
+                items:
+                  properties:
+                    connection_limit:
+                      description: Absent = unlimited (postgres -1).
+                      format: int32
+                      nullable: true
+                      type: integer
+                    createdb:
+                      default: false
+                      type: boolean
+                    createrole:
+                      default: false
+                      type: boolean
+                    in_roles:
+                      default: []
+                      description: |-
+                        Memberships. Only declared roles can be named, which keeps ensure
+                        ordering trivial and revocation scoped to what pglord manages.
+                      items:
+                        type: string
+                      type: array
+                    login:
+                      default: true
+                      type: boolean
+                    name:
+                      description: |-
+                        Strict lowercase identifier — interpolated into DDL as a quoted
+                        identifier, so the charset is the injection contract.
+                      type: string
+                    password_secret:
+                      description: |-
+                        Where the role's password comes from. Absent = the role is created
+                        without a password and an existing password is left untouched.
+                        Rotation is: edit the Secret; the next ensure re-applies it.
+                      nullable: true
+                      properties:
+                        key:
+                          type: string
+                        name:
+                          description: Secret in the same namespace. pglord never reads its contents.
+                          type: string
+                      required:
+                      - key
+                      - name
+                      type: object
+                  required:
+                  - name
+                  type: object
+                type: array
+              storage_size:
+                default: 1Gi
+                description: PVC size per instance, e.g. "1Gi".
+                type: string
+              synchronous:
+                default: false
+                description: |-
+                  Every commit waits until any one standby confirms the WAL flush
+                  (quorum `ANY 1` over all standbys). Strict: with no standby connected,
+                  writes block rather than silently falling back to async. Requires
+                  `replicas >= 2`. Applied with a reload — no restart.
+                type: boolean
+              tls:
+                default: {}
+                description: |-
+                  TLS for client and replication connections, from a referenced
+                  kubernetes.io/tls Secret. Enabling or disabling rolls the instances
+                  (the cert mount changes the pod template).
+                properties:
+                  server_secret:
+                    description: |-
+                      kubernetes.io/tls Secret holding the server certificate. TLS is
+                      enabled iff this is set; clearing it disables TLS. Both directions
+                      change the pod template and roll the instances.
+                    nullable: true
+                    type: string
+                type: object
+              workload:
+                default:
+                  annotations: {}
+                  anti_affinity: preferred
+                  image_pull_secrets: []
+                  labels: {}
+                  node_selector: {}
+                  resources: {}
+                  tolerations: []
+                description: Scheduling, resources and Kubernetes metadata for the instances.
+                properties:
+                  annotations:
+                    additionalProperties:
+                      type: string
+                    default: {}
+                    type: object
+                  anti_affinity:
+                    default: preferred
+                    enum:
+                    - disabled
+                    - preferred
+                    - required
+                    type: string
+                  image_pull_secrets:
+                    default: []
+                    items:
+                      type: string
+                    type: array
+                  labels:
+                    additionalProperties:
+                      type: string
+                    default: {}
+                    description: Extra labels on instance pods (cost allocation, scrape selection).
+                    type: object
+                  node_selector:
+                    additionalProperties:
+                      type: string
+                    default: {}
+                    type: object
+                  priority_class_name:
+                    nullable: true
+                    type: string
+                  resources:
+                    default: {}
+                    properties:
+                      cpu_limit:
+                        nullable: true
+                        type: string
+                      cpu_request:
+                        nullable: true
+                        type: string
+                      memory_limit:
+                        nullable: true
+                        type: string
+                      memory_request:
+                        nullable: true
+                        type: string
+                    type: object
+                  storage_class:
+                    description: StorageClass for instance volumes. Immutable after creation.
+                    nullable: true
+                    type: string
+                  tolerations:
+                    default: []
+                    items:
+                      properties:
+                        effect:
+                          description: '"NoSchedule", "PreferNoSchedule" or "NoExecute".'
+                          nullable: true
+                          type: string
+                        key:
+                          type: string
+                        operator:
+                          description: '"Equal" (default) or "Exists".'
+                          nullable: true
+                          type: string
+                        value:
+                          nullable: true
+                          type: string
+                      required:
+                      - key
+                      type: object
+                    type: array
+                type: object
+            type: object
+          status:
+            nullable: true
+            properties:
+              hibernated:
+                default: false
+                description: Scaled to zero on purpose; volumes retained.
+                type: boolean
+              message:
+                default: ''
+                description: Human-readable detail for Invalid/Degraded; empty otherwise.
+                type: string
+              phase:
+                default: ''
+                description: Progressing | Ready | Degraded | Hibernated | Invalid.
+                type: string
+              primary:
+                default: ''
+                description: Recorded primary pod.
+                type: string
+              ready_replicas:
+                default: 0
+                description: Instances currently passing their readiness probe.
+                format: int32
+                type: integer
+            type: object
+        required:
+        - spec
+        title: PostgresCluster
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
