@@ -55,6 +55,9 @@ async fn main() -> anyhow::Result<()> {
             tracing::info!(%ns, "kubernetes environment detected");
             tokio::spawn(kube_client::health_loop(client.clone(), readiness.clone()));
             tokio::spawn(reconciler::run(client.clone(), ns.clone(), metrics.clone()));
+            if cfg.spec_backend == "crd" {
+                tokio::spawn(pglord_server::cr_sync::run(client.clone(), ns.clone()));
+            }
             tokio::spawn(pglord_server::orchestrator::run(
                 client.clone(),
                 ns.clone(),

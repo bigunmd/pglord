@@ -44,6 +44,33 @@ pub fn spec_to_configmap(spec: &ClusterSpec, ns: &str) -> anyhow::Result<ConfigM
     })
 }
 
+/// The mirror ConfigMap operator mode derives from a PostgresCluster: the
+/// standalone spec ConfigMap plus an ownerReference to the CR (GC chains
+/// CR -> mirror -> children) and an "internal" label for humans. It carries
+/// no annotations on purpose — the primary-record CAS owns those fields
+/// under server-side apply and the sync must never wrestle them away.
+pub fn spec_to_configmap_owned(
+    spec: &ClusterSpec,
+    ns: &str,
+    owner: &OwnerRef,
+) -> anyhow::Result<ConfigMap> {
+    let mut cm = spec_to_configmap(spec, ns)?;
+    if let Some(labels) = cm.metadata.labels.as_mut() {
+        labels.insert("pglord.dev/internal".to_string(), "true".to_string());
+    }
+    cm.metadata.owner_references = Some(vec![
+        k8s_openapi::apimachinery::pkg::apis::meta::v1::OwnerReference {
+            api_version: owner.api_version.clone(),
+            kind: owner.kind.clone(),
+            name: owner.name.clone(),
+            uid: owner.uid.clone(),
+            controller: Some(true),
+            block_owner_deletion: Some(true),
+        },
+    ]);
+    Ok(cm)
+}
+
 /// Parse a spec ConfigMap back into a ClusterSpec + the OwnerRef children use.
 pub fn configmap_to_spec(cm: &ConfigMap) -> anyhow::Result<(ClusterSpec, OwnerRef)> {
     let data = cm
