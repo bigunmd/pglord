@@ -15,7 +15,8 @@
     "oidcUnreachable": "Could not reach the identity provider.",
     "completing": "Completing sign-in…",
     "backToLogin": "Back to sign-in",
-    "logout": "Sign out"
+    "logout": "Sign out",
+    "kubernetesHint": "Kubernetes tokens work here: kubectl create token <serviceaccount>"
   },
   "nav": {
     "home": "Home",

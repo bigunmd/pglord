@@ -718,7 +718,11 @@ components:
       type: object
       required:
       - static_tokens_enabled
+      - kubernetes_enabled
       properties:
+        kubernetes_enabled:
+          type: boolean
+          description: True when Kubernetes bearer tokens are accepted (kubectl create token).
         oidc:
           oneOf:
           - type: 'null'

@@ -3,6 +3,11 @@
 
 import { OidcPublicConfig } from '../models/oidc-public-config';
 export interface AuthConfigResponse {
+
+  /**
+   * True when Kubernetes bearer tokens are accepted (kubectl create token).
+   */
+  kubernetes_enabled: boolean;
   oidc?: (null | OidcPublicConfig);
 
   /**

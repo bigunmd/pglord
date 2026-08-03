@@ -29,7 +29,7 @@ import { PglordLogoComponent } from '../../shell/pglord-logo.component';
         <p class="text-muted-foreground mb-5 text-sm">{{ 'auth.title' | transloco }}</p>
 
         @if (config(); as cfg) {
-          @if (cfg.static_tokens_enabled) {
+          @if (cfg.static_tokens_enabled || cfg.kubernetes_enabled) {
             <form (submit)="submitToken($event)">
               <label hlmLabel class="mb-1.5 block" for="api-token">
                 {{ 'auth.tokenLabel' | transloco }}
@@ -44,12 +44,17 @@ import { PglordLogoComponent } from '../../shell/pglord-logo.component';
                 (input)="tokenInput.set($any($event.target).value)"
               />
               <p class="text-muted-foreground mb-3 text-xs">{{ 'auth.tokenHelp' | transloco }}</p>
+              @if (cfg.kubernetes_enabled) {
+                <p class="text-muted-foreground mb-3 text-xs" data-testid="k8s-hint">
+                  {{ 'auth.kubernetesHint' | transloco }}
+                </p>
+              }
               <button hlmBtn type="submit" class="w-full" [disabled]="busy() || !tokenInput()">
                 {{ 'auth.signIn' | transloco }}
               </button>
             </form>
           }
-          @if (cfg.static_tokens_enabled && cfg.oidc) {
+          @if ((cfg.static_tokens_enabled || cfg.kubernetes_enabled) && cfg.oidc) {
             <div class="text-muted-foreground my-4 flex items-center gap-3 text-xs">
               <span class="border-border grow border-t"></span>
               {{ 'auth.or' | transloco }}
