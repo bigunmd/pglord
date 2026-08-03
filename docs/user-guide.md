@@ -945,11 +945,52 @@ helm upgrade pglord charts/pglord --reuse-values \
 `auth.oidc.audience` defaults to the client ID; set it when your IdP puts a
 different `aud` claim into access tokens. Tokens are accepted when their
 signature matches the issuer's JWKS and `exp`, `iss` and `aud` check out.
-Any valid credential has full admin access — there are no roles yet.
+Any valid **static or OIDC** credential has full admin access; per-user
+authorization comes from the Kubernetes mode below.
 
 For non-interactive API access with OIDC, either configure a static token
 alongside it, or use your IdP's client-credentials grant and send the
 resulting access token as the bearer.
+
+### Kubernetes-native authentication
+
+With `PGLORD_AUTH_KUBERNETES=true` (Helm: `auth.kubernetes: true`), pglord
+accepts Kubernetes bearer tokens and lets **Kubernetes RBAC decide what each
+user may do**: the token is authenticated with a TokenReview and every
+request is authorized with a SubjectAccessReview on
+`pglord.dev/postgresclusters` in the target namespace. Whoever can
+`kubectl patch pgc` in a namespace can do the same through the UI.
+
+Setup:
+
+```bash
+# 1. Let pglord delegate token checks to the apiserver
+#    (included in deploy/k8s/operator/rbac.yaml, or auth.kubernetes in Helm)
+# 2. Give a user or ServiceAccount permissions where they may work:
+kubectl -n team-a create sa alice
+kubectl -n team-a create role pgc-editor \
+  --verb=get,list,patch --resource=postgresclusters.pglord.dev
+kubectl -n team-a create rolebinding alice-pgc-editor \
+  --role=pgc-editor --serviceaccount=team-a:alice
+# 3. Mint a token and paste it into the pglord login page:
+kubectl -n team-a create token alice
+```
+
+How requests map to RBAC verbs: reading clusters/backups/secrets = `get`
+(`list` for listings), creating = `create` (a restore also counts as
+`create` — it makes a new cluster), editing = `patch`, deleting = `delete`,
+and every day-2 operation (switchover, restart, hibernate, wake, fence,
+rotate, take-backup) = `patch`.
+
+Notes:
+
+- The verbs are checked even in ConfigMap (standalone) mode — grant Roles on
+  `postgresclusters.pglord.dev` regardless of the storage backend.
+- The all-namespaces cluster list needs cluster-wide `list`; without it, use
+  the per-namespace views.
+- A missing or invalid token answers 401; a valid token without permission
+  answers 403 with the verb and namespace in the message.
+- Static tokens and OIDC continue to work unchanged and retain full access.
 
 ## Current limitations
 
