@@ -51,6 +51,15 @@ async fn auth_off_reports_both_modes_disabled_and_stays_open() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["static_tokens_enabled"], false);
     assert_eq!(body["oidc"], serde_json::Value::Null);
+    assert_eq!(body["kubernetes_enabled"], false);
+
+    let k8s_cfg = pglord_server::config::Config {
+        auth_kubernetes: true,
+        ..pglord_server::config::Config::test_default()
+    };
+    let (status, body) = send(test_app_with(k8s_cfg), "/api/v1/auth/config", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["kubernetes_enabled"], true);
 }
 
 #[tokio::test]

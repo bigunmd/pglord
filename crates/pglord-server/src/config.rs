@@ -41,6 +41,12 @@ pub struct Config {
     /// Expected `aud` claim. Empty = defaults to the client ID.
     #[serde(default = "default_empty")]
     pub auth_oidc_audience: String,
+    /// Accept Kubernetes bearer tokens: TokenReview authenticates them and a
+    /// SubjectAccessReview on pglord.dev/postgresclusters authorizes each
+    /// request. Needs the system:auth-delegator binding on the server's
+    /// ServiceAccount.
+    #[serde(default)]
+    pub auth_kubernetes: bool,
     /// Where cluster specs live: "configmap" (standalone, default) or "crd"
     /// (operator mode: PostgresCluster resources are the truth).
     #[serde(default = "default_spec_backend")]
@@ -122,7 +128,9 @@ impl Config {
     /// True when at least one auth mode is configured. False means the API
     /// runs open (back-compat) and main() logs a loud warning.
     pub fn auth_enabled(&self) -> bool {
-        !self.auth_token_list().is_empty() || !self.auth_oidc_issuer.is_empty()
+        !self.auth_token_list().is_empty()
+            || !self.auth_oidc_issuer.is_empty()
+            || self.auth_kubernetes
     }
 
     /// Full literal config for tests; new fields must be added here so existing
@@ -138,6 +146,7 @@ impl Config {
             auth_oidc_issuer: String::new(),
             auth_oidc_client_id: String::new(),
             auth_oidc_audience: String::new(),
+            auth_kubernetes: false,
             spec_backend: default_spec_backend(),
             all_namespaces: false,
         }
@@ -158,6 +167,17 @@ mod tests {
             assert_eq!(cfg.log_level, "info");
             assert_eq!(cfg.shutdown_timeout().as_secs(), 25);
             assert!(cfg.cors_origins().is_empty());
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn kubernetes_auth_flag_enables_auth() {
+        figment::Jail::expect_with(|jail| {
+            jail.set_env("PGLORD_AUTH_KUBERNETES", "true");
+            let cfg = Config::load().expect("load");
+            assert!(cfg.auth_kubernetes);
+            assert!(cfg.auth_enabled());
             Ok(())
         });
     }

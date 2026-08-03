@@ -22,6 +22,8 @@ pub struct AuthConfigResponse {
     pub static_tokens_enabled: bool,
     /// Present when OIDC login is available; null otherwise.
     pub oidc: Option<OidcPublicConfig>,
+    /// True when Kubernetes bearer tokens are accepted (kubectl create token).
+    pub kubernetes_enabled: bool,
 }
 
 /// Which login affordances the UI should render. When both modes are off the
@@ -40,5 +42,6 @@ pub async fn auth_config(State(state): State<AppState>) -> Json<AuthConfigRespon
             issuer: cfg.auth_oidc_issuer.clone(),
             client_id: cfg.auth_oidc_client_id.clone(),
         }),
+        kubernetes_enabled: cfg.auth_kubernetes,
     })
 }
