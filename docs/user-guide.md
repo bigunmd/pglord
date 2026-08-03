@@ -734,6 +734,61 @@ fence the ex-primary once it has stepped down.
 Fenced state survives pod restarts and even hibernation: a fenced instance
 wakes up still fenced, postgres held down, until it is unfenced.
 
+### Operator mode (PostgresCluster CRD)
+
+By default pglord stores cluster specs as ConfigMaps and needs nothing
+cluster-scoped. Operator mode makes a `PostgresCluster` custom resource the
+source of truth instead, so clusters are managed with kubectl and GitOps as
+well as the UI — both edit the same object.
+
+Enable it in three steps:
+
+```bash
+kubectl apply -f deploy/crds/                    # the one cluster-scoped act
+# grant pglord the pglord.dev rules (uncomment them in deploy/k8s/rbac.yaml,
+# or set specBackend=crd in the Helm chart which adds them to the Role)
+kubectl -n pglord set env deploy/pglord-server PGLORD_SPEC_BACKEND=crd
+```
+
+Then clusters are ordinary Kubernetes resources:
+
+```bash
+kubectl apply -f - <<'EOF'
+apiVersion: pglord.dev/v1alpha1
+kind: PostgresCluster
+metadata:
+  name: demo
+spec:
+  replicas: 2
+EOF
+
+kubectl get pgc                     # READY, PRIMARY, PHASE printer columns
+kubectl patch pgc demo --type=merge -p '{"spec":{"replicas":3}}'
+kubectl delete pgc demo             # garbage-collects pods, services, PVCs
+```
+
+Details worth knowing:
+
+- **spec.name** is optional in the CR — pglord fills it from `metadata.name`.
+  If you set it, it must match; a mismatch surfaces as phase `Invalid` in
+  `kubectl get pgc`, and nothing is changed on the running cluster.
+- **Field names are the REST API's**, snake_case (`storage_size`, `pg_hba`) —
+  the CRD schema and the OpenAPI contract are generated from the same types
+  and cannot drift.
+- **Invalid edits never break a running cluster.** kubectl bypasses the REST
+  validation, so pglord validates in the operator loop instead: a bad spec
+  parks the CR at phase `Invalid` with the reason in `.status.message`, and
+  the last good state keeps running.
+- **Status phases:** `Progressing` (starting up), `Ready`, `Degraded` (some
+  instances unready), `Hibernated`, `Invalid` (spec rejected; see message).
+- **Coexistence:** ConfigMap-backed clusters from standalone mode keep
+  working, but the API serves one backend at a time. A CR whose name
+  collides with an existing standalone cluster is refused (phase `Invalid`,
+  "name conflict") — it never adopts or overwrites it.
+- **Internals:** pglord derives a `<name>-spec` ConfigMap from each CR (you
+  will see it labeled `pglord.dev/internal`). It is machinery, not an API —
+  hand edits are overwritten on the next pass.
+
 ## 8. Delete a cluster
 
 **Clusters → trash icon → Delete.** This removes the instances, their persistent

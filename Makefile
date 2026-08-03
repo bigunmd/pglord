@@ -85,6 +85,9 @@ day2-e2e: ## Minikube e2e: planned switchover and scale-up
 hibernate-e2e: ## Minikube e2e: fence/unfence a standby, hibernate/wake with PVCs kept
 	./scripts/hibernate-e2e.sh
 
+operator-e2e: ## Minikube e2e: PostgresCluster CRD backend — kubectl + REST converge
+	./scripts/operator-e2e.sh
+
 config-e2e: ## Minikube e2e: live settings, pending restart, rolling restart
 	./scripts/config-e2e.sh
 
