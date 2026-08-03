@@ -4,10 +4,12 @@
 # from the API server, so a trimmed Role shows up there rather than as a
 # mysterious failure.
 apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
+kind: {{ .Values.clusterWide | ternary "ClusterRole" "Role" }}
 metadata:
   name: {{ include "pglord.fullname" . }}
+  {{- if not .Values.clusterWide }}
   namespace: {{ .Release.Namespace }}
+  {{- end }}
   labels:
     {{- include "pglord.labels" . | nindent 4 }}
 rules:
@@ -42,15 +44,17 @@ rules:
 # identity create one. A namespaced Role granting it would have no effect.
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
+kind: {{ .Values.clusterWide | ternary "ClusterRoleBinding" "RoleBinding" }}
 metadata:
   name: {{ include "pglord.fullname" . }}
+  {{- if not .Values.clusterWide }}
   namespace: {{ .Release.Namespace }}
+  {{- end }}
   labels:
     {{- include "pglord.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
-  kind: Role
+  kind: {{ .Values.clusterWide | ternary "ClusterRole" "Role" }}
   name: {{ include "pglord.fullname" . }}
 subjects:
   - kind: ServiceAccount

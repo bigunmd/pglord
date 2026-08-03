@@ -85,11 +85,13 @@ async fn main() -> anyhow::Result<()> {
             let preflight_client = client.clone();
             let preflight_ns = ns.clone();
             let preflight_backend = cfg.spec_backend.clone();
+            let preflight_all_ns = cfg.all_namespaces;
             tokio::spawn(async move {
                 let results = pglord_server::preflight::run(
                     &preflight_client,
                     &preflight_ns,
                     &preflight_backend,
+                    preflight_all_ns,
                 )
                 .await;
                 let (ok, missing) = pglord_server::preflight::summarize(&results);

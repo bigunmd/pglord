@@ -95,6 +95,10 @@ config:
   # (deploy/crds/) and adds pglord.dev rules to the Role.
   specBackend: configmap
 
+# Operator mode across every namespace: renders a ClusterRole instead of the
+# namespaced Role and sets PGLORD_ALL_NAMESPACES. Requires specBackend: crd.
+clusterWide: false
+
 resources:
   requests:
     cpu: 50m

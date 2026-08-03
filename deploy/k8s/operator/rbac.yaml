@@ -1,0 +1,49 @@
+# Cluster-wide operator RBAC: the same rule set as the namespaced Role, as a
+# ClusterRole, plus the PostgresCluster rules — one operator manages clusters
+# in every namespace. Apply on top of the base manifests (which provide the
+# ServiceAccount and Deployment), install deploy/crds/, and set
+# PGLORD_SPEC_BACKEND=crd PGLORD_ALL_NAMESPACES=true on the Deployment.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: pglord-operator
+rules:
+  - apiGroups: [""]
+    resources: [configmaps, secrets, services, pods, serviceaccounts]
+    verbs: [get, list, watch, create, update, patch, delete]
+  # Claims are created by the StatefulSet controller, but growing storage
+  # patches them and scaling down deletes the orphans it leaves behind.
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims]
+    verbs: [get, list, watch, patch, delete]
+  # Deployments: the managed PgBouncer pooler (created, retuned and deleted
+  # with the pooler block of the cluster spec).
+  - apiGroups: [apps]
+    resources: [statefulsets, deployments]
+    verbs: [get, list, watch, create, update, patch, delete]
+  # The reconciler provisions a least-privilege Role/Binding per cluster so
+  # instance agents can read their own spec ConfigMap (primary record).
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [roles, rolebindings]
+    verbs: [get, list, watch, create, update, patch, delete]
+  # PostgresCluster resources are the spec store; the sync loop writes their
+  # status subresource.
+  - apiGroups: [pglord.dev]
+    resources: [postgresclusters]
+    verbs: [get, list, watch, create, patch, delete]
+  - apiGroups: [pglord.dev]
+    resources: [postgresclusters/status]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: pglord-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: pglord-operator
+subjects:
+  - kind: ServiceAccount
+    name: pglord-server
+    namespace: pglord

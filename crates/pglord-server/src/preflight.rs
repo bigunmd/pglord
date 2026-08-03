@@ -102,14 +102,21 @@ pub fn required(spec_backend: &str) -> Vec<PermissionCheck> {
 
 /// Run every required check. Individual failures degrade to `allowed: None`
 /// with a reason — the preflight endpoint must never 500 on a flaky apiserver.
-pub async fn run(client: &kube::Client, ns: &str, spec_backend: &str) -> Vec<CheckResult> {
+pub async fn run(
+    client: &kube::Client,
+    ns: &str,
+    spec_backend: &str,
+    all_namespaces: bool,
+) -> Vec<CheckResult> {
     let api: Api<SelfSubjectAccessReview> = Api::all(client.clone());
     let mut results = Vec::new();
     for check in required(spec_backend) {
         let review = SelfSubjectAccessReview {
             spec: SelfSubjectAccessReviewSpec {
                 resource_attributes: Some(ResourceAttributes {
-                    namespace: Some(ns.to_string()),
+                    // Empty namespace = "in all namespaces": exactly what the
+                    // cluster-wide operator needs granted via ClusterRole.
+                    namespace: (!all_namespaces).then(|| ns.to_string()),
                     group: Some(check.group.to_string()),
                     resource: Some(check.resource.to_string()),
                     verb: Some(check.verb.to_string()),
