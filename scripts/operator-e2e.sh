@@ -207,8 +207,10 @@ $KUBECTL -n pglord delete pgc crdemo >/dev/null
 gone=""
 for _ in $(seq 1 120); do
   left_pvc=$($KUBECTL -n pglord get pvc --no-headers 2>/dev/null | grep -c 'crdemo-' || true)
-  left_cm=$($KUBECTL -n pglord get cm crdemo-spec --no-headers 2>/dev/null | wc -l | tr -d ' ')
-  left_sts=$($KUBECTL -n pglord get sts crdemo --no-headers 2>/dev/null | wc -l | tr -d ' ')
+  # get-by-name exits 1 on NotFound; under pipefail that would kill the
+  # script exactly when GC succeeds — the || true is what keeps us alive.
+  left_cm=$($KUBECTL -n pglord get cm crdemo-spec --no-headers 2>/dev/null | wc -l | tr -d ' ' || true)
+  left_sts=$($KUBECTL -n pglord get sts crdemo --no-headers 2>/dev/null | wc -l | tr -d ' ' || true)
   [ "$left_pvc" = "0" ] && [ "$left_cm" = "0" ] && [ "$left_sts" = "0" ] && gone=yes && break
   sleep 2
 done
