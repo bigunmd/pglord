@@ -88,6 +88,9 @@ hibernate-e2e: ## Minikube e2e: fence/unfence a standby, hibernate/wake with PVC
 operator-e2e: ## Minikube e2e: PostgresCluster CRD backend — kubectl + REST converge
 	./scripts/operator-e2e.sh
 
+multi-ns-e2e: ## Minikube e2e: cluster-wide operator, same-named clusters in two namespaces
+	./scripts/multi-ns-e2e.sh
+
 config-e2e: ## Minikube e2e: live settings, pending restart, rolling restart
 	./scripts/config-e2e.sh
 

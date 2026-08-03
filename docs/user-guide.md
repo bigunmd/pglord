@@ -789,6 +789,29 @@ Details worth knowing:
   will see it labeled `pglord.dev/internal`). It is machinery, not an API —
   hand edits are overwritten on the next pass.
 
+#### Cluster-wide operation (all namespaces)
+
+One operator can manage PostgresClusters in every namespace:
+
+```bash
+kubectl apply -f deploy/crds/
+kubectl apply -f deploy/k8s/                    # base install
+kubectl apply -f deploy/k8s/operator/rbac.yaml  # ClusterRole instead of the Role
+kubectl -n pglord set env deploy/pglord-server \
+  PGLORD_SPEC_BACKEND=crd PGLORD_ALL_NAMESPACES=true
+```
+
+(Helm: `--set config.specBackend=crd --set clusterWide=true`.)
+
+- The REST API becomes namespace-qualified:
+  `/api/v1/namespaces/{ns}/clusters/{name}`, with `GET /api/v1/clusters`
+  listing everything the operator manages. The old unqualified paths keep
+  working and refer to the operator's own namespace.
+- The UI grows a namespace switcher and a namespace column; the same cluster
+  name may exist in different namespaces.
+- Prometheus series carry a `namespace` label alongside `cluster` — update
+  dashboards that matched on `cluster` alone.
+
 ## 8. Delete a cluster
 
 **Clusters → trash icon → Delete.** This removes the instances, their persistent
