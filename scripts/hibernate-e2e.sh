@@ -123,7 +123,9 @@ for _ in $(seq 1 90); do
   sleep 2
 done
 [ "$pods" = "0" ] || { echo "FAIL: pods never reached 0 (have $pods)"; exit 1; }
-pvcs=$($KUBECTL -n pglord get pvc --no-headers 2>/dev/null | grep -c 'demo-' || echo 0)
+# grep -c prints the 0 itself (while exiting 1), so the fallback must add
+# no output of its own or the count comes out as "0\n0".
+pvcs=$($KUBECTL -n pglord get pvc --no-headers 2>/dev/null | grep -c 'demo-' || true)
 [ "$pvcs" -ge 2 ] || { echo "FAIL: expected >=2 PVCs retained, have $pvcs"; exit 1; }
 hib=$(detail | jsonq "d['hibernated']")
 [ "$hib" = "True" ] || { echo "FAIL: detail hibernated=$hib"; exit 1; }
@@ -176,7 +178,7 @@ echo "==> deleting cluster garbage-collects storage"
 curl -s -X DELETE "$API/api/v1/clusters/demo" >/dev/null
 gone=""
 for _ in $(seq 1 90); do
-  left=$($KUBECTL -n pglord get pvc --no-headers 2>/dev/null | grep -c 'demo-' || echo 0)
+  left=$($KUBECTL -n pglord get pvc --no-headers 2>/dev/null | grep -c 'demo-' || true)
   [ "$left" = "0" ] && gone=yes && break
   sleep 2
 done
