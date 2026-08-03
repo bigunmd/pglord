@@ -86,12 +86,14 @@ async fn main() -> anyhow::Result<()> {
             let preflight_ns = ns.clone();
             let preflight_backend = cfg.spec_backend.clone();
             let preflight_all_ns = cfg.all_namespaces;
+            let preflight_auth_k8s = cfg.auth_kubernetes;
             tokio::spawn(async move {
                 let results = pglord_server::preflight::run(
                     &preflight_client,
                     &preflight_ns,
                     &preflight_backend,
                     preflight_all_ns,
+                    preflight_auth_k8s,
                 )
                 .await;
                 let (ok, missing) = pglord_server::preflight::summarize(&results);
@@ -131,6 +133,7 @@ async fn main() -> anyhow::Result<()> {
                 default_agent_image: cfg.default_agent_image.clone(),
                 spec_backend: cfg.spec_backend.clone(),
                 all_namespaces: cfg.all_namespaces,
+                auth_kubernetes: cfg.auth_kubernetes,
                 metrics: metrics.clone(),
             };
             tokio::spawn(pglord_server::backup_scheduler::run(ops.clone()));

@@ -81,6 +81,10 @@ auth:
     clientId: ""
     # Expected `aud` claim; defaults to clientId when empty.
     audience: ""
+  # Kubernetes-native auth: accept kubectl-created tokens, authenticated via
+  # TokenReview and authorized via RBAC on pglord.dev/postgresclusters.
+  # Renders a system:auth-delegator ClusterRoleBinding for the server SA.
+  kubernetes: false
 
 config:
   # tracing-subscriber directive, e.g. "info" or "pglord_server=debug,info".

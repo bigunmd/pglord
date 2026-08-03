@@ -27,7 +27,7 @@ pub struct CheckResult {
 }
 
 /// Everything pglord needs in its own namespace to manage clusters.
-pub fn required(spec_backend: &str) -> Vec<PermissionCheck> {
+pub fn required(spec_backend: &str, auth_kubernetes: bool) -> Vec<PermissionCheck> {
     const WRITE: [&str; 5] = ["get", "list", "create", "patch", "delete"];
     let mut out = Vec::new();
     for resource in ["configmaps", "secrets", "services", "serviceaccounts"] {
@@ -87,6 +87,21 @@ pub fn required(spec_backend: &str) -> Vec<PermissionCheck> {
             });
         }
     }
+    // Kubernetes-native auth delegates token validation and authorization to
+    // the apiserver; both are cluster-scoped create-only verbs
+    // (system:auth-delegator grants exactly these).
+    if auth_kubernetes {
+        out.push(PermissionCheck {
+            group: "authentication.k8s.io",
+            resource: "tokenreviews",
+            verb: "create",
+        });
+        out.push(PermissionCheck {
+            group: "authorization.k8s.io",
+            resource: "subjectaccessreviews",
+            verb: "create",
+        });
+    }
     // Per-cluster instance RBAC lets agents read their own primary record.
     for resource in ["roles", "rolebindings"] {
         for verb in ["get", "create", "patch"] {
@@ -107,10 +122,11 @@ pub async fn run(
     ns: &str,
     spec_backend: &str,
     all_namespaces: bool,
+    auth_kubernetes: bool,
 ) -> Vec<CheckResult> {
     let api: Api<SelfSubjectAccessReview> = Api::all(client.clone());
     let mut results = Vec::new();
-    for check in required(spec_backend) {
+    for check in required(spec_backend, auth_kubernetes) {
         let review = SelfSubjectAccessReview {
             spec: SelfSubjectAccessReviewSpec {
                 resource_attributes: Some(ResourceAttributes {
@@ -173,7 +189,7 @@ mod tests {
 
     #[test]
     fn required_checks_cover_managed_resources_without_duplicates() {
-        let checks = required("configmap");
+        let checks = required("configmap", false);
         assert!(!checks.is_empty());
         for resource in [
             "configmaps",
@@ -215,8 +231,17 @@ mod tests {
     }
 
     #[test]
+    fn kubernetes_auth_adds_review_checks() {
+        let on = required("configmap", true);
+        assert!(on.iter().any(|c| c.resource == "tokenreviews"));
+        assert!(on.iter().any(|c| c.resource == "subjectaccessreviews"));
+        let off = required("configmap", false);
+        assert!(off.iter().all(|c| !c.resource.ends_with("reviews")));
+    }
+
+    #[test]
     fn crd_backend_adds_postgrescluster_checks_and_configmap_mode_omits_them() {
-        let crd = required("crd");
+        let crd = required("crd", false);
         assert!(
             crd.iter()
                 .any(|c| c.group == "pglord.dev" && c.resource == "postgresclusters")
@@ -225,7 +250,7 @@ mod tests {
             crd.iter()
                 .any(|c| c.resource == "postgresclusters/status" && c.verb == "patch")
         );
-        let standalone = required("configmap");
+        let standalone = required("configmap", false);
         assert!(standalone.iter().all(|c| c.group != "pglord.dev"));
     }
 

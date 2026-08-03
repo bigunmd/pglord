@@ -58,6 +58,8 @@ spec:
               value: {{ .Values.config.specBackend | quote }}
             - name: PGLORD_ALL_NAMESPACES
               value: {{ .Values.clusterWide | quote }}
+            - name: PGLORD_AUTH_KUBERNETES
+              value: {{ .Values.auth.kubernetes | quote }}
             {{- if or .Values.auth.tokens.existingSecret .Values.auth.tokens.value }}
             - name: PGLORD_AUTH_TOKENS
               valueFrom:

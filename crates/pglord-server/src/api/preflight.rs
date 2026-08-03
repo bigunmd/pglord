@@ -46,7 +46,14 @@ pub async fn get_preflight(
         ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "kube_unavailable")
             .with_detail("No Kubernetes environment available; permissions cannot be checked.")
     })?;
-    let results = preflight::run(&ops.kube, &ops.ns, &ops.spec_backend, ops.all_namespaces).await;
+    let results = preflight::run(
+        &ops.kube,
+        &ops.ns,
+        &ops.spec_backend,
+        ops.all_namespaces,
+        ops.auth_kubernetes,
+    )
+    .await;
     let (ok, missing) = preflight::summarize(&results);
     Ok(Json(PreflightReport {
         namespace: ops.ns.clone(),

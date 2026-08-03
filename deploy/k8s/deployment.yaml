@@ -31,6 +31,10 @@ spec:
             # (operator mode — install deploy/crds/ and uncomment the
             # pglord.dev rules in rbac.yaml first).
             - { name: PGLORD_SPEC_BACKEND, value: "configmap" }
+            # Kubernetes-native auth: accept kubectl-created tokens, authorize
+            # via RBAC on pglord.dev/postgresclusters. Needs the
+            # auth-delegator binding from deploy/k8s/operator/rbac.yaml.
+            # - { name: PGLORD_AUTH_KUBERNETES, value: "true" }
             # --- API authentication (off by default on the dev stand) ---
             # Static bearer tokens, comma-separated, from a Secret you manage:
             #   kubectl -n pglord create secret generic pglord-auth --from-literal=tokens=<token>

@@ -40,6 +40,8 @@ pub struct ClusterOps {
     pub spec_backend: String,
     /// Operator mode: loops that receive ClusterOps watch every namespace.
     pub all_namespaces: bool,
+    /// Kubernetes-native auth is on (preflight reports the review verbs).
+    pub auth_kubernetes: bool,
     pub metrics: crate::metrics::Metrics,
 }
 
