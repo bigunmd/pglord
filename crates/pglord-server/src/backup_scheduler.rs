@@ -66,6 +66,9 @@ pub async fn run(ops: ClusterOps) {
                 .as_deref()
                 .filter(|s| !s.trim().is_empty())
                 .filter(|_| spec.backup.enabled)
+                // Asleep clusters take no backups; is_due's catch-up rule
+                // produces exactly one scheduled run after wake.
+                .filter(|_| !spec.hibernated)
             else {
                 continue;
             };

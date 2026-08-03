@@ -416,6 +416,13 @@ async fn apply_pooler(
         .patch(&pool_service_name(&spec.name), &pp, &Patch::Apply(&service))
         .await?;
 
+    // Hibernated: the objects above are applied (the Deployment renders zero
+    // replicas) but there is no primary to ensure the auth role on, and a
+    // warning every pass would just be noise.
+    if spec.hibernated {
+        return Ok(());
+    }
+
     // Level-triggered: refused (standby, booting) or unreachable just means
     // the next pass retries — after create, enable, failover and restore
     // alike. Clients fail auth through the pool until this lands once.
@@ -455,6 +462,11 @@ async fn apply_provisioning(
     primary_pod: &str,
 ) -> anyhow::Result<()> {
     if spec.roles.is_empty() && spec.databases.is_empty() {
+        return Ok(());
+    }
+    // No primary to converge on while hibernated; the next pass after wake
+    // picks it up.
+    if spec.hibernated {
         return Ok(());
     }
     let secrets: Api<Secret> = Api::namespaced(client.clone(), ns);

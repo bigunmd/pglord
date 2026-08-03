@@ -424,13 +424,19 @@ mod tests {
             serde_json::json!({ "name": "demo", "replicas": 2, "fenced": ["other-1"] }),
         )
         .expect("deserialize");
-        assert_eq!(s.validate(), Err(SpecError::InvalidFenced("other-1".into())));
+        assert_eq!(
+            s.validate(),
+            Err(SpecError::InvalidFenced("other-1".into()))
+        );
         // Exact-name match: leading zeros must not alias a real ordinal.
         let s: ClusterSpec = serde_json::from_value(
             serde_json::json!({ "name": "demo", "replicas": 2, "fenced": ["demo-01"] }),
         )
         .expect("deserialize");
-        assert_eq!(s.validate(), Err(SpecError::InvalidFenced("demo-01".into())));
+        assert_eq!(
+            s.validate(),
+            Err(SpecError::InvalidFenced("demo-01".into()))
+        );
     }
 
     #[test]
@@ -439,7 +445,10 @@ mod tests {
             serde_json::json!({ "name": "demo", "replicas": 2, "fenced": ["demo-1", "demo-1"] }),
         )
         .expect("deserialize");
-        assert_eq!(s.validate(), Err(SpecError::DuplicateFenced("demo-1".into())));
+        assert_eq!(
+            s.validate(),
+            Err(SpecError::DuplicateFenced("demo-1".into()))
+        );
         let s: ClusterSpec = serde_json::from_value(serde_json::json!({
             "name": "demo", "replicas": 2, "hibernated": true, "fenced": ["demo-1"]
         }))

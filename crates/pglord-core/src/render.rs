@@ -855,8 +855,11 @@ mod tests {
             "name": "demo", "replicas": 2, "hibernated": true, "fenced": ["demo-1"]
         }))
         .expect("spec");
-        let template =
-            |s: &ClusterSpec| render_statefulset(s, "pglord", &owner).spec.map(|x| x.template);
+        let template = |s: &ClusterSpec| {
+            render_statefulset(s, "pglord", &owner)
+                .spec
+                .map(|x| x.template)
+        };
         assert_eq!(template(&awake), template(&asleep));
     }
 

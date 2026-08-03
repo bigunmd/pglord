@@ -78,6 +78,18 @@ pub async fn run(client: kube::Client, ns: String, metrics: crate::metrics::Metr
                 .sync_degraded
                 .with_label_values(&[spec.name.as_str()])
                 .set(i64::from(degraded));
+            metrics
+                .hibernated
+                .with_label_values(&[spec.name.as_str()])
+                .set(i64::from(spec.hibernated));
+
+            // A hibernated cluster has zero instances on purpose: no failure
+            // counting, no election. Resetting the counter keeps a stale
+            // count from firing a failover mid-wake.
+            if spec.hibernated {
+                failures.insert(spec.name.clone(), 0);
+                continue;
+            }
 
             let primary_ok = observations
                 .iter()
@@ -96,8 +108,11 @@ pub async fn run(client: kube::Client, ns: String, metrics: crate::metrics::Metr
                 continue;
             }
 
+            // Fenced pods are held down on purpose; even if one answers ready
+            // during its stop window it must never be promoted.
             let flat: Vec<_> = observations
                 .iter()
+                .filter(|o| !spec.fenced.contains(&o.pod))
                 .map(|o| (o.pod.clone(), o.ready, o.in_recovery, o.lsn.clone()))
                 .collect();
             let Some(candidate) = elect_candidate(&flat) else {
@@ -155,6 +170,24 @@ mod tests {
             ("demo-2".into(), true, Some(true), Some("0/5000A00".into())),
         ];
         assert_eq!(elect_candidate(&obs).as_deref(), Some("demo-2"));
+    }
+
+    #[test]
+    fn fenced_or_unready_pods_are_never_elected() {
+        // A fenced pod reports ready=false, in_recovery=None — it must not
+        // win, and a cluster with only fenced standbys has no candidate.
+        let obs = vec![
+            ("demo-1".to_string(), false, None, None),
+            (
+                "demo-2".to_string(),
+                true,
+                Some(true),
+                Some("0/5000".to_string()),
+            ),
+        ];
+        assert_eq!(elect_candidate(&obs).as_deref(), Some("demo-2"));
+        let only_fenced = vec![("demo-1".to_string(), false, None, None)];
+        assert_eq!(elect_candidate(&only_fenced), None);
     }
 
     #[test]
