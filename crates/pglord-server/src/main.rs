@@ -12,6 +12,12 @@ use tokio::sync::Notify;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cfg = Config::load()?;
+    if cfg.all_namespaces && cfg.spec_backend != "crd" {
+        anyhow::bail!(
+            "PGLORD_ALL_NAMESPACES=true requires PGLORD_SPEC_BACKEND=crd; \
+             the configmap backend is single-namespace by design"
+        );
+    }
 
     // Early exit: emit the OpenAPI artifact without touching the network.
     if std::env::args().any(|a| a == "--dump-openapi") {

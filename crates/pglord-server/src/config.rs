@@ -45,6 +45,11 @@ pub struct Config {
     /// (operator mode: PostgresCluster resources are the truth).
     #[serde(default = "default_spec_backend")]
     pub spec_backend: String,
+    /// Operator mode only: watch and manage PostgresClusters in every
+    /// namespace (needs ClusterRole RBAC). Invalid with the configmap
+    /// backend — the server refuses to start.
+    #[serde(default)]
+    pub all_namespaces: bool,
 }
 
 fn default_spec_backend() -> String {
@@ -134,6 +139,7 @@ impl Config {
             auth_oidc_client_id: String::new(),
             auth_oidc_audience: String::new(),
             spec_backend: default_spec_backend(),
+            all_namespaces: false,
         }
     }
 }
@@ -152,6 +158,18 @@ mod tests {
             assert_eq!(cfg.log_level, "info");
             assert_eq!(cfg.shutdown_timeout().as_secs(), 25);
             assert!(cfg.cors_origins().is_empty());
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn all_namespaces_parses_from_env() {
+        figment::Jail::expect_with(|jail| {
+            jail.set_env("PGLORD_SPEC_BACKEND", "crd");
+            jail.set_env("PGLORD_ALL_NAMESPACES", "true");
+            let cfg = Config::load().expect("load");
+            assert!(cfg.all_namespaces);
+            assert_eq!(cfg.spec_backend, "crd");
             Ok(())
         });
     }
