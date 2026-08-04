@@ -5,6 +5,7 @@ import { TranslocoModule } from '@jsverse/transloco';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   lucideArrowLeft,
+  lucideArrowUp,
   lucideBan,
   lucideCrown,
   lucideLock,
@@ -36,6 +37,12 @@ import { HlmLabel } from '@spartan-ng/helm/label';
 import { HlmTableImports } from '@spartan-ng/helm/table';
 import { firstValueFrom } from 'rxjs';
 
+import {
+  UpgradeConfirmDialogComponent,
+  UpgradeStartDialogComponent,
+  type UpgradeConfirmKind,
+} from './cluster-upgrade-dialog.component';
+
 import { Api } from '../../api/api';
 import { ClusterDetail } from '../../api/models/cluster-detail';
 import { SpecChange } from '../../api/models/spec-change';
@@ -50,6 +57,11 @@ import { fenceInstance } from '../../api/fn/clusters/fence-instance';
 import { unfenceInstance } from '../../api/fn/clusters/unfence-instance';
 import { rotateCredentials } from '../../api/fn/clusters/rotate-credentials';
 import { switchover } from '../../api/fn/clusters/switchover';
+import { startUpgrade } from '../../api/fn/clusters/start-upgrade';
+import { cutoverUpgrade } from '../../api/fn/clusters/cutover-upgrade';
+import { rollbackUpgrade } from '../../api/fn/clusters/rollback-upgrade';
+import { abortUpgrade } from '../../api/fn/clusters/abort-upgrade';
+import { finalizeUpgrade } from '../../api/fn/clusters/finalize-upgrade';
 import { WorkloadSpec } from '../../api/models/workload-spec';
 import { BackupSpec } from '../../api/models/backup-spec';
 import { BackupList } from '../../api/models/backup-list';
@@ -314,6 +326,7 @@ export class ImageDialogComponent {
   providers: [
     provideIcons({
       lucideArrowLeft,
+  lucideArrowUp,
       lucideBan,
       lucideCrown,
       lucideLock,
@@ -835,6 +848,104 @@ export class ImageDialogComponent {
                 }
               </tbody>
             </table>
+          </div>
+        }
+
+        <!-- Major version upgrade -->
+        <div class="mt-6 flex items-center justify-between">
+          <h2 class="font-medium">{{ 'upgrade.title' | transloco }}</h2>
+          @if (!d.upgrade) {
+            <button
+              hlmBtn
+              variant="outline"
+              size="sm"
+              data-testid="open-upgrade"
+              [disabled]="busy() || d.hibernated"
+              (click)="openUpgrade(d)"
+            >
+              <ng-icon name="lucideArrowUp" size="14" />
+              {{ 'upgrade.start' | transloco }}
+            </button>
+          }
+        </div>
+
+        @if (d.upgrade; as u) {
+          <div class="border-border mt-2 rounded-lg border p-3 text-sm" data-testid="upgrade-card">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="font-medium">
+                {{ (u.phase === 'soaking' ? 'upgrade.soaking' : 'upgrade.migrating') | transloco }}
+              </span>
+              <span class="text-muted-foreground font-mono text-xs">{{ u.target_image }}</span>
+              @if (u.phase === 'migrating') {
+                <span
+                  class="text-muted-foreground text-xs"
+                  data-testid="upgrade-readiness"
+                >
+                  {{ (u.ready_to_cutover ? 'upgrade.ready' : 'upgrade.notReady') | transloco }}
+                </span>
+              }
+            </div>
+
+            @if (u.error) {
+              <p class="text-warning mt-2 text-xs" data-testid="upgrade-error">{{ u.error }}</p>
+            }
+
+            @for (db of u.databases; track db.name) {
+              <p class="text-muted-foreground mt-1 text-xs" [attr.data-testid]="'upgrade-db-' + db.name">
+                <span class="font-mono">{{ db.name }}</span>
+                —
+                {{ 'upgrade.tables' | transloco: { ready: db.tables_ready, total: db.tables_total } }}
+              </p>
+            }
+            @if (u.lag_bytes !== null && u.lag_bytes !== undefined) {
+              <p class="text-muted-foreground mt-1 text-xs" data-testid="upgrade-lag">
+                {{ 'upgrade.lag' | transloco }}: {{ u.lag_bytes }} B
+              </p>
+            }
+
+            <div class="mt-3 flex flex-wrap gap-2">
+              @if (u.phase === 'migrating') {
+                <button
+                  hlmBtn
+                  size="sm"
+                  data-testid="upgrade-cutover"
+                  [disabled]="busy() || !u.ready_to_cutover"
+                  (click)="confirmUpgrade('cutover')"
+                >
+                  {{ 'upgrade.cutover' | transloco }}
+                </button>
+                <button
+                  hlmBtn
+                  variant="ghost"
+                  size="sm"
+                  data-testid="upgrade-abort"
+                  [disabled]="busy()"
+                  (click)="confirmUpgrade('abort')"
+                >
+                  {{ 'upgrade.abort' | transloco }}
+                </button>
+              } @else {
+                <button
+                  hlmBtn
+                  size="sm"
+                  data-testid="upgrade-finalize"
+                  [disabled]="busy()"
+                  (click)="confirmUpgrade('finalize')"
+                >
+                  {{ 'upgrade.finalize' | transloco }}
+                </button>
+                <button
+                  hlmBtn
+                  variant="ghost"
+                  size="sm"
+                  data-testid="upgrade-rollback"
+                  [disabled]="busy()"
+                  (click)="confirmUpgrade('rollback')"
+                >
+                  {{ 'upgrade.rollback' | transloco }}
+                </button>
+              }
+            </div>
           </div>
         }
 
@@ -1404,6 +1515,48 @@ export class ClusterDetailComponent implements OnDestroy {
       return;
     }
     await this.run(() => this.api.invoke(patchCluster, { ns: this.ns(), name: this.name(), body: change }));
+  }
+
+  async openUpgrade(d: ClusterDetail): Promise<void> {
+    const image = await firstValueFrom(
+      this.dialog.open<string | undefined>(UpgradeStartDialogComponent, {
+        context: { name: d.name },
+        contentClass: FORM_DIALOG_CLASS,
+      }).closed$,
+    );
+    if (!image) {
+      return;
+    }
+    await this.run(() =>
+      this.api.invoke(startUpgrade, {
+        ns: this.ns(),
+        name: this.name(),
+        body: { target_image: image },
+      }),
+    );
+  }
+
+  /** Every step past "start" is irreversible in some way, so each one is
+   * confirmed with copy that names what it costs. */
+  async confirmUpgrade(kind: UpgradeConfirmKind): Promise<void> {
+    const confirmed = await firstValueFrom(
+      this.dialog.open<boolean>(UpgradeConfirmDialogComponent, {
+        context: { name: this.name(), kind },
+        contentClass: FORM_DIALOG_CLASS,
+      }).closed$,
+    );
+    if (!confirmed) {
+      return;
+    }
+    const operation = {
+      cutover: cutoverUpgrade,
+      rollback: rollbackUpgrade,
+      finalize: finalizeUpgrade,
+      abort: abortUpgrade,
+    }[kind];
+    await this.run(() =>
+      this.api.invoke(operation, { ns: this.ns(), name: this.name() }),
+    );
   }
 
   async openImage(d: ClusterDetail): Promise<void> {

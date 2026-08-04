@@ -395,5 +395,30 @@
     "fenceWarning": "PostgreSQL stops on this instance and stays down until it is unfenced. The pod keeps running so the disk can be inspected. The rest of the cluster continues to serve.",
     "unfence": "Unfence",
     "namespace": "Namespace"
+  },
+  "upgrade": {
+    "title": "Major version upgrade",
+    "start": "Start upgrade",
+    "startTitle": "Upgrade {{name}} to a new major version?",
+    "targetImage": "Target image",
+    "startWarning": "A second set of instances is created on the new version and kept in sync by logical replication. Applications keep using the cluster as usual until you cut over. Do not run schema changes (DDL) until the upgrade is finished.",
+    "migrating": "Copying to the new version",
+    "soaking": "Cut over — previous instances kept on standby",
+    "ready": "Ready to cut over",
+    "notReady": "Copying…",
+    "tables": "{{ready}}/{{total}} tables copied",
+    "lag": "Replication lag",
+    "cutover": "Cut over",
+    "cutoverTitle": "Cut over {{name}} now?",
+    "cutoverWarning": "Writes are rejected for a few seconds while the last changes drain and sequences are synchronised. Take a final backup first if you need one — point-in-time recovery cannot cross a major version upgrade.",
+    "rollback": "Roll back",
+    "rollbackTitle": "Roll back {{name}} to the previous version?",
+    "rollbackWarning": "Every write made on the new version since the cutover is abandoned. The previous instances resume from exactly where they were frozen.",
+    "finalize": "Finalize",
+    "finalizeTitle": "Finalize the upgrade of {{name}}?",
+    "finalizeWarning": "The previous instances and their volumes are deleted. After this there is no way back.",
+    "abort": "Abort",
+    "abortTitle": "Abort the upgrade of {{name}}?",
+    "abortWarning": "The new instances and their volumes are deleted. The running cluster is untouched."
   }
 }
