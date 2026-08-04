@@ -97,7 +97,7 @@ pub async fn list_backups(
         .primary(&ns, &name)
         .await
         .map_err(ApiError::internal)?
-        .unwrap_or_else(|| format!("{name}-0"));
+        .unwrap_or_else(|| spec.instance_name(0));
     let url = format!(
         "http://{}:{}/backups",
         pod_fqdn(&primary, &spec.name, &ns),
@@ -200,7 +200,7 @@ pub async fn start_backup(
         .store
         .primary(ns, &name)
         .await?
-        .unwrap_or_else(|| format!("{name}-0"));
+        .unwrap_or_else(|| spec.instance_name(0));
     let started = now_seconds();
     let id = format!("{started}-{}", kind.as_str());
 

@@ -139,7 +139,7 @@ async fn sync_all(
             tracing::warn!(cluster = %spec.name, %err, "skipping invalid spec");
             continue;
         }
-        let primary_pod = recorded_primary(cm, &spec.name);
+        let primary_pod = recorded_primary(cm, &spec.instance_name(0));
         if let Err(err) = apply_cluster(client, http, &item_ns, &spec, &owner, &primary_pod).await {
             metrics
                 .reconcile_total
@@ -162,8 +162,10 @@ async fn sync_all(
 }
 
 /// PVC name a StatefulSet gives instance `ordinal` for the `data` template.
-pub fn pvc_name(cluster: &str, ordinal: u8) -> String {
-    format!("data-{cluster}-{ordinal}")
+/// `sts` is the StatefulSet's name, which carries the generation suffix after
+/// a major upgrade (`ClusterSpec::sts_name`).
+pub fn pvc_name(sts: &str, ordinal: u8) -> String {
+    format!("data-{sts}-{ordinal}")
 }
 
 /// Grow every instance's PVC. StatefulSet volumeClaimTemplates are immutable,
@@ -172,7 +174,7 @@ pub fn pvc_name(cluster: &str, ordinal: u8) -> String {
 pub async fn expand_pvcs(
     client: &kube::Client,
     ns: &str,
-    cluster: &str,
+    sts: &str,
     replicas: u8,
     storage_size: &str,
 ) -> anyhow::Result<()> {
@@ -182,7 +184,7 @@ pub async fn expand_pvcs(
         "spec": { "resources": { "requests": { "storage": storage_size } } }
     });
     for ordinal in 0..replicas {
-        let name = pvc_name(cluster, ordinal);
+        let name = pvc_name(sts, ordinal);
         if api.get_opt(&name).await?.is_none() {
             continue; // not created yet; the template covers it
         }
@@ -198,14 +200,14 @@ pub async fn expand_pvcs(
 pub async fn delete_orphan_pvcs(
     client: &kube::Client,
     ns: &str,
-    cluster: &str,
+    sts: &str,
     from_ordinal: u8,
     to_ordinal: u8,
 ) {
     use k8s_openapi::api::core::v1::PersistentVolumeClaim;
     let api: Api<PersistentVolumeClaim> = Api::namespaced(client.clone(), ns);
     for ordinal in from_ordinal..to_ordinal {
-        let name = pvc_name(cluster, ordinal);
+        let name = pvc_name(sts, ordinal);
         match api.delete(&name, &Default::default()).await {
             Ok(_) => tracing::info!(pvc = %name, "deleted PVC of removed instance"),
             Err(kube::Error::Api(e)) if e.code == 404 => {}
@@ -581,7 +583,8 @@ pub async fn apply_cluster(
     let (sts, headless, rw) = desired_objects(spec, ns, owner, primary_pod);
 
     let sts_api: Api<StatefulSet> = Api::namespaced(client.clone(), ns);
-    let live = sts_api.get_opt(&spec.name).await?;
+    let sts_name = spec.sts_name();
+    let live = sts_api.get_opt(&sts_name).await?;
     if let Some(live) = &live
         && needs_recreate(sts_storage_request(live).as_deref(), &spec.storage_size)
     {
@@ -598,7 +601,7 @@ pub async fn apply_cluster(
         );
         sts_api
             .delete(
-                &spec.name,
+                &sts_name,
                 &kube::api::DeleteParams {
                     propagation_policy: Some(kube::api::PropagationPolicy::Orphan),
                     ..Default::default()
@@ -607,13 +610,13 @@ pub async fn apply_cluster(
             .await?;
         // Recreating before the delete completes fails with AlreadyExists.
         for _ in 0..50u32 {
-            if sts_api.get_opt(&spec.name).await?.is_none() {
+            if sts_api.get_opt(&sts_name).await?.is_none() {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
     }
-    sts_api.patch(&spec.name, &pp, &Patch::Apply(&sts)).await?;
+    sts_api.patch(&sts_name, &pp, &Patch::Apply(&sts)).await?;
 
     let svc_api: Api<Service> = Api::namespaced(client.clone(), ns);
     for svc in [headless, rw] {

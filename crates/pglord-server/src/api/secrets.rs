@@ -200,7 +200,7 @@ pub async fn rotate_credentials(
         .primary(&ns, &name)
         .await
         .map_err(ApiError::internal)?
-        .unwrap_or_else(|| format!("{name}-0"));
+        .unwrap_or_else(|| spec.instance_name(0));
 
     let ops = ops.clone();
     let rot_ns = ns.clone();
@@ -309,7 +309,7 @@ async fn run_rotation(
         tracing::info!(cluster = %spec.name, %primary, "rotation: pooler role altered on primary");
     }
 
-    let order = crate::api::clusters::roll_order(&spec.name, spec.replicas, primary);
+    let order = crate::api::clusters::roll_order(&spec.sts_name(), spec.replicas, primary);
     crate::api::clusters::roll_pods(ops, ns, spec, order).await;
     Ok(())
 }

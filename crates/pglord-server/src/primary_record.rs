@@ -7,15 +7,16 @@ use kube::api::{Api, Patch, PatchParams};
 
 pub use pglord_core::PRIMARY_ANNOTATION;
 
-/// The recorded primary pod name; absent annotation = the bootstrap default
-/// `<cluster>-0`.
-pub fn recorded_primary(cm: &ConfigMap, cluster: &str) -> String {
+/// The recorded primary pod name; absent annotation = `default_pod`, which
+/// callers derive from the spec (`ClusterSpec::instance_name(0)`) so a
+/// generation-suffixed cluster bootstraps onto its own ordinal zero.
+pub fn recorded_primary(cm: &ConfigMap, default_pod: &str) -> String {
     cm.metadata
         .annotations
         .as_ref()
         .and_then(|a| a.get(PRIMARY_ANNOTATION))
         .cloned()
-        .unwrap_or_else(|| format!("{cluster}-0"))
+        .unwrap_or_else(|| default_pod.to_string())
 }
 
 /// Compare-and-swap the primary record. `expected_rv` must be the
@@ -66,8 +67,11 @@ mod tests {
 
     #[test]
     fn absent_annotation_defaults_to_ordinal_zero() {
-        assert_eq!(recorded_primary(&cm_with(None), "demo"), "demo-0");
-        assert_eq!(recorded_primary(&cm_with(Some("demo-2")), "demo"), "demo-2");
+        assert_eq!(recorded_primary(&cm_with(None), "demo-0"), "demo-0");
+        assert_eq!(
+            recorded_primary(&cm_with(Some("demo-2")), "demo-0"),
+            "demo-2"
+        );
     }
 
     #[test]
@@ -107,10 +111,10 @@ mod tests {
             ]
             .into(),
         );
-        assert_eq!(recorded_primary(&cm, "demo"), "demo-0");
+        assert_eq!(recorded_primary(&cm, "demo-0"), "demo-0");
 
         // Empty annotation map behaves like no annotations at all.
         cm.metadata.annotations = Some(Default::default());
-        assert_eq!(recorded_primary(&cm, "demo"), "demo-0");
+        assert_eq!(recorded_primary(&cm, "demo-0"), "demo-0");
     }
 }

@@ -181,12 +181,12 @@ impl SpecStore for ConfigMapSpecStore {
 
     async fn primary(&self, ns: &str, name: &str) -> anyhow::Result<Option<String>> {
         Ok(self.api(ns).get_opt(&spec_cm_name(name)).await?.map(|cm| {
-            cm.metadata
-                .annotations
-                .as_ref()
-                .and_then(|a| a.get(pglord_core::PRIMARY_ANNOTATION))
-                .cloned()
-                .unwrap_or_else(|| format!("{name}-0"))
+            // The bootstrap default is the *spec's* ordinal zero: after a
+            // major upgrade that is "<name>-g2-0", not "<name>-0".
+            let default_pod = configmap_to_spec(&cm)
+                .map(|(s, _)| s.instance_name(0))
+                .unwrap_or_else(|_| format!("{name}-0"));
+            crate::primary_record::recorded_primary(&cm, &default_pod)
         }))
     }
 }

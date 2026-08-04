@@ -72,8 +72,8 @@ pub async fn run(
             // Cluster-wide watches carry items from many namespaces; every
             // probe, CAS and apply targets the item's own.
             let item_ns = cm.metadata.namespace.clone().unwrap_or_else(|| ns.clone());
-            let primary = recorded_primary(cm, &spec.name);
-            let observations = observe_cluster(&http, &spec.name, &item_ns, spec.replicas).await;
+            let primary = recorded_primary(cm, &spec.instance_name(0));
+            let observations = observe_cluster(&http, &spec, &item_ns).await;
             metrics
                 .instances
                 .with_label_values(&[item_ns.as_str(), spec.name.as_str()])

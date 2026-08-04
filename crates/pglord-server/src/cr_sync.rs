@@ -172,13 +172,13 @@ async fn observe_status(
     mirror: &ConfigMap,
 ) -> PostgresClusterStatus {
     let stss: Api<StatefulSet> = Api::namespaced(client.clone(), ns);
-    let ready = match stss.get_opt(&spec.name).await {
+    let ready = match stss.get_opt(&spec.sts_name()).await {
         Ok(Some(sts)) => sts.status.and_then(|s| s.ready_replicas).unwrap_or(0),
         _ => 0,
     };
     PostgresClusterStatus {
         ready_replicas: ready,
-        primary: recorded_primary(mirror, &spec.name),
+        primary: recorded_primary(mirror, &spec.instance_name(0)),
         hibernated: spec.hibernated,
         phase: phase_for(spec, ready, false).to_string(),
         message: String::new(),

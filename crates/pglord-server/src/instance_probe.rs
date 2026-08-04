@@ -32,18 +32,20 @@ pub struct InstanceObservation {
     pub ssl: Option<bool>,
 }
 
+/// Observe every instance of the spec's *own* generation. During a major
+/// upgrade the green set is observed separately, through its own spec view —
+/// mixing the two here would let a green pod's readiness mask a blue outage.
 pub async fn observe_cluster(
     http: &reqwest::Client,
-    cluster: &str,
+    spec: &pglord_core::spec::ClusterSpec,
     ns: &str,
-    replicas: u8,
 ) -> Vec<InstanceObservation> {
-    let mut out = Vec::with_capacity(replicas as usize);
-    for i in 0..replicas {
-        let pod = format!("{cluster}-{i}");
+    let mut out = Vec::with_capacity(spec.replicas as usize);
+    for i in 0..spec.replicas {
+        let pod = spec.instance_name(i);
         let url = format!(
             "http://{}:{}/status",
-            pod_fqdn(&pod, cluster, ns),
+            pod_fqdn(&pod, &spec.name, ns),
             AGENT_HTTP_PORT
         );
         let status = match http.get(&url).send().await {

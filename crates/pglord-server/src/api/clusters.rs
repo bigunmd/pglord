@@ -142,6 +142,16 @@ mod tests {
     }
 
     #[test]
+    fn roll_order_uses_the_statefulset_prefix_not_the_cluster_name() {
+        // After a major upgrade the instances live in "<cluster>-g2"; rolling
+        // by cluster name would delete pods that no longer exist.
+        assert_eq!(
+            roll_order("demo-g2", 3, "demo-g2-1"),
+            vec!["demo-g2-0", "demo-g2-2", "demo-g2-1"]
+        );
+    }
+
+    #[test]
     fn template_diff_spots_pod_changes_and_ignores_the_rest() {
         let base: pglord_core::spec::ClusterSpec =
             serde_json::from_value(serde_json::json!({ "name": "demo" })).expect("spec");
@@ -181,7 +191,7 @@ fn ops(state: &Option<ClusterOps>) -> Result<&ClusterOps, ApiError> {
 
 async fn summarize(ops: &ClusterOps, ns: &str, spec: ClusterSpec) -> ClusterSummary {
     let sts_api: Api<StatefulSet> = Api::namespaced(ops.kube.clone(), ns);
-    let ready = match sts_api.get_opt(&spec.name).await {
+    let ready = match sts_api.get_opt(&spec.sts_name()).await {
         Ok(Some(sts)) => sts.status.and_then(|s| s.ready_replicas).unwrap_or(0),
         _ => 0,
     };
@@ -325,9 +335,8 @@ pub async fn get_cluster(
         .primary(&ns, &name)
         .await
         .map_err(ApiError::internal)?
-        .unwrap_or_else(|| format!("{name}-0"));
-    let observations =
-        crate::instance_probe::observe_cluster(&ops.http, &spec.name, &ns, spec.replicas).await;
+        .unwrap_or_else(|| spec.instance_name(0));
+    let observations = crate::instance_probe::observe_cluster(&ops.http, &spec, &ns).await;
     let ready_replicas = observations.iter().filter(|o| o.ready).count() as i32;
     let pending_restart = observations.iter().any(|o| o.pending_restart);
     let sync_degraded = spec.synchronous
@@ -491,7 +500,7 @@ pub async fn patch_cluster(
         crate::reconciler::expand_pvcs(
             &ops.kube,
             &ns,
-            &next.name,
+            &next.sts_name(),
             current.replicas,
             &next.storage_size,
         )
@@ -513,7 +522,7 @@ pub async fn patch_cluster(
         crate::reconciler::delete_orphan_pvcs(
             &ops.kube,
             &ns,
-            &next.name,
+            &next.sts_name(),
             next.replicas,
             current.replicas,
         )
@@ -526,7 +535,7 @@ pub async fn patch_cluster(
             .primary(&ns, &name)
             .await
             .map_err(ApiError::internal)?
-            .unwrap_or_else(|| format!("{name}-0"));
+            .unwrap_or_else(|| next.instance_name(0));
         // The StatefulSet must carry the new template before any pod dies, or
         // a deleted pod would come back on the old one. Same field manager as
         // the reconciler, so the level-triggered loop stays idempotent on top.
@@ -537,7 +546,7 @@ pub async fn patch_cluster(
         let roll_spec = next.clone();
         let roll_ns = ns.clone();
         tokio::spawn(async move {
-            let order = roll_order(&roll_spec.name, roll_spec.replicas, &primary);
+            let order = roll_order(&roll_spec.sts_name(), roll_spec.replicas, &primary);
             tracing::info!(cluster = %roll_spec.name, ?order, "template change: rolling instances");
             roll_pods(&ops, &roll_ns, &roll_spec, order).await;
             tracing::info!(cluster = %roll_spec.name, "template roll finished");
@@ -580,7 +589,7 @@ pub async fn switchover(
     };
     reject_hibernated(&spec)?;
 
-    let valid_pods: Vec<String> = (0..spec.replicas).map(|i| format!("{name}-{i}")).collect();
+    let valid_pods: Vec<String> = (0..spec.replicas).map(|i| spec.instance_name(i)).collect();
     if !valid_pods.contains(&req.target) {
         return Err(
             ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, "invalid_target").with_detail(format!(
@@ -595,7 +604,7 @@ pub async fn switchover(
         .primary(&ns, &name)
         .await
         .map_err(ApiError::internal)?
-        .unwrap_or_else(|| format!("{name}-0"));
+        .unwrap_or_else(|| spec.instance_name(0));
     if current == req.target {
         return Err(ApiError::conflict("already_primary")
             .with_detail("That instance is already the primary."));
@@ -603,8 +612,7 @@ pub async fn switchover(
 
     // Only a ready standby may be promoted: promoting an instance that is not
     // streaming would silently lose whatever WAL it never received.
-    let observations =
-        crate::instance_probe::observe_cluster(&ops.http, &spec.name, &ns, spec.replicas).await;
+    let observations = crate::instance_probe::observe_cluster(&ops.http, &spec, &ns).await;
     let target_ok = observations
         .iter()
         .find(|o| o.pod == req.target)
@@ -678,12 +686,12 @@ pub async fn restart_cluster(
         .primary(&ns, &name)
         .await
         .map_err(ApiError::internal)?
-        .unwrap_or_else(|| format!("{name}-0"));
+        .unwrap_or_else(|| spec.instance_name(0));
 
     let ops = ops.clone();
     let roll_ns = ns.clone();
     tokio::spawn(async move {
-        let order = roll_order(&spec.name, spec.replicas, &primary);
+        let order = roll_order(&spec.sts_name(), spec.replicas, &primary);
         tracing::info!(cluster = %spec.name, ?order, "rolling restart started");
         roll_pods(&ops, &roll_ns, &spec, order).await;
         tracing::info!(cluster = %spec.name, "rolling restart finished");
@@ -815,7 +823,7 @@ pub async fn fence_instance(
         return Err(ApiError::not_found());
     };
     reject_hibernated(&spec)?;
-    let valid_pods: Vec<String> = (0..spec.replicas).map(|i| format!("{name}-{i}")).collect();
+    let valid_pods: Vec<String> = (0..spec.replicas).map(|i| spec.instance_name(i)).collect();
     if !valid_pods.contains(&pod) {
         return Err(
             ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, "invalid_target")
@@ -827,7 +835,7 @@ pub async fn fence_instance(
         .primary(&ns, &name)
         .await
         .map_err(ApiError::internal)?
-        .unwrap_or_else(|| format!("{name}-0"));
+        .unwrap_or_else(|| spec.instance_name(0));
     if pod == primary {
         return Err(ApiError::conflict("cannot_fence_primary")
             .with_detail("That instance is the recorded primary; switch over first."));
@@ -878,7 +886,7 @@ pub async fn unfence_instance(
     };
     // No hibernated guard: editing the fenced list while asleep is harmless
     // and converges on wake.
-    let valid_pods: Vec<String> = (0..spec.replicas).map(|i| format!("{name}-{i}")).collect();
+    let valid_pods: Vec<String> = (0..spec.replicas).map(|i| spec.instance_name(i)).collect();
     if !valid_pods.contains(&pod) {
         return Err(
             ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, "invalid_target")
@@ -923,9 +931,7 @@ pub(crate) async fn roll_pods(
         }
         for _ in 0..60u32 {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-            let obs =
-                crate::instance_probe::observe_cluster(&ops.http, &spec.name, ns, spec.replicas)
-                    .await;
+            let obs = crate::instance_probe::observe_cluster(&ops.http, spec, ns).await;
             if obs.iter().any(|o| o.pod == pod && o.ready) {
                 break;
             }
