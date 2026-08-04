@@ -4,6 +4,7 @@
 import { BackupSpec } from '../models/backup-spec';
 import { DatabaseSpec } from '../models/database-spec';
 import { EnvVarSpec } from '../models/env-var-spec';
+import { ExtensionSpec } from '../models/extension-spec';
 import { HbaRule } from '../models/hba-rule';
 import { InitSpec } from '../models/init-spec';
 import { PoolerSpec } from '../models/pooler-spec';
@@ -36,6 +37,13 @@ export interface ClusterSpec {
    * scripts and anything else in the container to read.
    */
   env?: Array<EnvVarSpec>;
+
+  /**
+   * Declared extensions, created in their target database after it exists.
+   * Additive like roles: removing an entry stops managing it, nothing is
+   * dropped. Preload-flagged entries drive shared_preload_libraries.
+   */
+  extensions?: Array<ExtensionSpec>;
 
   /**
    * Instances (pod names) held down: the agent stops postgres and keeps

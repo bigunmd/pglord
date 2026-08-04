@@ -4,6 +4,7 @@
 import { BackupSpec } from '../models/backup-spec';
 import { DatabaseSpec } from '../models/database-spec';
 import { EnvVarSpec } from '../models/env-var-spec';
+import { ExtensionSpec } from '../models/extension-spec';
 import { HbaRule } from '../models/hba-rule';
 import { InitSpec } from '../models/init-spec';
 import { PoolerSpec } from '../models/pooler-spec';
@@ -35,6 +36,12 @@ export interface SpecChange {
    * instances, since the pod template changes.
    */
   env?: (Array<EnvVarSpec> | null);
+
+  /**
+   * Full replacement of the declared extensions, roles semantics: absent
+   * leaves them untouched, empty stops managing (nothing is dropped).
+   */
+  extensions?: (Array<ExtensionSpec> | null);
 
   /**
    * Change the instance image. Rolls every instance, standbys first,

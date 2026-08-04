@@ -908,6 +908,7 @@ components:
       - pooler
       - roles
       - databases
+      - extensions
       - hibernated
       - fenced
       - instances
@@ -934,6 +935,13 @@ components:
           description: |-
             Custom environment variables on the instances (secret *references*
             only — never their values).
+        extensions:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExtensionSpec'
+          description: |-
+            Declared extensions; leave-in-place like roles. Preload-flagged
+            entries drive shared_preload_libraries (restart-required).
         fenced:
           type: array
           items:
@@ -1044,6 +1052,14 @@ components:
           description: |-
             Extra environment variables on the instance containers, for init
             scripts and anything else in the container to read.
+        extensions:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExtensionSpec'
+          description: |-
+            Declared extensions, created in their target database after it exists.
+            Additive like roles: removing an entry stops managing it, nothing is
+            dropped. Preload-flagged entries drive shared_preload_libraries.
         fenced:
           type: array
           items:
@@ -1187,6 +1203,28 @@ components:
           - string
           - 'null'
           description: Literal value. Mutually exclusive with `secret`.
+    ExtensionSpec:
+      type: object
+      required:
+      - name
+      - database
+      properties:
+        database:
+          type: string
+          description: 'Target database: a declared database or "postgres".'
+        name:
+          type: string
+          description: Strict lowercase identifier — the injection contract.
+        preload:
+          type: boolean
+          description: |-
+            Also load the library at server start (shared_preload_libraries).
+            Restart-required; surfaces through pending_restart.
+        schema:
+          type:
+          - string
+          - 'null'
+          description: Optional schema to install into (same charset).
     GucInfo:
       type: object
       required:
@@ -1685,6 +1723,15 @@ components:
           description: |-
             Full replacement of the custom environment. Changing it rolls the
             instances, since the pod template changes.
+        extensions:
+          type:
+          - array
+          - 'null'
+          items:
+            $ref: '#/components/schemas/ExtensionSpec'
+          description: |-
+            Full replacement of the declared extensions, roles semantics: absent
+            leaves them untouched, empty stops managing (nothing is dropped).
         image:
           type:
           - string

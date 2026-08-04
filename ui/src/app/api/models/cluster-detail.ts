@@ -4,6 +4,7 @@
 import { BackupSpec } from '../models/backup-spec';
 import { DatabaseSpec } from '../models/database-spec';
 import { EnvVarSpec } from '../models/env-var-spec';
+import { ExtensionSpec } from '../models/extension-spec';
 import { HbaRule } from '../models/hba-rule';
 import { InitSpec } from '../models/init-spec';
 import { InstanceDto } from '../models/instance-dto';
@@ -35,6 +36,12 @@ export interface ClusterDetail {
    * only — never their values).
    */
   env: Array<EnvVarSpec>;
+
+  /**
+   * Declared extensions; leave-in-place like roles. Preload-flagged
+   * entries drive shared_preload_libraries (restart-required).
+   */
+  extensions: Array<ExtensionSpec>;
 
   /**
    * Instances held down by the fence operation (pods may not exist while

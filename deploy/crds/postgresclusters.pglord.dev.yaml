@@ -140,6 +140,35 @@ spec:
                   - name
                   type: object
                 type: array
+              extensions:
+                default: []
+                description: |-
+                  Declared extensions, created in their target database after it exists.
+                  Additive like roles: removing an entry stops managing it, nothing is
+                  dropped. Preload-flagged entries drive shared_preload_libraries.
+                items:
+                  properties:
+                    database:
+                      description: 'Target database: a declared database or "postgres".'
+                      type: string
+                    name:
+                      description: Strict lowercase identifier — the injection contract.
+                      type: string
+                    preload:
+                      default: false
+                      description: |-
+                        Also load the library at server start (shared_preload_libraries).
+                        Restart-required; surfaces through pending_restart.
+                      type: boolean
+                    schema:
+                      description: Optional schema to install into (same charset).
+                      nullable: true
+                      type: string
+                  required:
+                  - database
+                  - name
+                  type: object
+                type: array
               fenced:
                 default: []
                 description: |-

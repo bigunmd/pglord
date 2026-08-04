@@ -14,6 +14,7 @@ export type { ClusterSpec } from './models/cluster-spec';
 export type { ClusterSummary } from './models/cluster-summary';
 export type { DatabaseSpec } from './models/database-spec';
 export type { EnvVarSpec } from './models/env-var-spec';
+export type { ExtensionSpec } from './models/extension-spec';
 export type { GucInfo } from './models/guc-info';
 export type { HbaConn } from './models/hba-conn';
 export type { HbaMethod } from './models/hba-method';
