@@ -588,8 +588,38 @@ deliberate manual operation. Declared roles authenticate through the
 [connection pooler](#connection-pooling-pgbouncer) with no extra
 configuration.
 
-For anything beyond roles and databases — schemas, grants, extensions, seed
+For anything beyond roles, databases and extensions — schemas, grants, seed
 data — use init scripts or run SQL directly.
+
+### Extensions
+
+Declare extensions next to roles and databases; pglord creates each one in
+its target database and keeps `shared_preload_libraries` in sync for the
+ones that need loading at server start:
+
+```jsonc
+"extensions": [
+  { "name": "pgcrypto", "database": "appdb" },
+  { "name": "pg_stat_statements", "database": "postgres", "preload": true }
+]
+```
+
+- **The image must ship the extension.** The default postgres image carries
+  the contrib set (pgcrypto, pg_stat_statements, uuid-ossp, …); for anything
+  else (postgis, pgvector, timescaledb) bring an image that includes it, or
+  `CREATE EXTENSION` fails and pglord retries until it can succeed.
+- **Preload needs a restart.** Flagging `preload` stages
+  `shared_preload_libraries`; the pending-restart banner appears and the
+  rolling restart applies it. The extension itself is created automatically
+  once the library is loaded. `shared_preload_libraries` is managed — it
+  cannot be set by hand in `parameters`.
+- **Careful with preload names.** A preload entry whose library is missing
+  from the image makes PostgreSQL refuse to start at the next restart. To
+  recover, remove the entry and restart — the shorter list is rendered
+  before postgres boots.
+- **Additive, like roles.** Removing an entry stops managing the extension
+  but never drops it; the preload list, being configuration rather than
+  data, does shrink after the next restart.
 
 ### Grow storage
 
