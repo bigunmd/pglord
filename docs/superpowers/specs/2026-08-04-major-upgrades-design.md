@@ -253,6 +253,23 @@ New `.github/workflows/images.yaml` publishing to GHCR with
    loses its CAS, the agent's `complete` marker lets a retried cutover skip
    straight to the record move instead of failing a drain against an
    already-detached source.
+8. **No DDL against the source inside the fence window.** The cutover fences
+   the source with `default_transaction_read_only`, and a read-only
+   transaction refuses DDL — so `DROP PUBLICATION` cannot run there. Only the
+   subscription is dropped (on the target, which is writable, and which is
+   what removes the remote slot). The publication is inert afterwards and goes
+   away with the rollback path's cleanup or with the source at finalize.
+9. **The drain parameter binds through text.** `$1::pg_lsn` makes postgres
+   infer `pg_lsn` for the parameter, which the client cannot serialize a
+   string into ("error serializing parameter 0"); `$1::text::pg_lsn` keeps it
+   a string. A unit test pins the cast.
+10. **Green rendering stops once the spec adopts the generation.** Between
+    finalize's spec write and its clearing of the upgrade state, a reconcile
+    pass would otherwise re-render the promoted set as "green" and put the
+    subscriber-mode env var back on the pods it is about to roll.
+
+Items 8–10 were all found by running `make upgrade-e2e` against the dev stand;
+none were reachable from unit tests.
 
 ## Out of scope (deliberate)
 
