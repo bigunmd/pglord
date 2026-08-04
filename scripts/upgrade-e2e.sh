@@ -68,11 +68,14 @@ kill_pf
 $KUBECTL -n pglord port-forward svc/pglord-server 18102:80 >/dev/null 2>&1 &
 sleep 2
 
-echo "==> creating '$CLUSTER' on PostgreSQL 16 (replicas=2, appdb, pgcrypto)"
+echo "==> creating '$CLUSTER' on PostgreSQL 16 (replicas=2, app_rw/appdb, pgcrypto)"
+# A declared database needs a declared owner; the role is what makes the
+# upgrade's globals copy worth asserting on, too.
 code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API/api/v1/clusters" \
   -H 'content-type: application/json' -d "{
     \"name\": \"$CLUSTER\", \"image\": \"pglord-agent:dev16\", \"replicas\": 2,
-    \"databases\": [{\"name\": \"appdb\"}],
+    \"roles\": [{\"name\": \"app_rw\"}],
+    \"databases\": [{\"name\": \"appdb\", \"owner\": \"app_rw\"}],
     \"extensions\": [{\"name\": \"pgcrypto\", \"database\": \"appdb\"}]
   }")
 [ "$code" = "201" ] || { echo "FAIL: create returned $code"; exit 1; }
@@ -94,14 +97,27 @@ lvl=$(psql_on "$BLUE_PRIMARY" postgres "SHOW wal_level")
 [ "$lvl" = "logical" ] || { echo "FAIL: wal_level is '$lvl', expected logical"; exit 1; }
 echo "OK PG16 with wal_level=logical"
 
+echo "==> waiting for declarative provisioning (app_rw, appdb, pgcrypto)"
+# Provisioning is level-triggered after the instances are ready, so readiness
+# alone does not mean the database exists yet.
+have=""
+for _ in $(seq 1 60); do
+  have=$(psql_on "$BLUE_PRIMARY" appdb "SELECT count(*) FROM pg_extension WHERE extname='pgcrypto'")
+  [ "$have" = "1" ] && break
+  sleep 2
+done
+[ "$have" = "1" ] || { echo "FAIL: appdb/pgcrypto never provisioned"; exit 1; }
+owner=$(psql_on "$BLUE_PRIMARY" postgres \
+  "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname='appdb'")
+[ "$owner" = "app_rw" ] || { echo "FAIL: appdb owner is '$owner', expected app_rw"; exit 1; }
+echo "OK provisioned"
+
 echo "==> seeding data (100 rows, a sequence, an extension)"
 psql_on "$BLUE_PRIMARY" appdb \
   "CREATE TABLE t(id bigserial primary key, v text); \
    INSERT INTO t(v) SELECT 'row-' || g FROM generate_series(1,100) g;" >/dev/null
 seeded=$(psql_on "$BLUE_PRIMARY" appdb "SELECT count(*) FROM t")
 [ "$seeded" = "100" ] || { echo "FAIL: expected 100 seeded rows, got '$seeded'"; exit 1; }
-have_pgcrypto=$(psql_on "$BLUE_PRIMARY" appdb "SELECT count(*) FROM pg_extension WHERE extname='pgcrypto'")
-[ "$have_pgcrypto" = "1" ] || { echo "FAIL: pgcrypto not installed in appdb"; exit 1; }
 echo "OK seeded"
 
 start_upgrade() {
@@ -221,6 +237,12 @@ newid=$(psql_on "$GREEN_PRIMARY" appdb "INSERT INTO t(v) VALUES ('after-upgrade'
 [ -n "$newid" ] || { echo "FAIL: insert after cutover produced no id"; exit 1; }
 [ "$newid" -gt "$maxid" ] || { echo "FAIL: sequence handed out $newid, not past the existing max $maxid"; exit 1; }
 echo "OK sequence continues ($maxid -> $newid)"
+
+echo "==> roles and ownership came across with the data"
+new_owner=$(psql_on "$GREEN_PRIMARY" postgres \
+  "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname='appdb'")
+[ "$new_owner" = "app_rw" ] || { echo "FAIL: appdb owner on the new major is '$new_owner', expected app_rw"; exit 1; }
+echo "OK app_rw owns appdb on the new major"
 
 echo "==> pgcrypto works on the new major"
 digest=$(psql_on "$GREEN_PRIMARY" appdb "SELECT encode(digest('x','sha256'),'hex')")

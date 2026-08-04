@@ -38,7 +38,8 @@ spec · user/database/role provisioning · resource sizing + PVC config + volume
 anti-affinity/topology spread · rw/ro Services · synchronous replication.
 
 **SHOULD HAVE (strong differentiators most have):**
-Major version upgrades (pg_upgrade automation) · standby clusters across K8s clusters (DR) ·
+Major version upgrades (shipped as blue-green logical replication, not pg_upgrade — see
+2026-08-04-major-upgrades-design.md) · standby clusters across K8s clusters (DR) ·
 planned switchover · extensions management · declarative tablespaces · maintenance windows ·
 WAL tuning · cluster hibernation + fencing (CNPG-only today, cheap to build, loved by users) ·
 logical dump secondary backups.
