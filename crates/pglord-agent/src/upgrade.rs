@@ -553,11 +553,14 @@ pub async fn cutover(cfg: &Config) -> anyhow::Result<()> {
 
         // Drop the subscription while the source is still reachable — that is
         // what removes its replication slot rather than orphaning it.
+        //
+        // The publication on the source is deliberately left alone: the source
+        // has been fenced read-only for the cutover, and a read-only
+        // transaction refuses DDL. It is inert once its slot is gone, and it
+        // is removed either by the rollback path's cleanup (which runs after
+        // unfencing) or with the source itself at finalize.
         local_db
             .batch_execute(&pglord_core::upgrade::drop_subscription_sql(&db))
-            .await?;
-        src_db
-            .batch_execute(&pglord_core::upgrade::drop_publication_sql())
             .await?;
         tracing::info!(%db, "upgrade: detached from source");
     }

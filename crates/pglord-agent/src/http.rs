@@ -49,9 +49,11 @@ fn require_primary(st: &status::InstanceStatus, what: &str) -> Option<(StatusCod
 fn json_result(result: anyhow::Result<()>) -> (StatusCode, Json<Value>) {
     match result {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({ "status": "ok" }))),
+        // {:#}, not {}: a tokio_postgres failure renders as a bare "db error"
+        // without its cause chain, which tells the operator nothing.
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": err.to_string() })),
+            Json(serde_json::json!({ "error": format!("{err:#}") })),
         ),
     }
 }
