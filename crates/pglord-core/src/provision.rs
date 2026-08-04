@@ -134,8 +134,7 @@ pub fn validate_extensions(
         {
             return Err(ProvisionError::InvalidName(schema.clone()));
         }
-        let known = ext.database == "postgres"
-            || databases.iter().any(|d| d.name == ext.database);
+        let known = ext.database == "postgres" || databases.iter().any(|d| d.name == ext.database);
         if !known {
             return Err(ProvisionError::UnknownExtensionDatabase {
                 extension: ext.name.clone(),
@@ -302,7 +301,10 @@ pub fn database_ddl(db: &DatabaseSpec, current_owner: Option<&str>) -> Option<St
 pub fn extension_ddl(ext: &ExtensionSpec) -> String {
     match &ext.schema {
         Some(schema) => {
-            format!(r#"CREATE EXTENSION IF NOT EXISTS "{}" SCHEMA "{}""#, ext.name, schema)
+            format!(
+                r#"CREATE EXTENSION IF NOT EXISTS "{}" SCHEMA "{}""#,
+                ext.name, schema
+            )
         }
         None => format!(r#"CREATE EXTENSION IF NOT EXISTS "{}""#, ext.name),
     }
