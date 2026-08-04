@@ -114,6 +114,29 @@ impl SpecStore for CrdSpecStore {
     async fn set_primary(&self, ns: &str, name: &str, target: &str) -> anyhow::Result<bool> {
         self.mirror.set_primary(ns, name, target).await
     }
+
+    // Upgrade state lives with the primary record on the mirror ConfigMap, so
+    // the CAS path is byte-identical in both modes — and a cutover's single
+    // record+phase patch stays a single patch.
+    async fn upgrade_state(
+        &self,
+        ns: &str,
+        name: &str,
+    ) -> anyhow::Result<Option<pglord_core::upgrade::UpgradeState>> {
+        self.mirror.upgrade_state(ns, name).await
+    }
+
+    async fn set_upgrade(
+        &self,
+        ns: &str,
+        name: &str,
+        state: Option<&pglord_core::upgrade::UpgradeState>,
+        set_primary_to: Option<&str>,
+    ) -> anyhow::Result<bool> {
+        self.mirror
+            .set_upgrade(ns, name, state, set_primary_to)
+            .await
+    }
 }
 
 #[cfg(test)]

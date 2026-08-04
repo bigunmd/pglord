@@ -171,6 +171,23 @@ pub async fn create_backup(
             "Configure a backup repository for this cluster before taking a backup.",
         ));
     }
+    // Backups during a migration are allowed, and in fact encouraged — a final
+    // one before cutover is the only way back past the upgrade. After cutover
+    // there is nothing to back up yet: the old primary is fenced and the new
+    // one's stanza still describes the old major until finalize.
+    if matches!(
+        ops.store
+            .upgrade_state(&ns, &name)
+            .await
+            .map_err(ApiError::internal)?
+            .map(|u| u.phase),
+        Some(pglord_core::upgrade::UpgradePhase::Soaking)
+    ) {
+        return Err(ApiError::conflict("upgrade_in_progress").with_detail(
+            "The cluster has just been cut over to a new major version; \
+             finalize or roll back the upgrade before taking a backup.",
+        ));
+    }
     let runs = crate::backup_runs::stale_running_to_unknown(
         crate::backup_runs::list(&ops.kube, &ns, &name).await,
         now_seconds(),

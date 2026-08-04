@@ -12,6 +12,7 @@ import { PoolerStatus } from '../models/pooler-status';
 import { RestoreSpec } from '../models/restore-spec';
 import { RoleSpec } from '../models/role-spec';
 import { TlsSpec } from '../models/tls-spec';
+import { UpgradeStatusDto } from '../models/upgrade-status-dto';
 import { WorkloadSpec } from '../models/workload-spec';
 export interface ClusterDetail {
 
@@ -119,6 +120,7 @@ export interface ClusterDetail {
    * contents).
    */
   tls: TlsSpec;
+  upgrade?: (null | UpgradeStatusDto);
 
   /**
    * Scheduling, resources and Kubernetes metadata for the instances.

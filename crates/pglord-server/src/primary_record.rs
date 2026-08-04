@@ -19,20 +19,23 @@ pub fn recorded_primary(cm: &ConfigMap, default_pod: &str) -> String {
         .unwrap_or_else(|| default_pod.to_string())
 }
 
-/// Compare-and-swap the primary record. `expected_rv` must be the
-/// resourceVersion of the ConfigMap the decision was based on; a concurrent
-/// writer makes the apiserver reject the patch (409) and we return Ok(false).
-pub async fn cas_set_primary(
+/// Compare-and-swap a set of annotations on the spec ConfigMap in one merge
+/// patch; a null value removes its key. `expected_rv` must be the
+/// resourceVersion the decision was based on, so a concurrent writer makes the
+/// apiserver reject the patch (409) and we return Ok(false).
+///
+/// One patch, not several: a major-version cutover moves the primary record
+/// and the upgrade phase together, and an observer that saw one without the
+/// other would either send writes to a cluster nobody had cut over to, or
+/// treat a completed cutover as still in progress.
+pub async fn cas_set_annotations(
     api: &Api<ConfigMap>,
     cm_name: &str,
     expected_rv: &str,
-    new_primary: &str,
+    annotations: serde_json::Map<String, serde_json::Value>,
 ) -> anyhow::Result<bool> {
     let patch = serde_json::json!({
-        "metadata": {
-            "resourceVersion": expected_rv,
-            "annotations": { PRIMARY_ANNOTATION: new_primary }
-        }
+        "metadata": { "resourceVersion": expected_rv, "annotations": annotations }
     });
     match api
         .patch(cm_name, &PatchParams::default(), &Patch::Merge(&patch))
@@ -42,6 +45,21 @@ pub async fn cas_set_primary(
         Err(kube::Error::Api(e)) if e.code == 409 => Ok(false),
         Err(e) => Err(e.into()),
     }
+}
+
+/// Compare-and-swap the primary record.
+pub async fn cas_set_primary(
+    api: &Api<ConfigMap>,
+    cm_name: &str,
+    expected_rv: &str,
+    new_primary: &str,
+) -> anyhow::Result<bool> {
+    let mut annotations = serde_json::Map::new();
+    annotations.insert(
+        PRIMARY_ANNOTATION.to_string(),
+        serde_json::Value::String(new_primary.to_string()),
+    );
+    cas_set_annotations(api, cm_name, expected_rv, annotations).await
 }
 
 /// Parse a Postgres LSN ("X/Y" in hex) into a comparable integer.

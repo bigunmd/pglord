@@ -98,6 +98,9 @@ pub struct ClusterDetail {
     /// hibernated; the list is the declared state).
     pub fenced: Vec<String>,
     pub instances: Vec<InstanceDto>,
+    /// The major version upgrade in progress, if any. Null for the normal
+    /// case: a cluster running one instance set on one PostgreSQL major.
+    pub upgrade: Option<crate::api::upgrade::UpgradeStatusDto>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -380,6 +383,15 @@ pub async fn get_cluster(
             ssl: o.ssl,
         })
         .collect();
+    let upgrade = match ops
+        .store
+        .upgrade_state(&ns, &name)
+        .await
+        .map_err(ApiError::internal)?
+    {
+        Some(state) => Some(crate::api::upgrade::status_dto(ops, &ns, &spec, &state).await),
+        None => None,
+    };
     Ok(Json(ClusterDetail {
         namespace: ns,
         name: spec.name,
@@ -407,6 +419,7 @@ pub async fn get_cluster(
         hibernated: spec.hibernated,
         fenced: spec.fenced,
         instances,
+        upgrade,
     }))
 }
 
@@ -492,6 +505,7 @@ pub async fn patch_cluster(
         return Err(ApiError::not_found());
     };
     reject_hibernated(&current)?;
+    reject_upgrading(ops, &ns, &name).await?;
     let next = current.apply_change(&change).map_err(spec_error)?;
 
     // Grow volumes before the spec lands so a rejected expansion (StorageClass
@@ -539,7 +553,9 @@ pub async fn patch_cluster(
         // The StatefulSet must carry the new template before any pod dies, or
         // a deleted pod would come back on the old one. Same field manager as
         // the reconciler, so the level-triggered loop stays idempotent on top.
-        crate::reconciler::apply_cluster(&ops.kube, &ops.http, &ns, &next, &owner, &primary)
+        // No upgrade can be in flight here: patch_cluster refuses while one is
+        // (reject_upgrading), so passing None cannot drop a green set.
+        crate::reconciler::apply_cluster(&ops.kube, &ops.http, &ns, &next, &owner, &primary, None)
             .await
             .map_err(ApiError::internal)?;
         let ops = ops.clone();
@@ -588,6 +604,7 @@ pub async fn switchover(
         return Err(ApiError::not_found());
     };
     reject_hibernated(&spec)?;
+    reject_upgrading(ops, &ns, &name).await?;
 
     let valid_pods: Vec<String> = (0..spec.replicas).map(|i| spec.instance_name(i)).collect();
     if !valid_pods.contains(&req.target) {
@@ -681,6 +698,7 @@ pub async fn restart_cluster(
         return Err(ApiError::not_found());
     };
     reject_hibernated(&spec)?;
+    reject_upgrading(ops, &ns, &name).await?;
     let primary = ops
         .store
         .primary(&ns, &name)
@@ -705,6 +723,31 @@ pub(crate) fn reject_hibernated(spec: &ClusterSpec) -> Result<(), ApiError> {
     if spec.hibernated {
         return Err(ApiError::conflict("hibernated")
             .with_detail("The cluster is hibernated; wake it first."));
+    }
+    Ok(())
+}
+
+/// Refuse day-2 operations while a major version upgrade is running.
+///
+/// Two instance sets exist during an upgrade, built from one spec: a spec edit
+/// would silently reshape both, and a roll or switchover would move a primary
+/// the migration depends on. Every one of these becomes available again the
+/// moment the upgrade is finalized, rolled back or aborted.
+pub(crate) async fn reject_upgrading(
+    ops: &ClusterOps,
+    ns: &str,
+    name: &str,
+) -> Result<(), ApiError> {
+    if ops
+        .store
+        .upgrade_state(ns, name)
+        .await
+        .map_err(ApiError::internal)?
+        .is_some()
+    {
+        return Err(ApiError::conflict("upgrade_in_progress").with_detail(
+            "A major version upgrade is in progress; finalize, roll back or abort it first.",
+        ));
     }
     Ok(())
 }
@@ -741,6 +784,7 @@ pub async fn hibernate(
         return Err(ApiError::conflict("already_hibernated")
             .with_detail("The cluster is already hibernated."));
     }
+    reject_upgrading(ops, &ns, &name).await?;
     spec.hibernated = true;
     ops.store
         .put(&ns, &spec)
@@ -823,6 +867,7 @@ pub async fn fence_instance(
         return Err(ApiError::not_found());
     };
     reject_hibernated(&spec)?;
+    reject_upgrading(ops, &ns, &name).await?;
     let valid_pods: Vec<String> = (0..spec.replicas).map(|i| spec.instance_name(i)).collect();
     if !valid_pods.contains(&pod) {
         return Err(
@@ -886,6 +931,7 @@ pub async fn unfence_instance(
     };
     // No hibernated guard: editing the fenced list while asleep is harmless
     // and converges on wake.
+    reject_upgrading(ops, &ns, &name).await?;
     let valid_pods: Vec<String> = (0..spec.replicas).map(|i| spec.instance_name(i)).collect();
     if !valid_pods.contains(&pod) {
         return Err(

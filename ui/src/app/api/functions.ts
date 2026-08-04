@@ -37,6 +37,16 @@ export type { ListRequiredSecrets$Params as ListRequiredSecrets$Params } from '.
 export { listRequiredSecrets as listRequiredSecrets } from './fn/clusters/list-required-secrets';
 export type { Switchover$Params as Switchover$Params } from './fn/clusters/switchover';
 export { switchover as switchover } from './fn/clusters/switchover';
+export type { StartUpgrade$Params as StartUpgrade$Params } from './fn/clusters/start-upgrade';
+export { startUpgrade as startUpgrade } from './fn/clusters/start-upgrade';
+export type { AbortUpgrade$Params as AbortUpgrade$Params } from './fn/clusters/abort-upgrade';
+export { abortUpgrade as abortUpgrade } from './fn/clusters/abort-upgrade';
+export type { CutoverUpgrade$Params as CutoverUpgrade$Params } from './fn/clusters/cutover-upgrade';
+export { cutoverUpgrade as cutoverUpgrade } from './fn/clusters/cutover-upgrade';
+export type { FinalizeUpgrade$Params as FinalizeUpgrade$Params } from './fn/clusters/finalize-upgrade';
+export { finalizeUpgrade as finalizeUpgrade } from './fn/clusters/finalize-upgrade';
+export type { RollbackUpgrade$Params as RollbackUpgrade$Params } from './fn/clusters/rollback-upgrade';
+export { rollbackUpgrade as rollbackUpgrade } from './fn/clusters/rollback-upgrade';
 export type { Wake$Params as Wake$Params } from './fn/clusters/wake';
 export { wake as wake } from './fn/clusters/wake';
 export type { ListBackups$Params as ListBackups$Params } from './fn/backups/list-backups';

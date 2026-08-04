@@ -195,6 +195,7 @@ pub async fn rotate_credentials(
         ));
     }
     crate::api::clusters::reject_hibernated(&spec)?;
+    crate::api::clusters::reject_upgrading(ops, &ns, &name).await?;
     let primary = ops
         .store
         .primary(&ns, &name)

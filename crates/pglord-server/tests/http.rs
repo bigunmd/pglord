@@ -376,3 +376,36 @@ async fn metrics_is_not_in_the_openapi_contract() {
     );
     assert!(!api.paths.paths.contains_key("/metrics"));
 }
+
+#[tokio::test]
+async fn upgrade_endpoints_are_in_the_contract() {
+    let (_router, api) = pglord_server::app::build(
+        pglord_server::health::Readiness::default(),
+        &pglord_server::config::Config::test_default(),
+        None,
+        Default::default(),
+    );
+    for path in [
+        "/api/v1/namespaces/{ns}/clusters/{name}/upgrade",
+        "/api/v1/namespaces/{ns}/clusters/{name}/upgrade/cutover",
+        "/api/v1/namespaces/{ns}/clusters/{name}/upgrade/rollback",
+        "/api/v1/namespaces/{ns}/clusters/{name}/upgrade/abort",
+        "/api/v1/namespaces/{ns}/clusters/{name}/upgrade/finalize",
+    ] {
+        assert!(api.paths.paths.contains_key(path), "missing {path}");
+    }
+}
+
+#[tokio::test]
+async fn upgrade_without_kube_answers_503() {
+    let resp = test_app()
+        .oneshot(
+            Request::post("/api/v1/clusters/demo/upgrade")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"target_image":"pglord-agent:18"}"#))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+}

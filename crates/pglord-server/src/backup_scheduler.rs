@@ -84,6 +84,20 @@ pub async fn run(ops: ClusterOps) {
                 continue;
             };
 
+            // A cluster soaking after a major-upgrade cutover has a fenced old
+            // primary and a new one whose stanza still describes the old
+            // major; finalize runs stanza-upgrade and backups resume then.
+            if matches!(
+                crate::spec_store::upgrade_from_cm(cm).map(|u| u.phase),
+                Some(pglord_core::upgrade::UpgradePhase::Soaking)
+            ) {
+                tracing::info!(
+                    cluster = %spec.name,
+                    "skipping scheduled backup: major upgrade soaking"
+                );
+                continue;
+            }
+
             let runs = crate::backup_runs::stale_running_to_unknown(
                 crate::backup_runs::list(&ops.kube, &item_ns, &spec.name).await,
                 crate::api::backups::now_seconds(),

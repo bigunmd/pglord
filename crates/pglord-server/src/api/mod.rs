@@ -8,4 +8,5 @@ pub mod ping;
 pub mod preflight;
 pub mod restore;
 pub mod secrets;
+pub mod upgrade;
 pub mod version;

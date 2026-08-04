@@ -71,6 +71,25 @@ pub fn spec_to_configmap_owned(
     Ok(cm)
 }
 
+/// The in-flight major upgrade recorded on a spec ConfigMap, if any.
+/// Unparseable state answers None with a warning rather than failing the
+/// reconcile pass: a cluster must keep converging even if this annotation is
+/// somehow corrupt.
+pub fn upgrade_from_cm(cm: &ConfigMap) -> Option<pglord_core::upgrade::UpgradeState> {
+    let raw = cm
+        .metadata
+        .annotations
+        .as_ref()?
+        .get(pglord_core::upgrade::UPGRADE_ANNOTATION)?;
+    match serde_json::from_str(raw) {
+        Ok(state) => Some(state),
+        Err(err) => {
+            tracing::warn!(cm = ?cm.metadata.name, %err, "ignoring unparseable upgrade state");
+            None
+        }
+    }
+}
+
 /// Parse a spec ConfigMap back into a ClusterSpec + the OwnerRef children use.
 pub fn configmap_to_spec(cm: &ConfigMap) -> anyhow::Result<(ClusterSpec, OwnerRef)> {
     let data = cm
@@ -101,6 +120,22 @@ pub trait SpecStore: Send + Sync {
     /// Record a new primary via compare-and-swap. False = another writer won
     /// the race; the caller should re-read and decide again.
     async fn set_primary(&self, ns: &str, name: &str, target: &str) -> anyhow::Result<bool>;
+    /// The in-flight major upgrade, if one is running.
+    async fn upgrade_state(
+        &self,
+        ns: &str,
+        name: &str,
+    ) -> anyhow::Result<Option<pglord_core::upgrade::UpgradeState>>;
+    /// CAS-write the upgrade state (None clears it), optionally flipping the
+    /// primary record in the same patch — cutover and rollback need both to
+    /// move atomically. False = lost the race; re-read and decide again.
+    async fn set_upgrade(
+        &self,
+        ns: &str,
+        name: &str,
+        state: Option<&pglord_core::upgrade::UpgradeState>,
+        set_primary_to: Option<&str>,
+    ) -> anyhow::Result<bool>;
 }
 
 pub struct ConfigMapSpecStore {
@@ -179,6 +214,50 @@ impl SpecStore for ConfigMapSpecStore {
         crate::primary_record::cas_set_primary(&api, &cm_name, &rv, target).await
     }
 
+    async fn upgrade_state(
+        &self,
+        ns: &str,
+        name: &str,
+    ) -> anyhow::Result<Option<pglord_core::upgrade::UpgradeState>> {
+        Ok(self
+            .api(ns)
+            .get_opt(&spec_cm_name(name))
+            .await?
+            .as_ref()
+            .and_then(upgrade_from_cm))
+    }
+
+    async fn set_upgrade(
+        &self,
+        ns: &str,
+        name: &str,
+        state: Option<&pglord_core::upgrade::UpgradeState>,
+        set_primary_to: Option<&str>,
+    ) -> anyhow::Result<bool> {
+        let api = self.api(ns);
+        let cm_name = spec_cm_name(name);
+        let Some(cm) = api.get_opt(&cm_name).await? else {
+            return Ok(false);
+        };
+        let rv = cm.metadata.resource_version.unwrap_or_default();
+        let mut annotations = serde_json::Map::new();
+        annotations.insert(
+            pglord_core::upgrade::UPGRADE_ANNOTATION.to_string(),
+            match state {
+                // A merge patch removes a key by setting it to null.
+                None => serde_json::Value::Null,
+                Some(s) => serde_json::Value::String(serde_json::to_string(s)?),
+            },
+        );
+        if let Some(primary) = set_primary_to {
+            annotations.insert(
+                pglord_core::PRIMARY_ANNOTATION.to_string(),
+                serde_json::Value::String(primary.to_string()),
+            );
+        }
+        crate::primary_record::cas_set_annotations(&api, &cm_name, &rv, annotations).await
+    }
+
     async fn primary(&self, ns: &str, name: &str) -> anyhow::Result<Option<String>> {
         Ok(self.api(ns).get_opt(&spec_cm_name(name)).await?.map(|cm| {
             // The bootstrap default is the *spec's* ordinal zero: after a
@@ -207,6 +286,28 @@ mod tests {
         assert_eq!(owner.name, "demo-spec");
         assert_eq!(owner.uid, "uid-42");
         assert_eq!(owner.kind, "ConfigMap");
+    }
+
+    #[test]
+    fn upgrade_state_parses_from_the_annotation() {
+        use pglord_core::upgrade::{UPGRADE_ANNOTATION, UpgradePhase};
+        let mut cm = ConfigMap::default();
+        assert!(upgrade_from_cm(&cm).is_none());
+        cm.metadata.annotations = Some(
+            [(
+                UPGRADE_ANNOTATION.to_string(),
+                r#"{"target_image":"a:18","next_generation":"g2","phase":"migrating"}"#.to_string(),
+            )]
+            .into(),
+        );
+        let st = upgrade_from_cm(&cm).expect("state");
+        assert_eq!(st.phase, UpgradePhase::Migrating);
+        assert_eq!(st.next_generation, "g2");
+        assert_eq!(st.previous_primary, None);
+
+        // Garbage must not take the reconcile pass down with it.
+        cm.metadata.annotations = Some([(UPGRADE_ANNOTATION.to_string(), "{".to_string())].into());
+        assert!(upgrade_from_cm(&cm).is_none());
     }
 
     #[test]

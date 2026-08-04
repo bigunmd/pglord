@@ -624,6 +624,189 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
+  /api/v1/namespaces/{ns}/clusters/{name}/upgrade:
+    post:
+      tags:
+      - clusters
+      operationId: start_upgrade
+      parameters:
+      - name: ns
+        in: path
+        description: Namespace
+        required: true
+        schema:
+          type: string
+      - name: name
+        in: path
+        description: Cluster name
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpgradeRequest'
+        required: true
+      responses:
+        '202':
+          description: Upgrade started; the new instance set is being built
+        '404':
+          description: Not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '409':
+          description: Already upgrading, hibernated, or wal_level is not logical
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '422':
+          description: Invalid target image
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+  /api/v1/namespaces/{ns}/clusters/{name}/upgrade/abort:
+    post:
+      tags:
+      - clusters
+      operationId: abort_upgrade
+      parameters:
+      - name: ns
+        in: path
+        description: Namespace
+        required: true
+        schema:
+          type: string
+      - name: name
+        in: path
+        description: Cluster name
+        required: true
+        schema:
+          type: string
+      responses:
+        '202':
+          description: Upgrade abandoned; the running cluster was never touched
+        '404':
+          description: Not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '409':
+          description: No upgrade running or already cut over
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+  /api/v1/namespaces/{ns}/clusters/{name}/upgrade/cutover:
+    post:
+      tags:
+      - clusters
+      operationId: cutover_upgrade
+      parameters:
+      - name: ns
+        in: path
+        description: Namespace
+        required: true
+        schema:
+          type: string
+      - name: name
+        in: path
+        description: Cluster name
+        required: true
+        schema:
+          type: string
+      responses:
+        '202':
+          description: Cut over; applications now write to the new instance set
+        '404':
+          description: Not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '409':
+          description: No upgrade running, wrong phase, or not caught up
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '502':
+          description: Cutover failed; the cluster is unchanged
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+  /api/v1/namespaces/{ns}/clusters/{name}/upgrade/finalize:
+    post:
+      tags:
+      - clusters
+      operationId: finalize_upgrade
+      parameters:
+      - name: ns
+        in: path
+        description: Namespace
+        required: true
+        schema:
+          type: string
+      - name: name
+        in: path
+        description: Cluster name
+        required: true
+        schema:
+          type: string
+      responses:
+        '202':
+          description: Upgrade finalized; the previous instances and their volumes are deleted
+        '404':
+          description: Not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '409':
+          description: No upgrade running or not cut over yet
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+  /api/v1/namespaces/{ns}/clusters/{name}/upgrade/rollback:
+    post:
+      tags:
+      - clusters
+      operationId: rollback_upgrade
+      parameters:
+      - name: ns
+        in: path
+        description: Namespace
+        required: true
+        schema:
+          type: string
+      - name: name
+        in: path
+        description: Cluster name
+        required: true
+        schema:
+          type: string
+      responses:
+        '202':
+          description: Rolled back to the previous version; writes made since cutover are gone
+        '404':
+          description: Not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '409':
+          description: No upgrade running or wrong phase
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
   /api/v1/namespaces/{ns}/clusters/{name}/wake:
     post:
       tags:
@@ -1021,6 +1204,13 @@ components:
           description: |-
             TLS from a referenced kubernetes.io/tls Secret (name only — never its
             contents).
+        upgrade:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/UpgradeStatusDto'
+            description: |-
+              The major version upgrade in progress, if any. Null for the normal
+              case: a cluster running one instance set on one PostgreSQL major.
         workload:
           $ref: '#/components/schemas/WorkloadSpec'
           description: Scheduling, resources and Kubernetes metadata for the instances.
@@ -1068,6 +1258,14 @@ components:
             Instances (pod names) held down: the agent stops postgres and keeps
             it stopped while listed. Standbys only — the fence endpoint refuses
             the recorded primary. Flipped only by the fence/unfence endpoints.
+        generation:
+          type: string
+          description: |-
+            Instance-set generation. "g1" renders today's unsuffixed object names;
+            a blue-green major upgrade bumps it (g2, g3, …) at finalize, at which
+            point the StatefulSet and pod names carry the suffix forever —
+            applications are unaffected because they connect through the Services.
+            Flipped only by the upgrade flow, never by PATCH.
         hibernated:
           type: boolean
           description: |-
@@ -1853,6 +2051,80 @@ components:
           type:
           - string
           - 'null'
+    UpgradeDbDto:
+      type: object
+      required:
+      - name
+      - tables_total
+      - tables_ready
+      properties:
+        name:
+          type: string
+        tables_ready:
+          type: integer
+          format: int64
+          description: Tables whose initial copy has finished and that are now streaming.
+        tables_total:
+          type: integer
+          format: int64
+          description: Tables the migration covers in this database.
+    UpgradePhase:
+      type: string
+      enum:
+      - migrating
+      - soaking
+    UpgradeRequest:
+      type: object
+      required:
+      - target_image
+      properties:
+        target_image:
+          type: string
+          description: |-
+            Image for the new instance set — a pglord agent image built on the
+            PostgreSQL major to upgrade to, shipping every extension this cluster
+            uses.
+    UpgradeStatusDto:
+      type: object
+      required:
+      - phase
+      - target_image
+      - next_generation
+      - ready_to_cutover
+      - databases
+      properties:
+        databases:
+          type: array
+          items:
+            $ref: '#/components/schemas/UpgradeDbDto'
+        error:
+          type:
+          - string
+          - 'null'
+          description: What is currently blocking progress, when anything is.
+        lag_bytes:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          description: |-
+            Worst-case bytes of WAL the new set has not confirmed. Null while
+            migrating means the new set is not reachable yet.
+        next_generation:
+          type: string
+          description: |-
+            Generation the new instance set renders as; its pods are named
+            `<cluster>-<generation>-<ordinal>`.
+        phase:
+          $ref: '#/components/schemas/UpgradePhase'
+          description: |-
+            "migrating" (building and syncing the new set) or "soaking" (cut over,
+            old set fenced and kept as the rollback target).
+        ready_to_cutover:
+          type: boolean
+          description: Every table is streaming and replication lag is negligible.
+        target_image:
+          type: string
     VersionResponse:
       type: object
       required:

@@ -137,7 +137,12 @@ pub fn build(
         .routes(routes!(crate::api::restore::restore_cluster))
         .routes(routes!(crate::api::secrets::list_required_secrets))
         .routes(routes!(crate::api::secrets::rotate_credentials))
-        .routes(routes!(crate::api::preflight::get_preflight));
+        .routes(routes!(crate::api::preflight::get_preflight))
+        .routes(routes!(crate::api::upgrade::start_upgrade))
+        .routes(routes!(crate::api::upgrade::cutover_upgrade))
+        .routes(routes!(crate::api::upgrade::rollback_upgrade))
+        .routes(routes!(crate::api::upgrade::abort_upgrade))
+        .routes(routes!(crate::api::upgrade::finalize_upgrade));
 
     let (api_router, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
         .merge(api)

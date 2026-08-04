@@ -140,7 +140,18 @@ async fn sync_all(
             continue;
         }
         let primary_pod = recorded_primary(cm, &spec.instance_name(0));
-        if let Err(err) = apply_cluster(client, http, &item_ns, &spec, &owner, &primary_pod).await {
+        let upgrade = crate::spec_store::upgrade_from_cm(cm);
+        if let Err(err) = apply_cluster(
+            client,
+            http,
+            &item_ns,
+            &spec,
+            &owner,
+            &primary_pod,
+            upgrade.as_ref(),
+        )
+        .await
+        {
             metrics
                 .reconcile_total
                 .with_label_values(&[item_ns.as_str(), spec.name.as_str(), "error"])
@@ -568,6 +579,7 @@ pub async fn apply_cluster(
     spec: &ClusterSpec,
     owner: &OwnerRef,
     primary_pod: &str,
+    upgrade: Option<&pglord_core::upgrade::UpgradeState>,
 ) -> anyhow::Result<()> {
     ensure_credentials(client, ns, spec, owner).await?;
     let (sa, role, binding) = render_instance_rbac(spec, ns, owner);
@@ -617,6 +629,17 @@ pub async fn apply_cluster(
         }
     }
     sts_api.patch(&sts_name, &pp, &Patch::Apply(&sts)).await?;
+
+    // A major upgrade in flight renders a second instance set from the same
+    // spec, on the target image and one generation up. It hangs off the same
+    // owning ConfigMap, so deleting the cluster still collects everything.
+    if let Some(upgrade) = upgrade {
+        let green = pglord_core::render::render_green_statefulset(spec, ns, owner, upgrade);
+        let green_name = green.metadata.name.clone().unwrap_or_default();
+        sts_api
+            .patch(&green_name, &pp, &Patch::Apply(&green))
+            .await?;
+    }
 
     let svc_api: Api<Service> = Api::namespaced(client.clone(), ns);
     for svc in [headless, rw] {

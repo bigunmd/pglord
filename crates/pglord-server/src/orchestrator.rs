@@ -20,6 +20,20 @@ const POLL_INTERVAL: Duration = Duration::from_secs(5);
 const FAILURES_BEFORE_FAILOVER: u32 = 3;
 const STATUS_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// Whether the orchestrator manages this cluster's failover right now.
+///
+/// During a major upgrade's soak the primary record deliberately names a pod
+/// of the *new* instance set, which this loop's observations of the old set
+/// cannot contain. Electing from those observations would hand writes back to
+/// the old major behind the user's back — and the soak is a manual gate by
+/// design, so it stays one.
+pub fn failover_enabled(upgrade: Option<&pglord_core::upgrade::UpgradeState>) -> bool {
+    !matches!(
+        upgrade.map(|u| u.phase),
+        Some(pglord_core::upgrade::UpgradePhase::Soaking)
+    )
+}
+
 /// Pure election rule: among ready in-recovery standbys, pick the highest LSN.
 pub fn elect_candidate(
     observations: &[(String, bool, Option<bool>, Option<String>)],
@@ -72,6 +86,7 @@ pub async fn run(
             // Cluster-wide watches carry items from many namespaces; every
             // probe, CAS and apply targets the item's own.
             let item_ns = cm.metadata.namespace.clone().unwrap_or_else(|| ns.clone());
+            let upgrade = crate::spec_store::upgrade_from_cm(cm);
             let primary = recorded_primary(cm, &spec.instance_name(0));
             let observations = observe_cluster(&http, &spec, &item_ns).await;
             metrics
@@ -94,6 +109,11 @@ pub async fn run(
                 .hibernated
                 .with_label_values(&[item_ns.as_str(), spec.name.as_str()])
                 .set(i64::from(spec.hibernated));
+
+            if !failover_enabled(upgrade.as_ref()) {
+                failures.insert((item_ns.clone(), spec.name.clone()), 0);
+                continue;
+            }
 
             // A hibernated cluster has zero instances on purpose: no failure
             // counting, no election. Resetting the counter keeps a stale
@@ -159,7 +179,13 @@ pub async fn run(
                     }
                     // Repoint -rw immediately instead of waiting for resync.
                     if let Err(err) = reconciler::apply_cluster(
-                        &client, &http, &item_ns, &spec, &owner, &candidate,
+                        &client,
+                        &http,
+                        &item_ns,
+                        &spec,
+                        &owner,
+                        &candidate,
+                        upgrade.as_ref(),
                     )
                     .await
                     {
@@ -179,6 +205,21 @@ pub async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn no_failover_during_an_upgrade_soak() {
+        use pglord_core::upgrade::{UpgradePhase, UpgradeState};
+        let st = |phase| UpgradeState {
+            target_image: "pglord-agent:18".into(),
+            next_generation: "g2".into(),
+            phase,
+            previous_primary: None,
+        };
+        assert!(failover_enabled(None));
+        // While replicating, the cluster is still fully itself: normal HA.
+        assert!(failover_enabled(Some(&st(UpgradePhase::Migrating))));
+        assert!(!failover_enabled(Some(&st(UpgradePhase::Soaking))));
+    }
 
     #[test]
     fn elects_highest_lsn_ready_standby() {

@@ -53,6 +53,15 @@ export interface ClusterSpec {
   fenced?: Array<string>;
 
   /**
+   * Instance-set generation. "g1" renders today's unsuffixed object names;
+   * a blue-green major upgrade bumps it (g2, g3, …) at finalize, at which
+   * point the StatefulSet and pod names carry the suffix forever —
+   * applications are unaffected because they connect through the Services.
+   * Flipped only by the upgrade flow, never by PATCH.
+   */
+  generation?: string;
+
+  /**
    * Scale to zero pods, keeping PVCs, credentials and the spec. The
    * desired replica count is preserved for wake. Flipped only by the
    * hibernate/wake endpoints, never by PATCH.
