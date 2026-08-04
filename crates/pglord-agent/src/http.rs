@@ -8,6 +8,7 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use serde_json::Value;
 use tokio::process::Command;
 
 use crate::config::Config;
@@ -25,7 +26,97 @@ pub fn router(cfg: Arc<Config>) -> Router {
         .route("/provision/apply", post(apply_provisioning))
         .route("/backup", post(take_backup))
         .route("/backups", get(list_backups))
+        .route("/backup/stanza-upgrade", post(stanza_upgrade))
+        .route("/upgrade/status", get(upgrade_status))
+        .route("/upgrade/cutover", post(upgrade_cutover))
+        .route("/upgrade/fence", post(upgrade_fence))
+        .route("/upgrade/unfence", post(upgrade_unfence))
+        .route("/upgrade/cleanup", post(upgrade_cleanup))
         .with_state(cfg)
+}
+
+/// Primary-only gate shared by every mutating endpoint: "not provably the
+/// primary" (including postgres unreachable) is a refusal, never a maybe.
+fn require_primary(st: &status::InstanceStatus, what: &str) -> Option<(StatusCode, Json<Value>)> {
+    (st.in_recovery != Some(false)).then(|| {
+        (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": format!("{what} runs on the primary only") })),
+        )
+    })
+}
+
+fn json_result(result: anyhow::Result<()>) -> (StatusCode, Json<Value>) {
+    match result {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({ "status": "ok" }))),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": err.to_string() })),
+        ),
+    }
+}
+
+/// After a major upgrade the stanza still describes the old PostgreSQL
+/// version; stanza-upgrade re-points it at the current data directory.
+async fn stanza_upgrade(State(cfg): State<Arc<Config>>) -> impl IntoResponse {
+    let st = status::query_status(&cfg).await;
+    if let Some(refusal) = require_primary(&st, "stanza-upgrade") {
+        return refusal;
+    }
+    json_result(crate::backup::ensure_stanza_upgrade(&cfg).await)
+}
+
+/// Migration progress, from the new instance set's point of view.
+async fn upgrade_status(State(cfg): State<Arc<Config>>) -> impl IntoResponse {
+    if cfg.upgrade_source.is_empty() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "not an upgrade target instance" })),
+        );
+    }
+    let st = crate::upgrade::status(&cfg).await;
+    (
+        StatusCode::OK,
+        Json(serde_json::to_value(st).unwrap_or_default()),
+    )
+}
+
+async fn upgrade_cutover(State(cfg): State<Arc<Config>>) -> impl IntoResponse {
+    if cfg.upgrade_source.is_empty() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "not an upgrade target instance" })),
+        );
+    }
+    let st = status::query_status(&cfg).await;
+    if let Some(refusal) = require_primary(&st, "cutover") {
+        return refusal;
+    }
+    json_result(crate::upgrade::cutover(&cfg).await)
+}
+
+async fn upgrade_fence(State(cfg): State<Arc<Config>>) -> impl IntoResponse {
+    let st = status::query_status(&cfg).await;
+    if let Some(refusal) = require_primary(&st, "fencing writes") {
+        return refusal;
+    }
+    json_result(crate::upgrade::fence_writes(&cfg).await)
+}
+
+async fn upgrade_unfence(State(cfg): State<Arc<Config>>) -> impl IntoResponse {
+    let st = status::query_status(&cfg).await;
+    if let Some(refusal) = require_primary(&st, "unfencing writes") {
+        return refusal;
+    }
+    json_result(crate::upgrade::unfence_writes(&cfg).await)
+}
+
+async fn upgrade_cleanup(State(cfg): State<Arc<Config>>) -> impl IntoResponse {
+    let st = status::query_status(&cfg).await;
+    if let Some(refusal) = require_primary(&st, "upgrade cleanup") {
+        return refusal;
+    }
+    json_result(crate::upgrade::cleanup_source_artifacts(&cfg).await)
 }
 
 async fn get_status(State(cfg): State<Arc<Config>>) -> impl IntoResponse {

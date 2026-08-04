@@ -14,3 +14,4 @@ pub mod record;
 pub mod rolestrategy;
 pub mod status;
 pub mod supervisor;
+pub mod upgrade;

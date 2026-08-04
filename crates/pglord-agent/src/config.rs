@@ -61,6 +61,12 @@ pub struct Config {
     pub s3_access_key: String,
     #[serde(default = "default_empty")]
     pub s3_secret_key: String,
+    /// Blue-green major upgrades: when set, this instance belongs to the new
+    /// (green) set and its primary bootstraps as a logical subscriber of the
+    /// named host — the running cluster's rw Service. Empty = ordinary
+    /// instance.
+    #[serde(default = "default_empty")]
+    pub upgrade_source: String,
 }
 
 fn default_namespace() -> String {

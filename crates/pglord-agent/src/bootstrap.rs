@@ -32,7 +32,7 @@ pub fn postgresql_conf_extra(port: u16) -> String {
          include_if_exists = '{}'\n\
          listen_addresses = '*'\n\
          port = {port}\n\
-         wal_level = replica\n\
+         wal_level = logical\n\
          max_wal_senders = 10\n\
          hot_standby = on\n\
          wal_log_hints = on\n",
@@ -46,6 +46,31 @@ pub fn postgresql_conf_extra(port: u16) -> String {
 
 fn is_bootstrapped(pgdata: &Path) -> bool {
     pgdata.join("PG_VERSION").exists()
+}
+
+/// Bring a PGDATA created by an older agent up to `wal_level = logical`.
+///
+/// Logical decoding is what makes a major-version upgrade possible at all
+/// (the new instances subscribe to this one), and any instance may become the
+/// one being upgraded, so it is on everywhere. The setting only takes effect
+/// at server start, and this runs before the supervisor spawns postgres —
+/// so every existing cluster converges on its next rolling restart.
+pub fn ensure_wal_level_logical(pgdata: &Path) -> std::io::Result<bool> {
+    let path = pgdata.join("postgresql.conf");
+    let conf = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        // No data directory yet: initdb writes the current block itself.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e),
+    };
+    if !conf.contains("wal_level = replica") {
+        return Ok(false);
+    }
+    std::fs::write(
+        &path,
+        conf.replace("wal_level = replica", "wal_level = logical"),
+    )?;
+    Ok(true)
 }
 
 /// Compare PGDATA's major (PG_VERSION file) with the running binary's.
@@ -71,7 +96,8 @@ pub fn major_version_conflict(
 
 /// Refuse to start an existing PGDATA under a binary from a different major:
 /// postgres would refuse too, but deep in startup with a muddier error. The
-/// clear remedy — revert the cluster image — matters more than the check.
+/// clear remedy — revert the image and use the upgrade flow, which never
+/// reinterprets an existing data directory — matters more than the check.
 async fn check_major_version(pgdata: &Path) -> anyhow::Result<()> {
     let Ok(data_version) = std::fs::read_to_string(pgdata.join("PG_VERSION")) else {
         return Ok(());
@@ -83,7 +109,8 @@ async fn check_major_version(pgdata: &Path) -> anyhow::Result<()> {
     if let Some((data, binary)) = major_version_conflict(&data_version, &binary_version) {
         bail!(
             "PGDATA was created by PostgreSQL {data} but this image ships PostgreSQL {binary}; \
-             major upgrades are not supported — revert the cluster image to a PostgreSQL {data} build"
+             revert the cluster image to a PostgreSQL {data} build — changing major version \
+             is what the upgrade operation is for"
         );
     }
     Ok(())
@@ -420,7 +447,9 @@ mod tests {
     fn conf_extra_contains_replication_settings() {
         let conf = postgresql_conf_extra(5433);
         assert!(conf.contains("port = 5433"));
-        assert!(conf.contains("wal_level = replica"));
+        // logical, not replica: any instance may become the source of a
+        // blue-green major upgrade, and the level is only settable at start.
+        assert!(conf.contains("wal_level = logical"));
         assert!(conf.contains("max_wal_senders = 10"));
         assert!(conf.contains("hot_standby = on"));
         assert!(conf.contains("listen_addresses = '*'"));
@@ -549,6 +578,28 @@ mod tests {
         assert!(!has_standby_signal(&dir));
         std::fs::write(dir.join("standby.signal"), "").expect("write");
         assert!(has_standby_signal(&dir));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ensure_wal_level_logical_rewrites_old_managed_blocks() {
+        let dir = std::env::temp_dir().join("pglord-agent-test-wal-level");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+
+        // No data directory yet: nothing to rewrite, and no error either.
+        assert!(!ensure_wal_level_logical(&dir).expect("absent conf"));
+
+        let conf = dir.join("postgresql.conf");
+        std::fs::write(&conf, "listen_addresses = '*'\nwal_level = replica\n").expect("write");
+        assert!(ensure_wal_level_logical(&dir).expect("rewrite"));
+        let after = std::fs::read_to_string(&conf).expect("read");
+        assert!(after.contains("wal_level = logical"));
+        assert!(!after.contains("wal_level = replica"));
+        assert!(after.contains("listen_addresses = '*'"));
+
+        // Idempotent: a second pass must not rewrite the file again.
+        assert!(!ensure_wal_level_logical(&dir).expect("noop"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

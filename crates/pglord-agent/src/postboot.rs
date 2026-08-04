@@ -70,7 +70,7 @@ pub async fn ensure_initialised(cfg: &Config, spec: &pglord_core::spec::ClusterS
 
 /// Local superuser connection over the socket (peer auth — works even when
 /// the env password is stale, which is the whole point during rotation).
-async fn connect_local(
+pub(crate) async fn connect_local(
     cfg: &Config,
 ) -> anyhow::Result<(
     tokio_postgres::Client,
@@ -81,7 +81,7 @@ async fn connect_local(
 
 /// Extensions are per-database objects: creating one means connecting to the
 /// database it lives in, not to the maintenance database.
-async fn connect_local_db(
+pub(crate) async fn connect_local_db(
     cfg: &Config,
     dbname: &str,
 ) -> anyhow::Result<(

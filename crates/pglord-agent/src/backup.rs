@@ -67,6 +67,17 @@ pub async fn ensure_stanza(cfg: &Config) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Re-point the stanza at a data directory that moved to a new PostgreSQL
+/// major. Run after a blue-green upgrade finalizes; without it every backup
+/// and archive-push fails on the version mismatch.
+pub async fn ensure_stanza_upgrade(cfg: &Config) -> anyhow::Result<()> {
+    let out = command(cfg, &["stanza-upgrade"]).output().await?;
+    if !out.status.success() {
+        anyhow::bail!("{}", pgbackrest_error(&out.stdout, &out.stderr, out.status));
+    }
+    Ok(())
+}
+
 pub async fn take_backup(cfg: &Config, kind: &str) -> anyhow::Result<()> {
     let kind = match kind {
         "incr" | "diff" | "full" => kind,

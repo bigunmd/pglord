@@ -7,13 +7,34 @@
 //! is harmless: postgres only waits on connected ones, and none connected
 //! means blocked writes, which is exactly the strict semantics of the flag.
 
+/// The instance set `me` belongs to: its name minus the trailing ordinal.
+///
+/// Derived from the pod's own name rather than the spec, because a blue-green
+/// upgrade's new instances run with the *old* generation still recorded in the
+/// spec — quorum peers must be that pod's own siblings either way. Anything
+/// not pod-shaped (a docker e2e hostname) falls back to the cluster name,
+/// which is what this always was.
+pub fn instance_set_of<'a>(me: &'a str, cluster: &'a str) -> &'a str {
+    match me.rsplit_once('-') {
+        Some((prefix, ordinal))
+            if !prefix.is_empty()
+                && !ordinal.is_empty()
+                && ordinal.chars().all(|c| c.is_ascii_digit()) =>
+        {
+            prefix
+        }
+        _ => cluster,
+    }
+}
+
 /// Render the managed include for one instance. Pod names carry hyphens, so
 /// they are double-quoted inside the single-quoted GUC value.
 pub fn render(cluster: &str, replicas: u8, me: &str, synchronous: bool) -> String {
     let mut out =
         String::from("# Managed by pglord — do not edit; changes come from the cluster spec.\n");
+    let set = instance_set_of(me, cluster);
     let peers: Vec<String> = (0..replicas)
-        .map(|i| format!("{cluster}-{i}"))
+        .map(|i| format!("{set}-{i}"))
         .filter(|p| p != me)
         .map(|p| format!("\"{p}\""))
         .collect();
@@ -75,6 +96,20 @@ mod tests {
             "# Managed by pglord — do not edit; changes come from the cluster spec.\n\
              synchronous_standby_names = ''\n"
         );
+    }
+
+    #[test]
+    fn peers_come_from_the_instance_set_not_the_cluster_name() {
+        // A blue-green upgrade's new instances are "demo-g2-N": listing
+        // "demo-N" would make every commit wait on the old set's pods.
+        assert_eq!(
+            render("demo", 2, "demo-g2-0", true),
+            "# Managed by pglord — do not edit; changes come from the cluster spec.\n\
+             synchronous_standby_names = 'ANY 1 (\"demo-g2-1\")'\n"
+        );
+        assert_eq!(instance_set_of("demo-g2-1", "demo"), "demo-g2");
+        assert_eq!(instance_set_of("demo-1", "demo"), "demo");
+        assert_eq!(instance_set_of("1f9a2b3c4d5e", "demo"), "demo");
     }
 
     #[test]

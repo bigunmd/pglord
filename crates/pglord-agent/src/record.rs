@@ -82,6 +82,24 @@ pub fn is_fenced_in(fenced: &[String], me: &str) -> bool {
     fenced.iter().any(|f| f == me)
 }
 
+/// Whether two pod names belong to the same StatefulSet — identical prefix
+/// before the trailing ordinal.
+///
+/// A primary record naming another generation's pod must never drive this
+/// pod's role. During a blue-green major upgrade the one record points across
+/// instance sets for a while: acting on it would make the new set's primary
+/// fence itself the moment it boots, and after cutover would send the old
+/// primary pg_rewinding onto a timeline written by a different PostgreSQL
+/// major.
+pub fn same_instance_set(a: &str, b: &str) -> bool {
+    fn prefix(s: &str) -> Option<&str> {
+        let (p, ordinal) = s.rsplit_once('-')?;
+        (!p.is_empty() && !ordinal.is_empty() && ordinal.chars().all(|c| c.is_ascii_digit()))
+            .then_some(p)
+    }
+    matches!((prefix(a), prefix(b)), (Some(x), Some(y)) if x == y)
+}
+
 /// Decide the bootstrap role from the record (pure; unit-tested).
 pub fn role_from_record(recorded: &str, me: &str) -> Role {
     if recorded == me {
@@ -99,6 +117,13 @@ pub async fn apply_record_to_config(
     me: &str,
 ) -> Option<Role> {
     let recorded = reader.recorded_primary().await?;
+    if !same_instance_set(&recorded, me) {
+        tracing::info!(
+            %recorded,
+            "primary record names another instance set; resolving role by ordinal"
+        );
+        return None;
+    }
     let role = role_from_record(&recorded, me);
     if role == Role::Standby {
         cfg.primary_host = pod_fqdn(&recorded, &cfg.cluster, &cfg.namespace);
@@ -134,6 +159,13 @@ pub async fn follow(reader: RecordReader, cfg: std::sync::Arc<Config>, me: Strin
             continue;
         }
         apply_parameters(&reader, &cfg, &me, st.in_recovery == Some(true)).await;
+        // Config convergence above runs unconditionally — a blue-green upgrade's
+        // new instances must keep picking up parameter and preload changes
+        // while the record still names the old set. Role actions do not: see
+        // same_instance_set.
+        if !same_instance_set(&recorded, &me) {
+            continue;
+        }
         let i_am_recorded = recorded == me;
         match st.in_recovery {
             // A restoring instance is in recovery *and* recorded as primary,
@@ -188,7 +220,13 @@ async fn apply_parameters(reader: &RecordReader, cfg: &Config, me: &str, in_reco
         Err(err) => tracing::warn!(%err, "failed to write parameter file"),
     }
 
-    let archive = crate::params::archive_conf(&cfg.cluster, spec.backup.enabled);
+    // A blue-green upgrade's new instances must not archive: they would push
+    // WAL into the running cluster's stanza, which pgBackRest rejects on the
+    // system-identifier mismatch and which would retain WAL here meanwhile.
+    // Finalize rolls the pods without this env var, and runs stanza-upgrade,
+    // which is what turns archiving back on for the promoted set.
+    let archive_enabled = spec.backup.enabled && cfg.upgrade_source.is_empty();
+    let archive = crate::params::archive_conf(&cfg.cluster, archive_enabled);
     match crate::params::write_archive_if_changed(&cfg.pgdata, &archive) {
         Ok(true) => changed = true,
         Ok(false) => {}
@@ -289,6 +327,20 @@ async fn fence(cfg: &Config, new_primary: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn same_instance_set_compares_the_prefix_before_the_ordinal() {
+        assert!(same_instance_set("demo-0", "demo-1"));
+        assert!(same_instance_set("demo-g2-0", "demo-g2-1"));
+        // The heart of it: the two sides of a blue-green upgrade.
+        assert!(!same_instance_set("demo-0", "demo-g2-0"));
+        assert!(!same_instance_set("demo-g2-0", "demo-g3-0"));
+        // Not pod-shaped at all (docker e2e hostnames): never claim a match,
+        // so the ordinal fallback decides instead of the record.
+        assert!(!same_instance_set("demo", "demo-0"));
+        assert!(!same_instance_set("", "demo-0"));
+        assert!(!same_instance_set("-0", "-1"));
+    }
 
     #[test]
     fn fence_list_matches_exact_pod_name() {

@@ -16,6 +16,8 @@ struct AgentStatus {
     sync_standby_count: Option<u32>,
     #[serde(default)]
     ssl: Option<bool>,
+    #[serde(default)]
+    wal_level: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -30,6 +32,9 @@ pub struct InstanceObservation {
     pub sync_standby_count: Option<u32>,
     /// The server is accepting TLS connections. None when unreachable.
     pub ssl: Option<bool>,
+    /// Live `wal_level`. None when unreachable, or when an older agent that
+    /// does not report it answers.
+    pub wal_level: Option<String>,
 }
 
 /// Observe every instance of the spec's *own* generation. During a major
@@ -61,6 +66,7 @@ pub async fn observe_cluster(
                 pending_restart: s.pending_restart,
                 sync_standby_count: s.sync_standby_count,
                 ssl: s.ssl,
+                wal_level: s.wal_level,
             },
             None => InstanceObservation {
                 pod,
@@ -70,6 +76,7 @@ pub async fn observe_cluster(
                 pending_restart: false,
                 sync_standby_count: None,
                 ssl: None,
+                wal_level: None,
             },
         });
     }

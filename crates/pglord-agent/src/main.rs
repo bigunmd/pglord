@@ -105,6 +105,14 @@ async fn main() -> anyhow::Result<()> {
     ) {
         tracing::warn!(%err, "failed to set PGDATA permissions");
     }
+    // Data directories created by older agents carry wal_level = replica,
+    // which no logical subscription can be built on. The level is only read at
+    // start, so the rewrite has to land before the supervisor spawns postgres.
+    match bootstrap::ensure_wal_level_logical(&cfg.pgdata) {
+        Ok(true) => tracing::info!("rewrote wal_level to logical (takes effect this start)"),
+        Ok(false) => {}
+        Err(err) => tracing::warn!(%err, "failed to raise wal_level to logical"),
+    }
     let child = supervisor::spawn_postgres(&cfg)?;
 
     if cfg.role == Role::Primary {
@@ -120,6 +128,12 @@ async fn main() -> anyhow::Result<()> {
                 pglord_agent::postboot::ensure_initialised(&cfg_pb, &spec).await;
             }
         });
+    }
+    // Blue-green major upgrade: this instance set's primary builds itself from
+    // the running cluster by logical replication instead of waiting for data.
+    if !cfg.upgrade_source.is_empty() && cfg.role == Role::Primary {
+        let cfg_up = cfg.clone();
+        tokio::spawn(async move { pglord_agent::upgrade::run_subscriber(cfg_up).await });
     }
     if let Some(reader) = reader {
         tokio::spawn(record::follow(reader, cfg.clone(), hostname.clone()));
