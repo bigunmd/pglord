@@ -96,6 +96,11 @@ pub struct ClusterSpec {
     /// Declared databases, converged after the roles that own them.
     #[serde(default)]
     pub databases: Vec<crate::provision::DatabaseSpec>,
+    /// Declared extensions, created in their target database after it exists.
+    /// Additive like roles: removing an entry stops managing it, nothing is
+    /// dropped. Preload-flagged entries drive shared_preload_libraries.
+    #[serde(default)]
+    pub extensions: Vec<crate::provision::ExtensionSpec>,
     /// Scale to zero pods, keeping PVCs, credentials and the spec. The
     /// desired replica count is preserved for wake. Flipped only by the
     /// hibernate/wake endpoints, never by PATCH.
@@ -234,6 +239,10 @@ pub struct SpecChange {
     /// Full replacement of the declared databases; same semantics as roles.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub databases: Option<Vec<crate::provision::DatabaseSpec>>,
+    /// Full replacement of the declared extensions, roles semantics: absent
+    /// leaves them untouched, empty stops managing (nothing is dropped).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<Vec<crate::provision::ExtensionSpec>>,
 }
 
 /// Size in bytes for comparison; None when the quantity is malformed.
@@ -310,6 +319,9 @@ impl ClusterSpec {
         if let Some(databases) = &change.databases {
             next.databases = databases.clone();
         }
+        if let Some(extensions) = &change.extensions {
+            next.extensions = extensions.clone();
+        }
         next.validate()?;
         Ok(next)
     }
@@ -376,7 +388,7 @@ impl ClusterSpec {
         crate::init::validate(&self.init)?;
         crate::tls::validate(&self.tls)?;
         crate::pooler::validate(&self.pooler)?;
-        crate::provision::validate(&self.roles, &self.databases)?;
+        crate::provision::validate_all(&self.roles, &self.databases, &self.extensions)?;
         if !self.tls.enabled()
             && self
                 .pg_hba

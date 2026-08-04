@@ -67,6 +67,10 @@ pub fn restored_spec(source: &ClusterSpec, req: &RestoreRequest) -> ClusterSpec 
         // databases; the first ensure is a no-op or fixes drift.
         roles: source.roles.clone(),
         databases: source.databases.clone(),
+        // Carried over: the restored data already contains these extensions;
+        // the first ensure is a no-op or fixes drift. Preload entries also
+        // carry so shared_preload_libraries renders identically.
+        extensions: source.extensions.clone(),
         workload: source.workload.clone(),
         // Carried over: whatever ran against the source's data expects these.
         env: source.env.clone(),

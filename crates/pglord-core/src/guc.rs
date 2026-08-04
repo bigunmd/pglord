@@ -67,6 +67,9 @@ pub const RESERVED: &[&str] = &[
     "archive_mode",
     "archive_command",
     "archive_timeout",
+    // Driven by the extensions block (preload-flagged entries); a hand-set
+    // list would fight the agent's render and break preload convergence.
+    "shared_preload_libraries",
     // Driven by the `tls` spec block; hand-set cert paths would break the
     // managed mount contract, and a hand-set `ssl = on` without a mounted
     // certificate would stop postgres from starting.
@@ -515,6 +518,7 @@ mod tests {
     #[test]
     fn reserved_settings_are_recognized() {
         assert!(is_reserved("wal_level"));
+        assert!(is_reserved("shared_preload_libraries"));
         assert!(is_reserved("listen_addresses"));
         // TLS is driven by the spec block, never by hand-set parameters.
         assert!(is_reserved("ssl"));

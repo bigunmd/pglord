@@ -48,6 +48,22 @@ fn default_true() -> bool {
     true
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
+#[cfg_attr(feature = "crd", derive(schemars::JsonSchema))]
+pub struct ExtensionSpec {
+    /// Strict lowercase identifier — the injection contract.
+    pub name: String,
+    /// Target database: a declared database or "postgres".
+    pub database: String,
+    /// Optional schema to install into (same charset).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
+    /// Also load the library at server start (shared_preload_libraries).
+    /// Restart-required; surfaces through pending_restart.
+    #[serde(default)]
+    pub preload: bool,
+}
+
 /// Role names pglord refuses to manage: its own machinery and everything
 /// postgres reserves.
 const RESERVED_ROLES: [&str; 3] = ["postgres", "replicator", "pglord_pooler"];
@@ -67,6 +83,13 @@ pub enum ProvisionError {
     InvalidSecretRef { role: String },
     #[error("role '{role}' has connection limit {limit}: must be -1 (unlimited) or >= 0")]
     InvalidConnectionLimit { role: String, limit: i32 },
+    #[error(
+        "extension '{extension}' targets database '{database}', which is not declared \
+         (declare it, or use 'postgres')"
+    )]
+    UnknownExtensionDatabase { extension: String, database: String },
+    #[error("extension '{name}' is declared more than once for database '{database}'")]
+    DuplicateExtension { name: String, database: String },
 }
 
 /// A name safe to interpolate into DDL as a quoted identifier: nothing in
@@ -79,6 +102,56 @@ pub fn is_valid_pg_name(s: &str) -> bool {
             .is_some_and(|c| c.is_ascii_lowercase() || c == '_')
         && s.chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+}
+
+/// Full provisioning validation: roles, databases and extensions together.
+pub fn validate_all(
+    roles: &[RoleSpec],
+    databases: &[DatabaseSpec],
+    extensions: &[ExtensionSpec],
+) -> Result<(), ProvisionError> {
+    validate(roles, databases)?;
+    validate_extensions(extensions, databases)
+}
+
+/// Extensions: strict charset, declared-or-postgres database, no duplicate
+/// (name, database) pairs, built-ins rejected.
+pub fn validate_extensions(
+    extensions: &[ExtensionSpec],
+    databases: &[DatabaseSpec],
+) -> Result<(), ProvisionError> {
+    let mut seen: Vec<(&str, &str)> = Vec::with_capacity(extensions.len());
+    for ext in extensions {
+        if !is_valid_pg_name(&ext.name) {
+            return Err(ProvisionError::InvalidName(ext.name.clone()));
+        }
+        // plpgsql is built into every database; managing it is noise.
+        if ext.name == "plpgsql" {
+            return Err(ProvisionError::ReservedName(ext.name.clone()));
+        }
+        if let Some(schema) = &ext.schema
+            && !is_valid_pg_name(schema)
+        {
+            return Err(ProvisionError::InvalidName(schema.clone()));
+        }
+        let known = ext.database == "postgres"
+            || databases.iter().any(|d| d.name == ext.database);
+        if !known {
+            return Err(ProvisionError::UnknownExtensionDatabase {
+                extension: ext.name.clone(),
+                database: ext.database.clone(),
+            });
+        }
+        let key = (ext.name.as_str(), ext.database.as_str());
+        if seen.contains(&key) {
+            return Err(ProvisionError::DuplicateExtension {
+                name: ext.name.clone(),
+                database: ext.database.clone(),
+            });
+        }
+        seen.push(key);
+    }
+    Ok(())
 }
 
 pub fn validate(roles: &[RoleSpec], databases: &[DatabaseSpec]) -> Result<(), ProvisionError> {
@@ -224,9 +297,95 @@ pub fn database_ddl(db: &DatabaseSpec, current_owner: Option<&str>) -> Option<St
     }
 }
 
+/// `CREATE EXTENSION IF NOT EXISTS` — never ALTERed afterwards; existence is
+/// the leave-in-place boundary, exactly like roles.
+pub fn extension_ddl(ext: &ExtensionSpec) -> String {
+    match &ext.schema {
+        Some(schema) => {
+            format!(r#"CREATE EXTENSION IF NOT EXISTS "{}" SCHEMA "{}""#, ext.name, schema)
+        }
+        None => format!(r#"CREATE EXTENSION IF NOT EXISTS "{}""#, ext.name),
+    }
+}
+
+/// The shared_preload_libraries value: sorted, deduplicated names of every
+/// preload-flagged extension. None when nothing needs preloading, so the
+/// setting renders back to its default after removals.
+pub fn preload_libraries(extensions: &[ExtensionSpec]) -> Option<String> {
+    let libs: std::collections::BTreeSet<&str> = extensions
+        .iter()
+        .filter(|e| e.preload)
+        .map(|e| e.name.as_str())
+        .collect();
+    if libs.is_empty() {
+        return None;
+    }
+    Some(libs.into_iter().collect::<Vec<_>>().join(","))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ext(name: &str, db: &str, preload: bool) -> ExtensionSpec {
+        ExtensionSpec {
+            name: name.into(),
+            database: db.into(),
+            schema: None,
+            preload,
+        }
+    }
+
+    #[test]
+    fn extension_validation_rules() {
+        let dbs = vec![DatabaseSpec {
+            name: "appdb".into(),
+            owner: "app".into(),
+        }];
+        let ok = ext("pgcrypto", "appdb", false);
+        let in_postgres = ext("pg_stat_statements", "postgres", true);
+        assert!(validate_extensions(&[ok.clone(), in_postgres], &dbs).is_ok());
+        assert!(validate_extensions(&[ext("pgcrypto", "nope", false)], &dbs).is_err());
+        assert!(validate_extensions(&[ext("pg;drop", "appdb", false)], &dbs).is_err());
+        assert!(validate_extensions(&[ok.clone(), ok.clone()], &dbs).is_err());
+        assert!(validate_extensions(&[ext("plpgsql", "appdb", false)], &dbs).is_err());
+        let bad_schema = ExtensionSpec {
+            schema: Some("Bad Schema".into()),
+            ..ok
+        };
+        assert!(validate_extensions(&[bad_schema], &dbs).is_err());
+    }
+
+    #[test]
+    fn extension_ddl_shapes() {
+        let plain = ext("pgcrypto", "appdb", false);
+        assert_eq!(
+            extension_ddl(&plain),
+            r#"CREATE EXTENSION IF NOT EXISTS "pgcrypto""#
+        );
+        let schemad = ExtensionSpec {
+            schema: Some("gis".into()),
+            ..ext("postgis", "appdb", false)
+        };
+        assert_eq!(
+            extension_ddl(&schemad),
+            r#"CREATE EXTENSION IF NOT EXISTS "postgis" SCHEMA "gis""#
+        );
+    }
+
+    #[test]
+    fn preload_line_is_sorted_deduped_and_absent_when_empty() {
+        assert_eq!(
+            preload_libraries(&[
+                ext("timescaledb", "postgres", true),
+                ext("pg_stat_statements", "postgres", true),
+                ext("pgcrypto", "appdb", false),
+                ext("timescaledb", "appdb", true),
+            ]),
+            Some("pg_stat_statements,timescaledb".into())
+        );
+        assert_eq!(preload_libraries(&[ext("pgcrypto", "appdb", false)]), None);
+    }
 
     fn role(name: &str) -> RoleSpec {
         serde_json::from_value(serde_json::json!({ "name": name })).expect("role")
