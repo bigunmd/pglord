@@ -78,6 +78,24 @@ async fn main() -> anyhow::Result<()> {
     if let Err(err) = pglord_agent::params::write_sync_if_changed(&cfg.pgdata, &sync_conf) {
         tracing::warn!(%err, "failed to write sync replication settings");
     }
+    // User parameters and shared_preload_libraries, before postgres starts
+    // rather than only from the watch loop afterwards. shared_preload_libraries
+    // is read at startup only, so a preload extension (timescaledb, pg_cron)
+    // would otherwise be unusable until the next restart — and on a major
+    // upgrade's new instances that would stall the schema copy, which cannot
+    // create such an extension without its library loaded.
+    if let Some(spec) = cluster_spec.as_ref() {
+        let mut rendered = pglord_core::guc::render_parameters(&spec.parameters);
+        if let Some(libs) = pglord_core::provision::preload_libraries(&spec.extensions) {
+            if rendered.is_empty() {
+                rendered.push_str("# Managed by pglord. Edited through the pglord API/UI.\n");
+            }
+            rendered.push_str(&format!("shared_preload_libraries = '{libs}'\n"));
+        }
+        if let Err(err) = pglord_agent::params::write_if_changed(&cfg.pgdata, &rendered) {
+            tracing::warn!(%err, "failed to write parameter file");
+        }
+    }
     // A rebuilt standby carries the primary's control file, so the clamp is
     // correct exactly when postgres first validates hot-standby settings.
     let empty = std::collections::BTreeMap::new();
