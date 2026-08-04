@@ -76,12 +76,25 @@ async fn connect_local(
     tokio_postgres::Client,
     tokio::task::JoinHandle<Result<(), tokio_postgres::Error>>,
 )> {
+    connect_local_db(cfg, "postgres").await
+}
+
+/// Extensions are per-database objects: creating one means connecting to the
+/// database it lives in, not to the maintenance database.
+async fn connect_local_db(
+    cfg: &Config,
+    dbname: &str,
+) -> anyhow::Result<(
+    tokio_postgres::Client,
+    tokio::task::JoinHandle<Result<(), tokio_postgres::Error>>,
+)> {
     let conn_str = format!(
-        "host={} port={} user={} password={} dbname=postgres connect_timeout=5",
+        "host={} port={} user={} password={} dbname={} connect_timeout=5",
         cfg.socket_dir.display(),
         cfg.port,
         cfg.superuser,
         cfg.superuser_password,
+        dbname,
     );
     let (client, connection) = tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await?;
     Ok((client, tokio::spawn(connection)))
@@ -234,11 +247,23 @@ pub struct ProvisionDatabase {
 }
 
 #[derive(serde::Deserialize)]
+pub struct ProvisionExtension {
+    pub name: String,
+    pub database: String,
+    #[serde(default)]
+    pub schema: Option<String>,
+    #[serde(default)]
+    pub preload: bool,
+}
+
+#[derive(serde::Deserialize)]
 pub struct ProvisionRequest {
     #[serde(default)]
     pub roles: Vec<ProvisionRole>,
     #[serde(default)]
     pub databases: Vec<ProvisionDatabase>,
+    #[serde(default)]
+    pub extensions: Vec<ProvisionExtension>,
 }
 
 impl ProvisionRequest {
@@ -251,6 +276,7 @@ impl ProvisionRequest {
     ) -> (
         Vec<pglord_core::provision::RoleSpec>,
         Vec<pglord_core::provision::DatabaseSpec>,
+        Vec<pglord_core::provision::ExtensionSpec>,
     ) {
         let roles = self
             .roles
@@ -273,7 +299,17 @@ impl ProvisionRequest {
                 owner: d.owner.clone(),
             })
             .collect();
-        (roles, databases)
+        let extensions = self
+            .extensions
+            .iter()
+            .map(|e| pglord_core::provision::ExtensionSpec {
+                name: e.name.clone(),
+                database: e.database.clone(),
+                schema: e.schema.clone(),
+                preload: e.preload,
+            })
+            .collect();
+        (roles, databases, extensions)
     }
 }
 
@@ -288,8 +324,8 @@ pub async fn apply_provisioning(cfg: &Config, req: &ProvisionRequest) -> anyhow:
     use pglord_core::provision::{
         database_ddl, grant_sql, membership_changes, revoke_sql, role_ddl,
     };
-    let (specs, db_specs) = req.to_specs();
-    pglord_core::provision::validate(&specs, &db_specs)?;
+    let (specs, db_specs, ext_specs) = req.to_specs();
+    pglord_core::provision::validate_all(&specs, &db_specs, &ext_specs)?;
     let (client, conn_task) = connect_local(cfg).await?;
 
     let mut declared: Vec<String> = Vec::with_capacity(req.roles.len());
@@ -347,6 +383,55 @@ pub async fn apply_provisioning(cfg: &Config, req: &ProvisionRequest) -> anyhow:
 
     drop(client);
     conn_task.abort();
+
+    // Extensions last: they may target a database declared in the same edit.
+    // Grouped per database — extension objects live inside their database —
+    // and a failing database does not block the others (level-triggered: the
+    // reconciler retries; the classic case is a preload-requiring extension
+    // whose library loads only after the pending restart).
+    let mut by_db: std::collections::BTreeMap<&str, Vec<&pglord_core::provision::ExtensionSpec>> =
+        Default::default();
+    for spec in &ext_specs {
+        by_db.entry(spec.database.as_str()).or_default().push(spec);
+    }
+    let mut first_err: Option<anyhow::Error> = None;
+    for (db, exts) in by_db {
+        if let Err(err) = apply_extensions_in(cfg, db, &exts).await {
+            tracing::warn!(%db, %err, "extension ensure failed in database; continuing");
+            first_err.get_or_insert(err);
+        }
+    }
+    if let Some(err) = first_err {
+        return Err(err);
+    }
+    Ok(())
+}
+
+/// Ensure the given extensions inside one database, on its own short-lived
+/// connection. Existence is the leave-in-place boundary: present extensions
+/// are never altered.
+async fn apply_extensions_in(
+    cfg: &Config,
+    db: &str,
+    exts: &[&pglord_core::provision::ExtensionSpec],
+) -> anyhow::Result<()> {
+    use pglord_core::provision::extension_ddl;
+    let (client, conn_task) = connect_local_db(cfg, db).await?;
+    for ext in exts {
+        let exists: bool = client
+            .query_one(
+                "SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = $1)",
+                &[&ext.name],
+            )
+            .await?
+            .get(0);
+        if !exists {
+            client.batch_execute(&extension_ddl(ext)).await?;
+            tracing::info!(extension = %ext.name, %db, "extension created");
+        }
+    }
+    drop(client);
+    conn_task.abort();
     Ok(())
 }
 
@@ -374,5 +459,23 @@ mod tests {
         assert!(!is_safe_password("has$pglord$end"));
         assert!(!is_safe_password("quote'ish"));
         assert!(!is_safe_password(""));
+    }
+
+    #[test]
+    fn provision_request_maps_extensions_to_core_specs() {
+        let req: ProvisionRequest = serde_json::from_value(serde_json::json!({
+            "extensions": [
+                { "name": "pgcrypto", "database": "appdb" },
+                { "name": "pg_stat_statements", "database": "postgres",
+                  "schema": "monitoring", "preload": true },
+            ]
+        }))
+        .expect("request");
+        let (_, _, exts) = req.to_specs();
+        assert_eq!(exts.len(), 2);
+        assert_eq!(exts[0].name, "pgcrypto");
+        assert!(!exts[0].preload);
+        assert_eq!(exts[1].schema.as_deref(), Some("monitoring"));
+        assert!(exts[1].preload);
     }
 }

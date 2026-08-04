@@ -227,8 +227,8 @@ async fn apply_provisioning(
     // Full spec validation, not just charsets: without the reserved-name
     // checks, anything on the pod network could ask this endpoint to ALTER
     // `postgres` or `replicator`. Never trust the caller to have validated.
-    let (role_specs, db_specs) = req.to_specs();
-    if let Err(err) = pglord_core::provision::validate(&role_specs, &db_specs) {
+    let (role_specs, db_specs, ext_specs) = req.to_specs();
+    if let Err(err) = pglord_core::provision::validate_all(&role_specs, &db_specs, &ext_specs) {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({ "error": err.to_string() })),

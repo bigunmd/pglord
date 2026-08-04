@@ -171,7 +171,17 @@ async fn apply_parameters(reader: &RecordReader, cfg: &Config, me: &str, in_reco
     };
     let mut changed = false;
 
-    let rendered = pglord_core::guc::render_parameters(&spec.parameters);
+    let mut rendered = pglord_core::guc::render_parameters(&spec.parameters);
+    // Preload-flagged extensions drive shared_preload_libraries (reserved in
+    // the catalog, so it can never collide with a user parameter). Written
+    // into the same managed file: restart-required, so pending_restart
+    // surfaces it and a removal converges on the next restart.
+    if let Some(libs) = pglord_core::provision::preload_libraries(&spec.extensions) {
+        if rendered.is_empty() {
+            rendered.push_str("# Managed by pglord. Edited through the pglord API/UI.\n");
+        }
+        rendered.push_str(&format!("shared_preload_libraries = '{libs}'\n"));
+    }
     match crate::params::write_if_changed(&cfg.pgdata, &rendered) {
         Ok(true) => changed = true,
         Ok(false) => {}
