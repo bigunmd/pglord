@@ -203,7 +203,7 @@
     "connectVia": "Connect via {{service}}:5432"
   },
   "provision": {
-    "title": "Roles & databases",
+    "title": "Provisioning",
     "edit": "Edit roles & databases",
     "editTitle": "Declared roles and databases",
     "explainer": "pglord creates and keeps these in line on the primary — after failovers and restores too. Additive: removing an entry stops managing it; nothing is ever dropped. Passwords come from Secrets you own; rotate by editing the Secret.",
@@ -225,7 +225,14 @@
     "remove": "Remove",
     "apply": "Apply",
     "summary": "{{roles}} role(s), {{databases}} database(s) declared.",
-    "none": "None declared — roles and databases come from init scripts or manual SQL."
+    "none": "None declared — roles and databases come from init scripts or manual SQL.",
+    "extensions": "Extensions",
+    "addExtension": "Add extension",
+    "extensionName": "Extension",
+    "extensionDatabase": "Database",
+    "extensionSchema": "Schema (optional)",
+    "extensionPreload": "Preload",
+    "preloadHint": "Preload loads the library at server start (shared_preload_libraries) — requires a restart; watch for the pending-restart banner."
   },
   "preflight": {
     "title": "Cluster permissions",

@@ -1051,7 +1051,7 @@ export class ImageDialogComponent {
             {{ 'provision.edit' | transloco }}
           </button>
         </div>
-        @if (d.roles.length || d.databases.length) {
+        @if (d.roles.length || d.databases.length || d.extensions.length) {
           <p class="text-muted-foreground mt-2 text-sm" data-testid="provision-state">
             {{
               'provision.summary'
@@ -1068,6 +1068,17 @@ export class ImageDialogComponent {
             @for (db of d.databases; track db.name) {
               <p class="text-muted-foreground font-mono text-xs">
                 {{ db.name }} ({{ db.owner }})
+              </p>
+            }
+            @for (ext of d.extensions; track ext.name + '/' + ext.database) {
+              <p class="text-muted-foreground font-mono text-xs" [attr.data-testid]="'ext-' + ext.name">
+                {{ ext.name }} @ {{ ext.database
+                }}{{ ext.schema ? ' (' + ext.schema + ')' : '' }}
+                @if (ext.preload) {
+                  <span class="bg-muted ml-1 rounded-full px-1.5 py-0.5 text-[10px]">
+                    {{ 'provision.extensionPreload' | transloco }}
+                  </span>
+                }
               </p>
             }
           </div>
@@ -1299,7 +1310,11 @@ export class ClusterDetailComponent implements OnDestroy {
   async openProvision(d: ClusterDetail): Promise<void> {
     const result = await firstValueFrom(
       this.dialog.open<ProvisionResult | undefined>(ClusterProvisionDialogComponent, {
-        context: { roles: d.roles ?? [], databases: d.databases ?? [] },
+        context: {
+          roles: d.roles ?? [],
+          databases: d.databases ?? [],
+          extensions: d.extensions ?? [],
+        },
         contentClass: EDITOR_DIALOG_CLASS,
       }).closed$,
     );
@@ -1310,7 +1325,11 @@ export class ClusterDetailComponent implements OnDestroy {
       this.api.invoke(patchCluster, {
         ns: this.ns(),
         name: this.name(),
-        body: { roles: result.roles, databases: result.databases },
+        body: {
+          roles: result.roles,
+          databases: result.databases,
+          extensions: result.extensions,
+        },
       }),
     );
   }

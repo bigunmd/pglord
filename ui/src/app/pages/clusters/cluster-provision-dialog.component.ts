@@ -9,15 +9,18 @@ import { HlmLabel } from '@spartan-ng/helm/label';
 
 import { RoleSpec } from '../../api/models/role-spec';
 import { DatabaseSpec } from '../../api/models/database-spec';
+import { ExtensionSpec } from '../../api/models/extension-spec';
 
 export interface ProvisionDialogContext {
   roles: RoleSpec[];
   databases: DatabaseSpec[];
+  extensions: ExtensionSpec[];
 }
 
 export interface ProvisionResult {
   roles: RoleSpec[];
   databases: DatabaseSpec[];
+  extensions: ExtensionSpec[];
 }
 
 interface RoleRow {
@@ -34,6 +37,13 @@ interface RoleRow {
 interface DbRow {
   name: string;
   owner: string;
+}
+
+interface ExtRow {
+  name: string;
+  database: string;
+  schema: string;
+  preload: boolean;
 }
 
 /** Edit the declared roles and databases. Resolves to the full replacement
@@ -215,6 +225,72 @@ interface DbRow {
           {{ 'provision.addDatabase' | transloco }}
         </button>
       </div>
+
+      <div class="grid gap-3">
+        <h3 class="text-sm font-medium">{{ 'provision.extensions' | transloco }}</h3>
+        <p class="text-muted-foreground text-xs">{{ 'provision.preloadHint' | transloco }}</p>
+        @for (row of extRows(); track $index; let i = $index) {
+          <div class="grid grid-cols-[1fr_1fr_1fr_auto_auto] items-end gap-2">
+            <div class="grid gap-1">
+              <label hlmLabel [for]="'ext-name-' + i">{{
+                'provision.extensionName' | transloco
+              }}</label>
+              <input
+                hlmInput
+                [id]="'ext-name-' + i"
+                [attr.data-testid]="'ext-name-' + i"
+                placeholder="pgcrypto"
+                [ngModel]="row.name"
+                (ngModelChange)="patchExt(i, { name: $event })"
+              />
+            </div>
+            <div class="grid gap-1">
+              <label hlmLabel [for]="'ext-db-' + i">{{
+                'provision.extensionDatabase' | transloco
+              }}</label>
+              <select
+                [id]="'ext-db-' + i"
+                class="border-input bg-background h-9 rounded-md border px-3 text-sm"
+                [ngModel]="row.database"
+                (ngModelChange)="patchExt(i, { database: $event })"
+              >
+                <option value="postgres">postgres</option>
+                @for (name of dbNames(); track name) {
+                  <option [value]="name">{{ name }}</option>
+                }
+              </select>
+            </div>
+            <div class="grid gap-1">
+              <label hlmLabel [for]="'ext-schema-' + i">{{
+                'provision.extensionSchema' | transloco
+              }}</label>
+              <input
+                hlmInput
+                [id]="'ext-schema-' + i"
+                placeholder="public"
+                [ngModel]="row.schema"
+                (ngModelChange)="patchExt(i, { schema: $event })"
+              />
+            </div>
+            <label hlmLabel class="flex items-center gap-2 pb-2">
+              <input
+                type="checkbox"
+                class="accent-primary"
+                [attr.data-testid]="'ext-preload-' + i"
+                [ngModel]="row.preload"
+                (ngModelChange)="patchExt(i, { preload: $event })"
+              />
+              {{ 'provision.extensionPreload' | transloco }}
+            </label>
+            <button hlmBtn variant="ghost" size="sm" (click)="removeExt(i)">
+              {{ 'provision.remove' | transloco }}
+            </button>
+          </div>
+        }
+        <button hlmBtn variant="outline" size="sm" data-testid="add-extension" (click)="addExt()">
+          {{ 'provision.addExtension' | transloco }}
+        </button>
+      </div>
     </div>
 
     <div hlmDialogFooter>
@@ -246,6 +322,20 @@ export class ClusterProvisionDialogComponent {
   protected readonly dbRows = signal<DbRow[]>(
     (this.ctx.databases ?? []).map((d) => ({ name: d.name, owner: d.owner })),
   );
+  protected readonly extRows = signal<ExtRow[]>(
+    (this.ctx.extensions ?? []).map((e) => ({
+      name: e.name,
+      database: e.database,
+      schema: e.schema ?? '',
+      preload: e.preload ?? false,
+    })),
+  );
+
+  protected dbNames(): string[] {
+    return this.dbRows()
+      .map((d) => d.name.trim())
+      .filter(Boolean);
+  }
 
   protected roleNames(): string[] {
     return this.roleRows()
@@ -283,6 +373,18 @@ export class ClusterProvisionDialogComponent {
   protected removeDb(i: number): void {
     this.dbRows.update((rows) => rows.filter((_, j) => j !== i));
   }
+  protected patchExt(i: number, patch: Partial<ExtRow>): void {
+    this.extRows.update((rows) => rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  }
+  protected addExt(): void {
+    this.extRows.update((rows) => [
+      ...rows,
+      { name: '', database: 'postgres', schema: '', preload: false },
+    ]);
+  }
+  protected removeExt(i: number): void {
+    this.extRows.update((rows) => rows.filter((_, j) => j !== i));
+  }
 
   protected submit(): void {
     const roles: RoleSpec[] = this.roleRows()
@@ -306,6 +408,14 @@ export class ClusterProvisionDialogComponent {
     const databases: DatabaseSpec[] = this.dbRows()
       .filter((d) => d.name.trim() && d.owner.trim())
       .map((d) => ({ name: d.name.trim(), owner: d.owner.trim() }));
-    this.ref.close({ roles, databases });
+    const extensions: ExtensionSpec[] = this.extRows()
+      .filter((e) => e.name.trim())
+      .map((e) => ({
+        name: e.name.trim(),
+        database: e.database.trim() || 'postgres',
+        ...(e.schema.trim() ? { schema: e.schema.trim() } : {}),
+        preload: e.preload,
+      }));
+    this.ref.close({ roles, databases, extensions });
   }
 }
