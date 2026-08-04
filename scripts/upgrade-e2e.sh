@@ -240,7 +240,9 @@ GREEN_PRIMARY="$CLUSTER-$GEN_B-0"
 
 echo "==> sequences continue past the old maximum"
 maxid=$(psql_on "$GREEN_PRIMARY" appdb "SELECT max(id) FROM t")
-newid=$(psql_on "$GREEN_PRIMARY" appdb "INSERT INTO t(v) VALUES ('after-upgrade') RETURNING id")
+# psql prints the "INSERT 0 1" command tag after the returned value; keep
+# only the id, or the numeric comparison below sees a two-line string.
+newid=$(psql_on "$GREEN_PRIMARY" appdb "INSERT INTO t(v) VALUES ('after-upgrade') RETURNING id" | head -1)
 [ -n "$newid" ] || { echo "FAIL: insert after cutover produced no id"; exit 1; }
 [ "$newid" -gt "$maxid" ] || { echo "FAIL: sequence handed out $newid, not past the existing max $maxid"; exit 1; }
 echo "OK sequence continues ($maxid -> $newid)"
