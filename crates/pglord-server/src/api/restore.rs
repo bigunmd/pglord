@@ -93,6 +93,10 @@ pub fn restored_spec(source: &ClusterSpec, req: &RestoreRequest) -> ClusterSpec 
         // source, not of the data.
         hibernated: false,
         fenced: Vec::new(),
+        // A fresh instance set: the source's generation is a fact about that
+        // cluster's upgrade history, and inheriting it would give the restored
+        // copy suffixed object names for no reason.
+        generation: "g1".to_string(),
         restore: Some(RestoreSpec {
             source_cluster: source.name.clone(),
             repository: source.backup.clone(),

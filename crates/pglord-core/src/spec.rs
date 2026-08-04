@@ -111,6 +111,13 @@ pub struct ClusterSpec {
     /// the recorded primary. Flipped only by the fence/unfence endpoints.
     #[serde(default)]
     pub fenced: Vec<String>,
+    /// Instance-set generation. "g1" renders today's unsuffixed object names;
+    /// a blue-green major upgrade bumps it (g2, g3, …) at finalize, at which
+    /// point the StatefulSet and pod names carry the suffix forever —
+    /// applications are unaffected because they connect through the Services.
+    /// Flipped only by the upgrade flow, never by PATCH.
+    #[serde(default = "default_generation")]
+    pub generation: String,
 }
 
 fn default_image() -> String {
@@ -121,6 +128,9 @@ fn default_replicas() -> u8 {
 }
 fn default_storage_size() -> String {
     "1Gi".into()
+}
+fn default_generation() -> String {
+    "g1".into()
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -174,6 +184,8 @@ pub enum SpecError {
     InvalidFenced(String),
     #[error("instance '{0}' is listed as fenced more than once")]
     DuplicateFenced(String),
+    #[error("invalid generation '{0}': expected g<number>, e.g. g1")]
+    InvalidGeneration(String),
 }
 
 /// The fields a running cluster may change. Name is deliberately absent:
@@ -361,11 +373,18 @@ impl ClusterSpec {
                 return Err(SpecError::SyncConflictsSynchronousCommit(v.clone()));
             }
         }
+        let valid_generation = self
+            .generation
+            .strip_prefix('g')
+            .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()));
+        if !valid_generation {
+            return Err(SpecError::InvalidGeneration(self.generation.clone()));
+        }
         let mut seen_fenced = std::collections::BTreeSet::new();
         for pod in &self.fenced {
             // Exact-name match against the real instance names, so e.g.
             // "demo-01" can never alias "demo-1".
-            let valid = (0..self.replicas).any(|i| format!("{}-{}", self.name, i) == *pod);
+            let valid = (0..self.replicas).any(|i| self.instance_name(i) == *pod);
             if !valid {
                 return Err(SpecError::InvalidFenced(pod.clone()));
             }
@@ -398,6 +417,22 @@ impl ClusterSpec {
             return Err(SpecError::CertRequiresTls);
         }
         Ok(())
+    }
+
+    /// Name of this generation's StatefulSet, which is also the pod-name
+    /// prefix. Generation g1 keeps the bare cluster name, so every cluster
+    /// created before blue-green upgrades existed renders unchanged.
+    pub fn sts_name(&self) -> String {
+        if self.generation == "g1" {
+            self.name.clone()
+        } else {
+            format!("{}-{}", self.name, self.generation)
+        }
+    }
+
+    /// Pod name of the instance with this ordinal.
+    pub fn instance_name(&self, ordinal: u8) -> String {
+        format!("{}-{}", self.sts_name(), ordinal)
     }
 
     /// The user-supplied credentials Secret, ignoring blanks a form might send.
@@ -494,6 +529,50 @@ mod tests {
         let s: ClusterSpec = serde_json::from_value(serde_json::json!({})).expect("deserialize");
         assert_eq!(s.name, "");
         assert!(matches!(s.validate(), Err(SpecError::InvalidName(_))));
+    }
+
+    #[test]
+    fn generation_defaults_to_g1_and_names_are_unsuffixed() {
+        let s = spec("demo");
+        assert_eq!(s.generation, "g1");
+        assert_eq!(s.sts_name(), "demo");
+        assert_eq!(s.instance_name(0), "demo-0");
+    }
+
+    #[test]
+    fn later_generations_suffix_sts_and_instance_names() {
+        let s: ClusterSpec =
+            serde_json::from_value(serde_json::json!({ "name": "demo", "generation": "g2" }))
+                .expect("deserialize");
+        assert_eq!(s.sts_name(), "demo-g2");
+        assert_eq!(s.instance_name(1), "demo-g2-1");
+        assert_eq!(s.validate(), Ok(()));
+    }
+
+    #[test]
+    fn generation_format_is_validated() {
+        for bad in ["", "2", "gen2", "g", "g-1", "G2"] {
+            let s: ClusterSpec =
+                serde_json::from_value(serde_json::json!({ "name": "demo", "generation": bad }))
+                    .expect("deserialize");
+            assert_eq!(s.validate(), Err(SpecError::InvalidGeneration(bad.into())));
+        }
+    }
+
+    #[test]
+    fn fenced_validates_against_generation_suffixed_names() {
+        let s: ClusterSpec = serde_json::from_value(serde_json::json!({
+            "name": "demo", "generation": "g2", "replicas": 2, "fenced": ["demo-g2-1"]
+        }))
+        .expect("deserialize");
+        assert_eq!(s.validate(), Ok(()));
+        // The pre-upgrade name of the same ordinal belongs to another
+        // instance set and must not pass.
+        let s: ClusterSpec = serde_json::from_value(serde_json::json!({
+            "name": "demo", "generation": "g2", "replicas": 2, "fenced": ["demo-1"]
+        }))
+        .expect("deserialize");
+        assert_eq!(s.validate(), Err(SpecError::InvalidFenced("demo-1".into())));
     }
 
     #[test]

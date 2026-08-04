@@ -16,6 +16,7 @@ pub mod spec;
 pub mod standby;
 pub mod sync;
 pub mod tls;
+pub mod upgrade;
 pub mod workload;
 
 /// Version of the pglord workspace, surfaced by the `/api/v1/version` endpoint.
