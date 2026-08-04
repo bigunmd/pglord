@@ -424,9 +424,22 @@ pub async fn cutover_upgrade(
             // migrating, so cutover can simply be retried.
             post_agent(ops, &ns, &spec.name, &blue_primary, "upgrade/unfence").await;
             let detail = match cut {
-                Ok(resp) => format!("The new instances refused the cutover ({}).", resp.status()),
+                // Relay what the instance actually said. A bare status code
+                // here means the only way to find out why a cutover failed is
+                // to reach into the pod.
+                Ok(resp) => {
+                    let status = resp.status();
+                    let reason = resp
+                        .json::<serde_json::Value>()
+                        .await
+                        .ok()
+                        .and_then(|v| v.get("error")?.as_str().map(str::to_string))
+                        .unwrap_or_else(|| status.to_string());
+                    format!("The new instances refused the cutover: {reason}")
+                }
                 Err(err) => format!("The new instances could not complete the cutover: {err}"),
             };
+            tracing::error!(cluster = %name, %detail, "cutover failed");
             return Err(
                 ApiError::new(StatusCode::BAD_GATEWAY, "cutover_failed").with_detail(detail)
             );

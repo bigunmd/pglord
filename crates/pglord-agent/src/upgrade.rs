@@ -32,6 +32,19 @@ const USER_DATABASES_SQL: &str = "SELECT datname, pg_get_userbyid(datdba) FROM p
 
 const SLOT_LIKE: &str = r"pglord\_upgrade\_%";
 
+/// How far each upgrade slot has confirmed relative to a target position.
+///
+/// The bind parameter is cast `text -> pg_lsn`, not straight to `pg_lsn`:
+/// casting directly makes postgres infer the parameter's type as `pg_lsn`,
+/// which the client cannot serialize a string into ("error serializing
+/// parameter 0"). Going through text keeps the parameter a plain string.
+fn drain_progress_sql() -> String {
+    format!(
+        "SELECT pg_wal_lsn_diff(confirmed_flush_lsn, $1::text::pg_lsn)::int8 \
+         FROM pg_replication_slots WHERE slot_name LIKE '{SLOT_LIKE}'"
+    )
+}
+
 // ---------------------------------------------------------------------------
 // Source side
 // ---------------------------------------------------------------------------
@@ -492,13 +505,7 @@ pub async fn cutover(cfg: &Config) -> anyhow::Result<()> {
         let mut drained_ok = false;
         for _ in 0..30u32 {
             let diffs: Vec<i64> = source
-                .query(
-                    &format!(
-                        "SELECT pg_wal_lsn_diff(confirmed_flush_lsn, $1::pg_lsn)::int8 \
-                         FROM pg_replication_slots WHERE slot_name LIKE '{SLOT_LIKE}'"
-                    ),
-                    &[&target_lsn],
-                )
+                .query(&drain_progress_sql(), &[&target_lsn])
                 .await?
                 .iter()
                 .map(|r| r.get::<_, i64>(0))
@@ -573,6 +580,16 @@ mod tests {
         // Only client sessions: killing background workers (the walsenders
         // feeding the migration among them) would break the drain.
         assert!(TERMINATE_WRITERS_SQL.contains("client backend"));
+    }
+
+    #[test]
+    fn drain_parameter_is_cast_through_text() {
+        // Binding straight to pg_lsn makes postgres infer that type for the
+        // parameter, and the client cannot serialize a string into it — the
+        // cutover then fails with "error serializing parameter 0".
+        let sql = drain_progress_sql();
+        assert!(sql.contains("$1::text::pg_lsn"), "{sql}");
+        assert!(!sql.contains("$1::pg_lsn"), "{sql}");
     }
 
     #[test]

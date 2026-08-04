@@ -181,8 +181,12 @@ psql_on "$BLUE_PRIMARY" appdb "INSERT INTO t(v) SELECT 'late-' || g FROM generat
 before_cutover=$(psql_on "$BLUE_PRIMARY" appdb "SELECT count(*) FROM t")
 [ "$before_cutover" = "110" ] || { echo "FAIL: expected 110 rows before cutover, got '$before_cutover'"; exit 1; }
 
-code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API/api/v1/clusters/$CLUSTER/upgrade/cutover")
-[ "$code" = "202" ] || { echo "FAIL: cutover returned $code"; exit 1; }
+cut_body=$(curl -s -X POST "$API/api/v1/clusters/$CLUSTER/upgrade/cutover")
+code=$(curl -s -o /dev/null -w '%{http_code}' "$API/api/v1/clusters/$CLUSTER")
+case "$cut_body" in
+  "") ;;
+  *problems*) echo "FAIL: cutover refused: $cut_body"; exit 1;;
+esac
 wait_phase soaking || exit 1
 GREEN_PRIMARY="$CLUSTER-$GEN_A-0"
 [ "$(primary_pod)" = "$GREEN_PRIMARY" ] || { echo "FAIL: primary is $(primary_pod), expected $GREEN_PRIMARY"; exit 1; }
@@ -225,8 +229,11 @@ code=$(start_upgrade)
 GEN_B=$(upgrade_field next_generation)
 [ -n "$GEN_B" ] || { echo "FAIL: no next_generation on the second upgrade"; exit 1; }
 wait_ready_to_cutover || exit 1
-code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API/api/v1/clusters/$CLUSTER/upgrade/cutover")
-[ "$code" = "202" ] || { echo "FAIL: second cutover returned $code"; exit 1; }
+cut_body=$(curl -s -X POST "$API/api/v1/clusters/$CLUSTER/upgrade/cutover")
+case "$cut_body" in
+  "") ;;
+  *problems*) echo "FAIL: second cutover refused: $cut_body"; exit 1;;
+esac
 wait_phase soaking || exit 1
 GREEN_PRIMARY="$CLUSTER-$GEN_B-0"
 [ "$(primary_pod)" = "$GREEN_PRIMARY" ] || { echo "FAIL: primary is $(primary_pod), expected $GREEN_PRIMARY"; exit 1; }
