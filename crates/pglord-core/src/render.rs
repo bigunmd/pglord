@@ -88,7 +88,7 @@ fn resource_requirements(r: &Resources) -> Option<ResourceRequirements> {
 /// never shadow the labels the selector and services match on.
 fn pod_labels(spec: &ClusterSpec) -> BTreeMap<String, String> {
     let mut merged = spec.workload.labels.clone();
-    merged.extend(labels(&spec.name));
+    merged.extend(instance_labels(spec));
     merged
 }
 
@@ -146,6 +146,20 @@ pub fn labels(name: &str) -> BTreeMap<String, String> {
         ),
         ("app.kubernetes.io/instance".to_string(), name.to_string()),
     ])
+}
+
+pub const GENERATION_LABEL: &str = "pglord.dev/generation";
+
+/// Cluster labels plus the generation marker, which is what one generation's
+/// StatefulSet selects on. Generation g1 stays label-free on purpose:
+/// StatefulSet selectors are immutable, so the original generation's selector
+/// can never gain the key — and every pre-upgrade cluster keeps matching.
+fn instance_labels(spec: &ClusterSpec) -> BTreeMap<String, String> {
+    let mut l = labels(&spec.name);
+    if spec.generation != "g1" {
+        l.insert(GENERATION_LABEL.to_string(), spec.generation.clone());
+    }
+    l
 }
 
 fn meta(name: &str, ns: &str, cluster: &str, owner: &OwnerRef) -> ObjectMeta {
@@ -436,7 +450,9 @@ pub fn render_statefulset(spec: &ClusterSpec, ns: &str, owner: &OwnerRef) -> Sta
                 },
                 EnvVar {
                     name: "PGLORD_AGENT_PRIMARY_HOST".to_string(),
-                    value: Some(pod_fqdn(&format!("{}-0", spec.name), &spec.name, ns)),
+                    // Own generation's ordinal zero: a green standby must
+                    // basebackup from the green primary, never across sets.
+                    value: Some(pod_fqdn(&spec.instance_name(0), &spec.name, ns)),
                     ..Default::default()
                 },
                 EnvVar {
@@ -503,7 +519,7 @@ pub fn render_statefulset(spec: &ClusterSpec, ns: &str, owner: &OwnerRef) -> Sta
     };
 
     StatefulSet {
-        metadata: meta(&spec.name, ns, &spec.name, owner),
+        metadata: meta(&spec.sts_name(), ns, &spec.name, owner),
         spec: Some(StatefulSetSpec {
             replicas: Some(if spec.hibernated {
                 0
@@ -529,7 +545,7 @@ pub fn render_statefulset(spec: &ClusterSpec, ns: &str, owner: &OwnerRef) -> Sta
                 },
             ),
             selector: LabelSelector {
-                match_labels: Some(labels(&spec.name)),
+                match_labels: Some(instance_labels(spec)),
                 ..Default::default()
             },
             template: PodTemplateSpec {
@@ -642,6 +658,47 @@ pub fn render_rw_service(
         }),
         ..Default::default()
     }
+}
+
+/// DNS name of the cluster's read-write Service inside the cluster. The
+/// Service selects the *recorded* primary pod whatever generation it belongs
+/// to, which is what makes cutover a single record flip.
+pub fn rw_service_fqdn(cluster: &str, ns: &str) -> String {
+    format!("{cluster}-rw.{ns}.svc.cluster.local")
+}
+
+/// The green (next-generation) StatefulSet of an in-flight major upgrade: the
+/// same spec rendered one generation up on the target image, plus the env var
+/// that puts its primary's agent into subscriber mode against the running
+/// cluster's rw Service.
+pub fn render_green_statefulset(
+    spec: &ClusterSpec,
+    ns: &str,
+    owner: &OwnerRef,
+    upgrade: &crate::upgrade::UpgradeState,
+) -> StatefulSet {
+    let mut derived = spec.clone();
+    derived.generation = upgrade.next_generation.clone();
+    derived.image = upgrade.target_image.clone();
+    // Green is built by subscription, never from a backup repository, and a
+    // fenced list naming the running cluster's pods means nothing here.
+    derived.restore = None;
+    derived.fenced = Vec::new();
+    let mut sts = render_statefulset(&derived, ns, owner);
+    if let Some(env) = sts
+        .spec
+        .as_mut()
+        .and_then(|s| s.template.spec.as_mut())
+        .and_then(|p| p.containers.first_mut())
+        .and_then(|c| c.env.as_mut())
+    {
+        env.push(EnvVar {
+            name: "PGLORD_AGENT_UPGRADE_SOURCE".to_string(),
+            value: Some(rw_service_fqdn(&spec.name, ns)),
+            ..Default::default()
+        });
+    }
+    sts
 }
 
 pub const POOLER_PASSWORD_KEY: &str = "pooler-password";
@@ -835,6 +892,120 @@ mod tests {
         assert_eq!(sts.spec.as_ref().and_then(|s| s.replicas), Some(0));
         let dep = render_pooler_deployment(&spec, "pglord", &owner, "h");
         assert_eq!(dep.spec.as_ref().and_then(|s| s.replicas), Some(0));
+    }
+
+    #[test]
+    fn g1_renders_byte_identically_to_pre_generation_objects() {
+        let (spec, owner) = demo();
+        let sts = render_statefulset(&spec, "pglord", &owner);
+        assert_eq!(sts.metadata.name.as_deref(), Some("demo"));
+        let s = sts.spec.expect("spec");
+        assert_eq!(s.selector.match_labels, Some(labels("demo")));
+        let pod_labels = s
+            .template
+            .metadata
+            .as_ref()
+            .expect("meta")
+            .labels
+            .clone()
+            .expect("labels");
+        assert!(!pod_labels.contains_key(GENERATION_LABEL));
+    }
+
+    #[test]
+    fn g2_suffixes_the_statefulset_and_adds_the_generation_label() {
+        let (_, owner) = demo();
+        let spec: ClusterSpec = serde_json::from_value(
+            serde_json::json!({ "name": "demo", "replicas": 2, "generation": "g2" }),
+        )
+        .expect("spec");
+        let sts = render_statefulset(&spec, "pglord", &owner);
+        assert_eq!(sts.metadata.name.as_deref(), Some("demo-g2"));
+        let s = sts.spec.expect("spec");
+        // Distinct selector: two generations' StatefulSets must never fight
+        // over pods, and selectors are immutable so only g2+ carries the key.
+        let sel = s.selector.match_labels.expect("labels");
+        assert_eq!(sel.get(GENERATION_LABEL).map(String::as_str), Some("g2"));
+        // Both generations still join the one headless service, so pod DNS is
+        // stable and the rw Service can select across them.
+        assert_eq!(s.service_name.as_deref(), Some("demo-pods"));
+        let env = s.template.spec.expect("pod").containers[0]
+            .env
+            .clone()
+            .expect("env");
+        let primary_host = env
+            .iter()
+            .find(|e| e.name == "PGLORD_AGENT_PRIMARY_HOST")
+            .expect("var");
+        assert_eq!(
+            primary_host.value.as_deref(),
+            Some("demo-g2-0.demo-pods.pglord.svc.cluster.local")
+        );
+    }
+
+    #[test]
+    fn green_statefulset_carries_target_image_and_upgrade_source() {
+        let (spec, owner) = demo();
+        let upgrade = crate::upgrade::UpgradeState {
+            target_image: "pglord-agent:18".into(),
+            next_generation: "g2".into(),
+            phase: crate::upgrade::UpgradePhase::Migrating,
+            previous_primary: None,
+        };
+        let sts = render_green_statefulset(&spec, "pglord", &owner, &upgrade);
+        assert_eq!(sts.metadata.name.as_deref(), Some("demo-g2"));
+        // The source spec is untouched — the green set is derived, not a
+        // mutation of the cluster the user is still running on.
+        assert_eq!(spec.generation, "g1");
+        let container = sts
+            .spec
+            .expect("spec")
+            .template
+            .spec
+            .expect("pod")
+            .containers[0]
+            .clone();
+        assert_eq!(container.image.as_deref(), Some("pglord-agent:18"));
+        let env = container.env.expect("env");
+        let source = env
+            .iter()
+            .find(|e| e.name == "PGLORD_AGENT_UPGRADE_SOURCE")
+            .expect("var");
+        assert_eq!(
+            source.value.as_deref(),
+            Some("demo-rw.pglord.svc.cluster.local")
+        );
+    }
+
+    #[test]
+    fn green_never_inherits_a_restore_source() {
+        let (_, owner) = demo();
+        // A cluster created by a restore keeps the block forever; rendering it
+        // onto green would make the green primary try to restore someone
+        // else's backup instead of subscribing.
+        let spec: ClusterSpec = serde_json::from_value(serde_json::json!({
+            "name": "demo",
+            "restore": { "source_cluster": "old", "repository": { "enabled": true } }
+        }))
+        .expect("spec");
+        let upgrade = crate::upgrade::UpgradeState {
+            target_image: "pglord-agent:18".into(),
+            next_generation: "g2".into(),
+            phase: crate::upgrade::UpgradePhase::Migrating,
+            previous_primary: None,
+        };
+        let green = render_green_statefulset(&spec, "pglord", &owner, &upgrade);
+        let env = green
+            .spec
+            .expect("spec")
+            .template
+            .spec
+            .expect("pod")
+            .containers[0]
+            .env
+            .clone()
+            .expect("env");
+        assert!(env.iter().any(|e| e.name == "PGLORD_AGENT_UPGRADE_SOURCE"));
     }
 
     #[test]
