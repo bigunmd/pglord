@@ -356,6 +356,14 @@ async fn bootstrap_primary(
         pglord_core::hba::render(hba_rules, &cfg.repl_user, scram),
     )
     .context("write pg_hba.conf")?;
+    // A major-upgrade target inherits its data from the cluster being
+    // upgraded, where initialisation already happened — same reasoning as a
+    // restored cluster. Running the scripts here as well would collide with
+    // the schema copied from the source and stall the migration.
+    if !cfg.upgrade_source.is_empty() {
+        crate::initdb::mark_initialised(&cfg.pgdata)
+            .context("mark upgrade target as initialised")?;
+    }
     tracing::info!(scram, "primary bootstrap complete");
     Ok(())
 }

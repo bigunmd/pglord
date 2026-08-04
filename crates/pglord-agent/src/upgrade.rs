@@ -476,38 +476,44 @@ pub async fn cutover(cfg: &Config) -> anyhow::Result<()> {
         anyhow::bail!("subscriptions not established; refusing to cut over");
     }
     let (source, _sh) = connect_source(cfg, "postgres").await?;
-    let target_lsn: String = source
-        .query_one("SELECT pg_current_wal_lsn()::text", &[])
-        .await?
-        .get(0);
-
-    // The source is already fenced by the control plane, so its write position
-    // is final; wait for our slots to confirm it.
-    let mut drained_ok = false;
-    for _ in 0..30u32 {
-        let diffs: Vec<i64> = source
-            .query(
-                &format!(
-                    "SELECT pg_wal_lsn_diff(confirmed_flush_lsn, $1::pg_lsn)::int8 \
-                     FROM pg_replication_slots WHERE slot_name LIKE '{SLOT_LIKE}'"
-                ),
-                &[&target_lsn],
-            )
-            .await?
-            .iter()
-            .map(|r| r.get::<_, i64>(0))
-            .collect();
-        if drained(&diffs) {
-            drained_ok = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_secs(2)).await;
-    }
-    if !drained_ok {
-        anyhow::bail!("drain timed out; the source still has unreplicated WAL");
-    }
-
     let dbs = source.query(USER_DATABASES_SQL, &[]).await?;
+
+    // A cluster with no user databases has no subscriptions and so no slots to
+    // wait on. Draining an empty set would time out forever, because "no
+    // slots" otherwise means "nothing is subscribed".
+    if !dbs.is_empty() {
+        let target_lsn: String = source
+            .query_one("SELECT pg_current_wal_lsn()::text", &[])
+            .await?
+            .get(0);
+
+        // The source is already fenced by the control plane, so its write
+        // position is final; wait for our slots to confirm it.
+        let mut drained_ok = false;
+        for _ in 0..30u32 {
+            let diffs: Vec<i64> = source
+                .query(
+                    &format!(
+                        "SELECT pg_wal_lsn_diff(confirmed_flush_lsn, $1::pg_lsn)::int8 \
+                         FROM pg_replication_slots WHERE slot_name LIKE '{SLOT_LIKE}'"
+                    ),
+                    &[&target_lsn],
+                )
+                .await?
+                .iter()
+                .map(|r| r.get::<_, i64>(0))
+                .collect();
+            if drained(&diffs) {
+                drained_ok = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+        if !drained_ok {
+            anyhow::bail!("drain timed out; the source still has unreplicated WAL");
+        }
+    }
+
     for row in &dbs {
         let db: String = row.get(0);
         // Sequences are not replicated logically: without this every INSERT
