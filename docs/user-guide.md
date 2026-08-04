@@ -254,6 +254,70 @@ Rules and recovery:
 Changing custom environment variables or workload settings rolls instances
 the same way.
 
+### Major version upgrades
+
+Moving to a new PostgreSQL major is a different operation from a minor upgrade,
+and it has its own card on the cluster page. pglord never reinterprets an
+existing data directory: it builds a **second set of instances** on the new
+version next to the running one, copies the data across with logical
+replication, and switches over only when you say so.
+
+The published agent images are what you upgrade to:
+`ghcr.io/<owner>/pglord-agent:16`, `:17`, `:18`, plus a `-timescaledb` variant
+of each. Pick the same variant one or more majors up — skipping majors (16 to
+18) is fine, because nothing is being converted in place.
+
+The flow is four steps, and you are in control of the last three:
+
+1. **Start upgrade** — enter the target image. A second instance set appears
+   (pods named `<cluster>-g2-0`, `-g2-1`, …) and begins copying. Applications
+   are untouched and keep using the same Services and Secret throughout.
+   Day-2 operations (edits, restarts, switchover, hibernation, credential
+   rotation) are refused while an upgrade runs, and the card shows per-database
+   copy progress and replication lag.
+2. **Cut over** — enabled once every table is copied and lag is negligible.
+   Writes are rejected for a few seconds while the last changes drain,
+   sequences are synchronised, and the primary record moves to the new set.
+   From here applications are writing to the new major.
+3. **Roll back** (if the new version misbehaves) — the previous instances are
+   still there, frozen read-only at the cutover point. Rolling back returns
+   them to service and **abandons every write made on the new version since
+   the cutover**. The new instances and their volumes are deleted.
+4. **Finalize** — deletes the previous instances and their volumes and makes
+   the new set the cluster for good. There is no way back after this.
+
+Aborting before the cutover is free: the new instances are deleted and the
+running cluster never noticed.
+
+Things to know before you start:
+
+- **No schema changes (DDL) between starting and cutting over.** Logical
+  replication ignores them silently, so the new instances would end up with the
+  old schema and the copy of a table you altered would be wrong.
+- **Large objects are not copied.** Clusters using `lo_*` need a different
+  approach.
+- **Sequences** are copied at cutover with a safety margin, so the first
+  inserts on the new version continue past the old maximum.
+- **Point-in-time recovery does not cross a major upgrade.** Take a final
+  backup before cutting over if you need one; restoring to a point before the
+  upgrade means restoring onto an old-major image. Scheduled and manual
+  backups are paused between the cutover and finalize, and resume afterwards
+  (pglord runs `pgbackrest stanza-upgrade` as part of finalizing).
+- **Automatic failover is suspended while soaking** — between cutover and
+  finalize the cluster deliberately spans two majors, and choosing between them
+  is your call, not the orchestrator's.
+- **A cluster created before this feature** needs one rolling restart first:
+  logical replication requires `wal_level = logical`, which only takes effect at
+  server start. Starting an upgrade on such a cluster fails with
+  `wal_level_not_logical`; use **Restart cluster**, then start the upgrade.
+- **The target image must ship every extension the cluster uses**, or the new
+  instances will fail to create them. That is what the `-timescaledb` image
+  variants are for.
+
+If the new instances stall, the card shows the reason (an unreachable source, a
+missing extension, or a target image whose major is *older* than the source's,
+which pglord refuses). Abort, fix the cause, and start again.
+
 ### Back up to object storage
 
 pglord backs clusters up with pgBackRest to any S3-compatible storage.
@@ -634,7 +698,8 @@ kubectl get storageclass -o custom-columns=NAME:.metadata.name,EXPANSION:.allowV
 Depending on the storage driver, a filesystem resize may only complete when the
 instance restarts.
 
-Changing the cluster name or image after creation is not supported.
+Changing the cluster name after creation is not supported. The image can be
+changed — see Minor version upgrades and Major version upgrades.
 
 ### Secrets, environment and initialisation
 
@@ -1029,11 +1094,13 @@ Notes:
 - A restore always creates a new cluster; restoring in place is not supported,
   and the restored cluster starts with backups switched off.
 - Custom images must be built on the pglord agent image; stock `postgres:NN`
-  images are not usable yet.
+  images are not usable yet. Prebuilt agent images for PostgreSQL 16, 17 and 18
+  (with and without TimescaleDB) are published to GHCR.
 - Cluster name cannot be changed after creation (instances, storage, image
   and PostgreSQL settings can — see Day-2 operations).
-- Upgrades stay within one PostgreSQL major version; major upgrades
-  (pg_upgrade) are not supported.
+- Major version upgrades copy data with logical replication, so schema changes
+  during an upgrade and large objects are not carried over, and point-in-time
+  recovery cannot cross the upgrade — see Major version upgrades.
 - The credentials Secret reference is fixed once a cluster exists (the managed
   passwords themselves can be rotated — see Rotating credentials).
 - Initialisation scripts are SQL only, and run only when a cluster is first

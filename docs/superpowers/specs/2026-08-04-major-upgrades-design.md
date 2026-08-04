@@ -216,6 +216,44 @@ New `.github/workflows/images.yaml` publishing to GHCR with
 - **CI images:** the matrix workflow builds on PRs touching the
   Dockerfiles (push only on main/tags).
 
+## Implementation notes (deviations found while building)
+
+1. **Globals come from the source, not only from the spec.** The design said
+   green would provision from the declarative spec. That is not enough: a
+   database created by hand outside pglord is owned by a role the spec does
+   not mention, and its schema restore fails without that role. The green
+   agent runs `pg_dumpall --globals-only` against blue first, then enumerates
+   blue's databases and recreates each with its real owner.
+2. **There is no separate service-swap step.** The `-rw` Service already
+   selects the *recorded primary pod* by name, whatever generation it belongs
+   to — so cutover is one CAS patch that moves the primary record and the
+   phase together, and the Service follows. This removes the design's
+   "swap Services" step entirely and makes the atomicity requirement trivially
+   satisfied.
+3. **Cross-generation record guard in the agent.** With one record shared by
+   two instance sets, a green pod would read a record naming a blue pod and
+   self-fence, and after cutover a blue pod would try to pg_rewind onto a
+   different-major timeline. `record::same_instance_set` makes role actions
+   apply only within a pod's own set; parameter convergence stays
+   unconditional so green keeps picking up spec changes.
+4. **Green archiving is disabled until finalize.** Archiving from green into
+   blue's stanza fails on the system-identifier mismatch and retains WAL
+   meanwhile. The agent suppresses archiving whenever `upgrade_source` is set;
+   finalize's roll drops the env var, and its `stanza-upgrade` is what makes
+   archiving correct again. Soaks should therefore be bounded.
+5. **Sync-replication peers derive from the pod name, not the cluster name.**
+   `synchronous_standby_names` listed `<cluster>-N`, which on green would name
+   the wrong set's pods; it now derives the instance-set prefix from the pod's
+   own name, falling back to the cluster name for non-pod hostnames.
+6. **Scheduled and manual backups are skipped, not queued, during the soak**,
+   with the reason logged and a 409 `upgrade_in_progress` on the manual path.
+   Backups during the *migration* stay allowed on purpose — a final one before
+   cutover is the only way back past the upgrade.
+7. **Cutover is resumable.** If the data cutover succeeds but the record patch
+   loses its CAS, the agent's `complete` marker lets a retried cutover skip
+   straight to the record move instead of failing a drain against an
+   already-detached source.
+
 ## Out of scope (deliberate)
 
 Reverse (green→old) replication · DDL capture/enforcement during

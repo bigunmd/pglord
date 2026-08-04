@@ -97,6 +97,9 @@ rbac-auth-e2e: ## Minikube e2e: kubernetes tokens via TokenReview + SAR authoriz
 extensions-e2e: ## Minikube e2e: declared extensions — per-db scoping and preload lifecycle
 	./scripts/extensions-e2e.sh
 
+upgrade-e2e: ## Minikube e2e: blue-green major upgrade 16->17 (rollback, then finalize)
+	./scripts/upgrade-e2e.sh
+
 config-e2e: ## Minikube e2e: live settings, pending restart, rolling restart
 	./scripts/config-e2e.sh
 
