@@ -633,7 +633,13 @@ pub async fn apply_cluster(
     // A major upgrade in flight renders a second instance set from the same
     // spec, on the target image and one generation up. It hangs off the same
     // owning ConfigMap, so deleting the cluster still collects everything.
-    if let Some(upgrade) = upgrade {
+    //
+    // Once the spec has adopted the target generation (finalize), that set IS
+    // the cluster and was already applied above. Rendering it as "green" again
+    // would write the subscriber-mode env var back onto the promoted
+    // instances — the guard closes the window between finalize's spec write
+    // and its clearing of the upgrade state.
+    if let Some(upgrade) = upgrade.filter(|u| u.next_generation != spec.generation) {
         let green = pglord_core::render::render_green_statefulset(spec, ns, owner, upgrade);
         let green_name = green.metadata.name.clone().unwrap_or_default();
         sts_api
