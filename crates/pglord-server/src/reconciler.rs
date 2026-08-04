@@ -477,7 +477,7 @@ async fn apply_provisioning(
     spec: &ClusterSpec,
     primary_pod: &str,
 ) -> anyhow::Result<()> {
-    if spec.roles.is_empty() && spec.databases.is_empty() {
+    if spec.roles.is_empty() && spec.databases.is_empty() && spec.extensions.is_empty() {
         return Ok(());
     }
     // No primary to converge on while hibernated; the next pass after wake
@@ -525,6 +525,16 @@ async fn apply_provisioning(
         .iter()
         .map(|d| serde_json::json!({ "name": d.name, "owner": d.owner }))
         .collect();
+    let extensions: Vec<_> = spec
+        .extensions
+        .iter()
+        .map(|e| {
+            serde_json::json!({
+                "name": e.name, "database": e.database,
+                "schema": e.schema, "preload": e.preload,
+            })
+        })
+        .collect();
     let url = format!(
         "http://{}:{}/provision/apply",
         pod_fqdn(primary_pod, &spec.name, ns),
@@ -532,7 +542,7 @@ async fn apply_provisioning(
     );
     match http
         .post(&url)
-        .json(&serde_json::json!({ "roles": roles, "databases": databases }))
+        .json(&serde_json::json!({ "roles": roles, "databases": databases, "extensions": extensions }))
         .send()
         .await
     {

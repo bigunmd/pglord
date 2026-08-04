@@ -89,6 +89,9 @@ pub struct ClusterDetail {
     pub roles: Vec<pglord_core::provision::RoleSpec>,
     /// Declared databases.
     pub databases: Vec<pglord_core::provision::DatabaseSpec>,
+    /// Declared extensions; leave-in-place like roles. Preload-flagged
+    /// entries drive shared_preload_libraries (restart-required).
+    pub extensions: Vec<pglord_core::provision::ExtensionSpec>,
     /// Scaled to zero on purpose; volumes retained. Not an outage.
     pub hibernated: bool,
     /// Instances held down by the fence operation (pods may not exist while
@@ -391,6 +394,7 @@ pub async fn get_cluster(
         pooler,
         roles: spec.roles,
         databases: spec.databases,
+        extensions: spec.extensions,
         hibernated: spec.hibernated,
         fenced: spec.fenced,
         instances,
