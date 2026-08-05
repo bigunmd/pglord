@@ -123,6 +123,16 @@ async fn main() -> anyhow::Result<()> {
     ) {
         tracing::warn!(%err, "failed to set PGDATA permissions");
     }
+    // pgbackrest.conf lives in the container filesystem, so every restart
+    // starts without it while the archive settings persist in PGDATA — the
+    // window where archiving is on but archive-push and backups fail for want
+    // of pg1-path. Writing it here closes that window.
+    if let Some(spec) = cluster_spec.as_ref()
+        && spec.backup.enabled
+        && let Err(err) = pglord_agent::backup::write_conf_if_changed(&cfg, &spec.backup)
+    {
+        tracing::warn!(%err, "failed to write pgbackrest.conf before start");
+    }
     // Data directories created by older agents carry wal_level = replica,
     // which no logical subscription can be built on. The level is only read at
     // start, so the rewrite has to land before the supervisor spawns postgres.
