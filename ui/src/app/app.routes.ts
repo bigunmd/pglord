@@ -33,6 +33,13 @@ export const routes: Routes = [
           import('./pages/preflight/preflight.component').then((m) => m.PreflightComponent),
       },
       {
+        path: 'clusters/new',
+        loadComponent: () =>
+          import('./pages/clusters/cluster-create-page.component').then(
+            (m) => m.ClusterCreatePageComponent,
+          ),
+      },
+      {
         path: 'namespaces/:ns/clusters/:name',
         loadComponent: () =>
           import('./pages/clusters/cluster-detail.component').then(

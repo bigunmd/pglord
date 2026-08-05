@@ -1,13 +1,16 @@
-import { Component, computed, inject, signal } from '@angular/core';
+import { Component, computed, inject, input, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { Router } from '@angular/router';
 import { TranslocoModule } from '@jsverse/transloco';
-import { BrnDialogRef } from '@spartan-ng/brain/dialog';
 import { HlmButton } from '@spartan-ng/helm/button';
-import { HlmDialogFooter, HlmDialogHeader, HlmDialogTitle } from '@spartan-ng/helm/dialog';
 import { HlmInput } from '@spartan-ng/helm/input';
 import { HlmLabel } from '@spartan-ng/helm/label';
 
+import { Api } from '../../api/api';
+import { createCluster } from '../../api/fn/clusters/create-cluster';
 import { ClusterSpec } from '../../api/models/cluster-spec';
+import { problemDetail } from '../../core/problem';
+import { BreadcrumbsComponent } from '../../shell/breadcrumbs.component';
 import { EnvEditorComponent, EnvRow, rowsToSpec, rowsValid } from './env-editor.component';
 
 /** Mirrors the server's RFC1123 rule (crates/pglord-core/src/spec.rs). */
@@ -15,25 +18,32 @@ const NAME_RE = /^[a-z0-9]([-a-z0-9]{0,38}[a-z0-9])?$/;
 const STORAGE_RE = /^[0-9]+(Ki|Mi|Gi|Ti)$/;
 const REPLICA_CHOICES = [1, 2, 3, 4, 5] as const;
 
-/** Collects a ClusterSpec; resolves to it on create, undefined on cancel. */
+/**
+ * Creating a cluster is a multi-section form, not a single decision, so it
+ * gets a page of its own: room to breathe, a shareable URL, and browser back.
+ */
 @Component({
-  selector: 'pg-cluster-create-dialog',
+  selector: 'pg-cluster-create-page',
   imports: [
     FormsModule,
     TranslocoModule,
     HlmButton,
-    HlmDialogFooter,
-    HlmDialogHeader,
-    HlmDialogTitle,
     HlmInput,
     HlmLabel,
     EnvEditorComponent,
+    BreadcrumbsComponent,
   ],
   template: `
-    <div hlmDialogHeader>
-      <h2 hlmDialogTitle>{{ 'clusters.createTitle' | transloco }}</h2>
-    </div>
-    <div class="grid gap-6 py-1">
+    <div class="mx-auto max-w-2xl pb-24">
+      <pg-breadcrumbs [crumbs]="crumbs()" />
+      <h1 class="mb-1 text-lg font-semibold">{{ 'clusters.createTitle' | transloco }}</h1>
+      <p class="text-muted-foreground mb-6 text-sm">{{ 'clusters.createIntro' | transloco }}</p>
+
+      @if (error(); as err) {
+        <p class="text-destructive mb-4 text-sm" role="alert">{{ err }}</p>
+      }
+
+      <div class="grid gap-6">
       <div class="grid gap-1.5">
         <label hlmLabel for="pg-cluster-name">{{ 'clusters.name' | transloco }}</label>
         <input
@@ -207,31 +217,52 @@ const REPLICA_CHOICES = [1, 2, 3, 4, 5] as const;
             {{ 'pooler.explainer' | transloco }}
           </p>
         </div>
-      }
+        }
+      </div>
     </div>
-    <div hlmDialogFooter>
-      <!-- A disabled button with no stated reason reads as a broken form: the
-           name field's placeholder looks like a filled-in value, so an empty
-           name silently deactivates submit. Say what is missing. -->
-      @if (!valid()) {
-        <p
-          class="text-muted-foreground mr-auto self-center text-xs"
-          data-testid="cluster-submit-blocked"
-        >
-          {{ blockedReason() | transloco }}
-        </p>
-      }
-      <button hlmBtn variant="ghost" (click)="ref.close(undefined)">
-        {{ 'common.cancel' | transloco }}
-      </button>
-      <button hlmBtn data-testid="cluster-submit" [disabled]="!valid()" (click)="submit()">
-        {{ 'clusters.create' | transloco }}
-      </button>
+
+    <!-- Sticky action bar: on a long form the primary action must stay
+         reachable without scrolling back down. -->
+    <div class="bg-background/95 border-border fixed inset-x-0 bottom-0 border-t backdrop-blur">
+      <div class="mx-auto flex max-w-2xl items-center gap-3 px-4 py-3">
+        <!-- A disabled button with no stated reason reads as a broken form: the
+             name field's placeholder looks like a filled-in value, so an empty
+             name silently deactivates submit. Say what is missing. -->
+        @if (!valid()) {
+          <p class="text-muted-foreground text-xs" data-testid="cluster-submit-blocked">
+            {{ blockedReason() | transloco }}
+          </p>
+        }
+        <div class="ml-auto flex gap-2">
+          <button hlmBtn variant="ghost" (click)="cancel()">
+            {{ 'common.cancel' | transloco }}
+          </button>
+          <button
+            hlmBtn
+            data-testid="cluster-submit"
+            [disabled]="!valid() || busy()"
+            (click)="submit()"
+          >
+            {{ 'clusters.create' | transloco }}
+          </button>
+        </div>
+      </div>
     </div>
   `,
 })
-export class ClusterCreateDialogComponent {
-  protected readonly ref = inject<BrnDialogRef<ClusterSpec | undefined>>(BrnDialogRef);
+export class ClusterCreatePageComponent {
+  private readonly api = inject(Api);
+  private readonly router = inject(Router);
+
+  /** Namespace to create in; supplied as a route query param by the list. */
+  public readonly ns = input('');
+
+  protected readonly busy = signal(false);
+  protected readonly error = signal<string | null>(null);
+  protected readonly crumbs = computed(() => [
+    { label: 'Clusters', link: '/clusters' },
+    { label: 'New cluster' },
+  ]);
 
   protected readonly replicaChoices = REPLICA_CHOICES;
   protected readonly name = signal('');
@@ -266,9 +297,13 @@ export class ClusterCreateDialogComponent {
       this.nameValid() && this.storageValid() && rowsValid(this.rows()),
   );
 
-  submit(): void {
+  cancel(): void {
+    void this.router.navigate(['/clusters']);
+  }
+
+  async submit(): Promise<void> {
     const trimmed = (s: string) => (s.trim() ? s.trim() : undefined);
-    this.ref.close({
+    const spec: ClusterSpec = {
       name: this.name(),
       replicas: this.replicas(),
       storage_size: this.storage(),
@@ -281,6 +316,21 @@ export class ClusterCreateDialogComponent {
       },
       tls: { server_secret: trimmed(this.tlsSecret()) },
       ...(this.poolerEnabled() ? { pooler: { enabled: true } } : {}),
-    });
+    };
+
+    this.busy.set(true);
+    this.error.set(null);
+    try {
+      // Create in the namespace the list is showing; the server default
+      // applies when the UI has no namespace context yet.
+      const ns = this.ns() || 'default';
+      await this.api.invoke(createCluster, { ns, body: spec });
+      // Land on the thing that was just made, not back on the list.
+      await this.router.navigate(['/namespaces', ns, 'clusters', spec.name]);
+    } catch (err) {
+      this.error.set(problemDetail(err));
+    } finally {
+      this.busy.set(false);
+    }
   }
 }

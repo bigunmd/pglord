@@ -10,12 +10,10 @@ import { BrnDialogRef, injectBrnDialogContext } from '@spartan-ng/brain/dialog';
 import { firstValueFrom } from 'rxjs';
 
 import { Api } from '../../api/api';
-import { ClusterSpec } from '../../api/models/cluster-spec';
+import { problemDetail } from '../../core/problem';
 import { ClusterSummary } from '../../api/models/cluster-summary';
-import { createCluster } from '../../api/fn/clusters/create-cluster';
 import { deleteCluster } from '../../api/fn/clusters/delete-cluster';
 import { listAllClusters } from '../../api/fn/clusters/list-all-clusters';
-import { ClusterCreateDialogComponent } from './cluster-create-dialog.component';
 
 const REFRESH_MS = 5000;
 
@@ -233,24 +231,13 @@ export class ClustersComponent implements OnDestroy {
     }
   }
 
-  async openCreate(): Promise<void> {
-    const spec = await firstValueFrom(
-      this.dialog.open<ClusterSpec | undefined>(ClusterCreateDialogComponent, {
-        contentClass: 'sm:max-w-lg',
-      }).closed$,
-    );
-    if (!spec) {
-      return;
-    }
-    try {
-      // Create in the selected namespace; "all" falls back to the first
-      // known namespace (or the server default when nothing exists yet).
-      const ns = this.selectedNs() || this.namespaces()[0] || 'default';
-      await this.api.invoke(createCluster, { ns, body: spec });
-      await this.refresh();
-    } catch (err) {
-      this.error.set(problemDetail(err));
-    }
+  /** Creating is a page, not a modal: the form has too many sections to sit
+   * in a dialog, and a URL means it survives a reload. */
+  openCreate(): void {
+    // "all namespaces" falls back to the first known one, or the server
+    // default when nothing exists yet.
+    const ns = this.selectedNs() || this.namespaces()[0] || 'default';
+    void this.router.navigate(['/clusters/new'], { queryParams: { ns } });
   }
 
   async openDelete(c: ClusterSummary): Promise<void> {
@@ -270,8 +257,3 @@ export class ClustersComponent implements OnDestroy {
   }
 }
 
-/** Surface the problem+json detail (stable server contract) or a fallback. */
-function problemDetail(err: unknown): string {
-  const e = err as { error?: { detail?: string; code?: string }; message?: string };
-  return e?.error?.detail ?? e?.error?.code ?? e?.message ?? 'Request failed';
-}

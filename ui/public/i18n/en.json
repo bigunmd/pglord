@@ -362,7 +362,8 @@
     "allNamespaces": "All namespaces",
     "blockedName": "Enter a cluster name to continue.",
     "blockedStorage": "Storage must be a size with a unit, for example 1Gi.",
-    "blockedEnv": "Fix the highlighted environment variables to continue."
+    "blockedEnv": "Fix the highlighted environment variables to continue.",
+    "createIntro": "Name the cluster and choose its size. Everything here can be changed later except the name."
   },
   "clusterDetail": {
     "back": "Clusters",
