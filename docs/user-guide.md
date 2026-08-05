@@ -1162,9 +1162,10 @@ Notes:
   (with and without TimescaleDB) are published to GHCR.
 - Cluster name cannot be changed after creation (instances, storage, image
   and PostgreSQL settings can — see Day-2 operations).
-- Major version upgrades copy data with logical replication, so schema changes
-  during an upgrade and large objects are not carried over, and point-in-time
-  recovery cannot cross the upgrade — see Major version upgrades.
+- Major version upgrades have caveats in both modes, and point-in-time recovery
+  cannot cross one either way. Blue-green copies data with logical replication,
+  so schema changes during the upgrade and large objects are not carried over;
+  in place needs a backup and takes a write outage. See Major version upgrades.
 - The credentials Secret reference is fixed once a cluster exists (the managed
   passwords themselves can be rotated — see Rotating credentials).
 - Initialisation scripts are SQL only, and run only when a cluster is first
