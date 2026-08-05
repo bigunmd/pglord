@@ -107,20 +107,25 @@ pub(crate) fn ready_to_cutover(st: &AgentUpgradeStatus) -> bool {
         && st.lag_bytes.is_some_and(|l| l <= READY_LAG_BYTES)
 }
 
-/// Every instance is up and reporting the major we upgraded to.
+/// Every instance is up and past the major we upgraded from.
 ///
-/// Deliberately strict: an unreachable instance reports no version, and
-/// concluding success from silence would clear the upgrade while a pod is
-/// still converting.
+/// Compares against the recorded *source* major rather than a major parsed
+/// out of the target image: tags are arbitrary strings, and a perfectly good
+/// image called `:dev17` or `:latest` would otherwise leave the upgrade
+/// running forever with the cluster already converted.
+///
+/// Deliberately strict about silence — an unreachable instance reports no
+/// version, and concluding success from that would clear the upgrade while a
+/// pod is still converting.
 pub(crate) fn in_place_complete(
     obs: &[crate::instance_probe::InstanceObservation],
-    target_major: u32,
+    from_major: u32,
 ) -> bool {
     !obs.is_empty()
         && obs.iter().all(|o| {
             o.ready
                 && o.server_version_num
-                    .is_some_and(|v| (v as u32) / 10_000 == target_major)
+                    .is_some_and(|v| (v as u32) / 10_000 > from_major)
         })
 }
 
@@ -875,12 +880,12 @@ pub async fn settle_in_place(
     state: &UpgradeState,
     obs: &[crate::instance_probe::InstanceObservation],
 ) -> anyhow::Result<bool> {
-    let Some(target) = pglord_core::upgrade::major_from_image(&state.target_image) else {
-        // Without a readable tag the observed majors cannot be compared to
-        // anything; the user finishes with abort once the cluster is healthy.
+    let Some(from_major) = state.from_major else {
+        // Recorded at start for every in-place upgrade; without it there is
+        // nothing to compare the observed majors against.
         return Ok(false);
     };
-    if state.mode != UpgradeMode::InPlace || !in_place_complete(obs, target) {
+    if state.mode != UpgradeMode::InPlace || !in_place_complete(obs, from_major) {
         return Ok(false);
     }
 
@@ -968,31 +973,34 @@ mod tests {
     }
 
     #[test]
-    fn in_place_completes_only_when_every_instance_is_ready_on_the_target() {
+    fn in_place_completes_only_when_every_instance_is_past_the_old_major() {
+        // Upgrading FROM 16: both instances now report 17.
         let done = vec![
             obs("demo-0", true, Some(170010)),
             obs("demo-1", true, Some(170010)),
         ];
-        assert!(in_place_complete(&done, 17));
+        assert!(in_place_complete(&done, 16));
+        // Skipping a major is just as complete.
+        assert!(in_place_complete(&[obs("demo-0", true, Some(180002))], 16));
 
         // One still on the old major: the roll has not reached it.
         let mixed = vec![
             obs("demo-0", true, Some(170010)),
             obs("demo-1", true, Some(160013)),
         ];
-        assert!(!in_place_complete(&mixed, 17));
+        assert!(!in_place_complete(&mixed, 16));
         // One not ready yet — converting, or re-cloning.
         let booting = vec![
             obs("demo-0", true, Some(170010)),
             obs("demo-1", false, None),
         ];
-        assert!(!in_place_complete(&booting, 17));
+        assert!(!in_place_complete(&booting, 16));
         // Unreachable instances report no version: never conclude success
         // from silence, or the state clears mid-conversion.
         let silent = vec![obs("demo-0", true, None)];
-        assert!(!in_place_complete(&silent, 17));
+        assert!(!in_place_complete(&silent, 16));
         // An empty observation set is not a completed upgrade.
-        assert!(!in_place_complete(&[], 17));
+        assert!(!in_place_complete(&[], 16));
     }
 
     #[test]
