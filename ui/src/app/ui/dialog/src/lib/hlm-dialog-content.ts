@@ -67,7 +67,11 @@ export class HlmDialogContent {
 
   constructor() {
     classes(() => [
-      'bg-popover text-popover-foreground data-open:animate-in data-closed:animate-out data-closed:fade-out-0 data-open:fade-in-0 data-closed:zoom-out-95 data-open:zoom-in-95 ring-foreground/10 grid max-w-[calc(100%-2rem)] gap-4 rounded-xl p-4 text-sm ring-1 duration-100 sm:max-w-sm relative mx-auto w-full outline-none sm:mx-0',
+      // p-6/gap-6, not p-4/gap-4: these dialogs carry real forms, and the
+      // footer's edge-bleed margins below are tied to this padding value.
+      // max-h + overflow-y-auto are load-bearing — without them a form taller
+      // than the viewport is silently clipped with no way to reach the rest.
+      'bg-popover text-popover-foreground data-open:animate-in data-closed:animate-out data-closed:fade-out-0 data-open:fade-in-0 data-closed:zoom-out-95 data-open:zoom-in-95 ring-foreground/10 grid max-h-[calc(100dvh-4rem)] max-w-[calc(100%-2rem)] gap-6 overflow-y-auto overscroll-contain rounded-xl p-6 text-sm ring-1 duration-100 sm:max-w-sm relative mx-auto w-full outline-none sm:mx-0',
       this._dynamicComponentClass,
     ]);
   }

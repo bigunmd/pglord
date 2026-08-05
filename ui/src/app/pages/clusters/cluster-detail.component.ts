@@ -97,9 +97,9 @@ const REFRESH_MS = 5000;
 
 /** Editors hold forms and lists; the default dialog (sm:max-w-sm, p-4) is too
  * tight for them. Confirmations keep the narrow default. */
-export const EDITOR_DIALOG_CLASS = 'sm:max-w-2xl p-6 gap-6';
+export const EDITOR_DIALOG_CLASS = 'sm:max-w-2xl';
 /** Short forms: roomier than the default, narrower than the list editors. */
-export const FORM_DIALOG_CLASS = 'sm:max-w-lg p-6 gap-6';
+export const FORM_DIALOG_CLASS = 'sm:max-w-lg';
 
 /** Confirm a planned switchover; resolves true only on explicit confirmation. */
 @Component({

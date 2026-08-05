@@ -359,7 +359,10 @@
     "imageHelp": "Leave empty to use the image this pglord was configured with. Set one only to pin a specific agent image.",
     "hibernated": "Hibernated",
     "namespace": "Namespace",
-    "allNamespaces": "All namespaces"
+    "allNamespaces": "All namespaces",
+    "blockedName": "Enter a cluster name to continue.",
+    "blockedStorage": "Storage must be a size with a unit, for example 1Gi.",
+    "blockedEnv": "Fix the highlighted environment variables to continue."
   },
   "clusterDetail": {
     "back": "Clusters",

@@ -210,6 +210,17 @@ const REPLICA_CHOICES = [1, 2, 3, 4, 5] as const;
       }
     </div>
     <div hlmDialogFooter>
+      <!-- A disabled button with no stated reason reads as a broken form: the
+           name field's placeholder looks like a filled-in value, so an empty
+           name silently deactivates submit. Say what is missing. -->
+      @if (!valid()) {
+        <p
+          class="text-muted-foreground mr-auto self-center text-xs"
+          data-testid="cluster-submit-blocked"
+        >
+          {{ blockedReason() | transloco }}
+        </p>
+      }
       <button hlmBtn variant="ghost" (click)="ref.close(undefined)">
         {{ 'common.cancel' | transloco }}
       </button>
@@ -239,6 +250,16 @@ export class ClusterCreateDialogComponent {
   protected readonly rows = signal<EnvRow[]>([]);
 
   protected readonly nameValid = computed(() => NAME_RE.test(this.name()));
+  /** Why submit is unavailable, most-likely cause first. */
+  protected readonly blockedReason = computed(() => {
+    if (!this.nameValid()) {
+      return 'clusters.blockedName';
+    }
+    if (!this.storageValid()) {
+      return 'clusters.blockedStorage';
+    }
+    return 'clusters.blockedEnv';
+  });
   protected readonly storageValid = computed(() => STORAGE_RE.test(this.storage()));
   protected readonly valid = computed(
     () =>

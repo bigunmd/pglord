@@ -236,7 +236,7 @@ export class ClustersComponent implements OnDestroy {
   async openCreate(): Promise<void> {
     const spec = await firstValueFrom(
       this.dialog.open<ClusterSpec | undefined>(ClusterCreateDialogComponent, {
-        contentClass: 'sm:max-w-lg p-6 gap-6',
+        contentClass: 'sm:max-w-lg',
       }).closed$,
     );
     if (!spec) {
