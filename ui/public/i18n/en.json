@@ -232,7 +232,8 @@
     "extensionDatabase": "Database",
     "extensionSchema": "Schema (optional)",
     "extensionPreload": "Preload",
-    "preloadHint": "Preload loads the library at server start (shared_preload_libraries) — requires a restart; watch for the pending-restart banner."
+    "preloadHint": "Preload loads the library at server start (shared_preload_libraries) — requires a restart; watch for the pending-restart banner.",
+    "intro": "Declare the roles, databases and extensions this cluster should have. Applied on the primary and kept in line after failovers."
   },
   "preflight": {
     "title": "Cluster permissions",

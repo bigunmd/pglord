@@ -88,10 +88,6 @@ import { ClusterTlsDialogComponent } from './cluster-tls-dialog.component';
 import { TlsSpec } from '../../api/models/tls-spec';
 import { ClusterPoolerDialogComponent } from './cluster-pooler-dialog.component';
 import { PoolerSpec } from '../../api/models/pooler-spec';
-import {
-  ClusterProvisionDialogComponent,
-  ProvisionResult,
-} from './cluster-provision-dialog.component';
 
 const REFRESH_MS = 5000;
 
@@ -1181,7 +1177,7 @@ export class ImageDialogComponent {
             size="sm"
             data-testid="open-provision"
             [disabled]="busy() || d.hibernated"
-            (click)="openProvision(d)"
+            (click)="openProvision()"
           >
             <ng-icon name="lucideUsers" size="14" />
             {{ 'provision.edit' | transloco }}
@@ -1443,31 +1439,14 @@ export class ClusterDetailComponent implements OnDestroy {
     );
   }
 
-  async openProvision(d: ClusterDetail): Promise<void> {
-    const result = await firstValueFrom(
-      this.dialog.open<ProvisionResult | undefined>(ClusterProvisionDialogComponent, {
-        context: {
-          roles: d.roles ?? [],
-          databases: d.databases ?? [],
-          extensions: d.extensions ?? [],
-        },
-        contentClass: EDITOR_DIALOG_CLASS,
-      }).closed$,
-    );
-    if (!result) {
-      return;
-    }
-    await this.run(() =>
-      this.api.invoke(patchCluster, {
-        ns: this.ns(),
-        name: this.name(),
-        body: {
-          roles: result.roles,
-          databases: result.databases,
-          extensions: result.extensions,
-        },
-      }),
-    );
+  openProvision(): void {
+    void this.router.navigate([
+      '/namespaces',
+      this.ns(),
+      'clusters',
+      this.name(),
+      'provisioning',
+    ]);
   }
 
   async openHba(d: ClusterDetail): Promise<void> {

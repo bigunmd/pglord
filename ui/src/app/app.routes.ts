@@ -39,6 +39,15 @@ export const routes: Routes = [
             (m) => m.ClusterCreatePageComponent,
           ),
       },
+      // The section editors must be declared before the detail route: Angular
+      // matches in order and `:name` would otherwise swallow the extra segment.
+      {
+        path: 'namespaces/:ns/clusters/:name/provisioning',
+        loadComponent: () =>
+          import('./pages/clusters/cluster-provision-page.component').then(
+            (m) => m.ClusterProvisionPageComponent,
+          ),
+      },
       {
         path: 'namespaces/:ns/clusters/:name',
         loadComponent: () =>
