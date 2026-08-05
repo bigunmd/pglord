@@ -2068,25 +2068,39 @@ components:
           type: integer
           format: int64
           description: Tables the migration covers in this database.
+    UpgradeMode:
+      type: string
+      description: |-
+        How a major upgrade is performed. Absent from state written before
+        in-place existed, which must keep meaning blue-green.
+      enum:
+      - blue_green
+      - in_place
     UpgradePhase:
       type: string
       enum:
       - migrating
       - soaking
+      - upgrading
     UpgradeRequest:
       type: object
       required:
       - target_image
       properties:
+        mode:
+          $ref: '#/components/schemas/UpgradeMode'
+          description: |-
+            How to perform the upgrade. Defaults to blue-green, so existing
+            callers keep their behaviour.
         target_image:
           type: string
           description: |-
-            Image for the new instance set — a pglord agent image built on the
-            PostgreSQL major to upgrade to, shipping every extension this cluster
-            uses.
+            Image to upgrade to — a pglord agent image built on the PostgreSQL
+            major you want, shipping every extension this cluster uses.
     UpgradeStatusDto:
       type: object
       required:
+      - mode
       - phase
       - target_image
       - next_generation
@@ -2110,6 +2124,11 @@ components:
           description: |-
             Worst-case bytes of WAL the new set has not confirmed. Null while
             migrating means the new set is not reachable yet.
+        mode:
+          $ref: '#/components/schemas/UpgradeMode'
+          description: |-
+            "blue_green" (a second instance set) or "in_place" (pg_upgrade on this
+            cluster's own data directory). Decides which actions apply.
         next_generation:
           type: string
           description: |-
@@ -2117,9 +2136,7 @@ components:
             `<cluster>-<generation>-<ordinal>`.
         phase:
           $ref: '#/components/schemas/UpgradePhase'
-          description: |-
-            "migrating" (building and syncing the new set) or "soaking" (cut over,
-            old set fenced and kept as the rollback target).
+          description: 'Blue-green: "migrating" then "soaking". In-place: "upgrading".'
         ready_to_cutover:
           type: boolean
           description: Every table is streaming and replication lag is negligible.

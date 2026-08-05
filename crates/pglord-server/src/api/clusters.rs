@@ -366,7 +366,8 @@ pub async fn get_cluster(
         service: pglord_core::render::pool_service_name(&spec.name),
     };
     let instances = observations
-        .into_iter()
+        .iter()
+        .cloned()
         .map(|o| InstanceDto {
             // The declared fenced state wins: during the stop window the
             // agent may still answer, and "unknown" would read as an outage.
@@ -389,7 +390,21 @@ pub async fn get_cluster(
         .await
         .map_err(ApiError::internal)?
     {
-        Some(state) => Some(crate::api::upgrade::status_dto(ops, &ns, &spec, &state).await),
+        Some(state) => {
+            // An in-place upgrade finishes by observation, not by a user
+            // action: when every instance is back on the target major the
+            // state is settled here (and by the reconciler, which is level-
+            // triggered, so it converges with nobody watching).
+            match crate::api::upgrade::settle_in_place(ops, &ns, &spec, &state, &observations).await
+            {
+                Ok(true) => None,
+                Ok(false) => Some(crate::api::upgrade::status_dto(ops, &ns, &spec, &state).await),
+                Err(err) => {
+                    tracing::warn!(%err, "settling the in-place upgrade failed; retrying next read");
+                    Some(crate::api::upgrade::status_dto(ops, &ns, &spec, &state).await)
+                }
+            }
+        }
         None => None,
     };
     Ok(Json(ClusterDetail {

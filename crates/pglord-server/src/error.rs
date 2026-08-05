@@ -34,6 +34,12 @@ pub struct ApiError {
 }
 
 impl ApiError {
+    /// The stable `code` clients key on. Exposed so handler tests can assert
+    /// which refusal fired rather than matching on prose.
+    pub fn code(&self) -> &str {
+        &self.code
+    }
+
     pub fn new(status: StatusCode, code: impl Into<Cow<'static, str>>) -> Self {
         ApiError {
             status,

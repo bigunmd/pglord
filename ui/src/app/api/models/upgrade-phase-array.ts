@@ -8,5 +8,6 @@ import { UpgradePhase } from './upgrade-phase';
  */
 export const UPGRADE_PHASE: UpgradePhase[] = [
   'migrating',
-  'soaking'
+  'soaking',
+  'upgrading'
 ];

@@ -45,6 +45,7 @@ export type { SwitchoverRequest } from './models/switchover-request';
 export type { TlsSpec } from './models/tls-spec';
 export type { Toleration } from './models/toleration';
 export type { UpgradeDbDto } from './models/upgrade-db-dto';
+export type { UpgradeMode } from './models/upgrade-mode';
 export type { UpgradePhase } from './models/upgrade-phase';
 export type { UpgradeRequest } from './models/upgrade-request';
 export type { UpgradeStatusDto } from './models/upgrade-status-dto';

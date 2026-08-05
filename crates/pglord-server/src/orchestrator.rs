@@ -31,6 +31,8 @@ pub fn failover_enabled(upgrade: Option<&pglord_core::upgrade::UpgradeState>) ->
     !matches!(
         upgrade.map(|u| u.phase),
         Some(pglord_core::upgrade::UpgradePhase::Soaking)
+            // In-place: the instances are deliberately down and mid-conversion.
+            | Some(pglord_core::upgrade::UpgradePhase::Upgrading)
     )
 }
 
@@ -221,6 +223,8 @@ mod tests {
         // While replicating, the cluster is still fully itself: normal HA.
         assert!(failover_enabled(Some(&st(UpgradePhase::Migrating))));
         assert!(!failover_enabled(Some(&st(UpgradePhase::Soaking))));
+        // In-place conversion: the pods are down on purpose.
+        assert!(!failover_enabled(Some(&st(UpgradePhase::Upgrading))));
     }
 
     #[test]

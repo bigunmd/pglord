@@ -29,6 +29,9 @@ pub struct InstanceStatus {
     /// the level only changes at server start — so this is what tells the
     /// server whether a rolling restart is required first.
     pub wal_level: Option<String>,
+    /// Live `server_version_num` (e.g. 170010). The completion signal for an
+    /// in-place major upgrade, and the authority on which major is running.
+    pub server_version_num: Option<i32>,
 }
 
 /// Process-wide fenced flag: set at boot when the spec lists this instance,
@@ -56,21 +59,29 @@ pub async fn query_status(cfg: &Config) -> InstanceStatus {
             sync_standby_count: None,
             ssl: None,
             wal_level: None,
+            server_version_num: None,
         };
     }
     match try_query(cfg).await {
-        Ok((in_recovery, lsn, pending_restart, sync_standby_count, ssl, wal_level)) => {
-            InstanceStatus {
-                role: if in_recovery { "standby" } else { "primary" },
-                ready: true,
-                in_recovery: Some(in_recovery),
-                lsn,
-                pending_restart,
-                sync_standby_count,
-                ssl: Some(ssl),
-                wal_level: Some(wal_level),
-            }
-        }
+        Ok((
+            in_recovery,
+            lsn,
+            pending_restart,
+            sync_standby_count,
+            ssl,
+            wal_level,
+            server_version_num,
+        )) => InstanceStatus {
+            role: if in_recovery { "standby" } else { "primary" },
+            ready: true,
+            in_recovery: Some(in_recovery),
+            lsn,
+            pending_restart,
+            sync_standby_count,
+            ssl: Some(ssl),
+            wal_level: Some(wal_level),
+            server_version_num: Some(server_version_num),
+        },
         Err(err) => {
             tracing::debug!(%err, "status query failed");
             InstanceStatus {
@@ -82,6 +93,7 @@ pub async fn query_status(cfg: &Config) -> InstanceStatus {
                 sync_standby_count: None,
                 ssl: None,
                 wal_level: None,
+                server_version_num: None,
             }
         }
     }
@@ -90,7 +102,7 @@ pub async fn query_status(cfg: &Config) -> InstanceStatus {
 #[allow(clippy::type_complexity)]
 async fn try_query(
     cfg: &Config,
-) -> anyhow::Result<(bool, Option<String>, bool, Option<u32>, bool, String)> {
+) -> anyhow::Result<(bool, Option<String>, bool, Option<u32>, bool, String, i32)> {
     let mut conn_str = format!(
         "host={} port={} user={} dbname=postgres connect_timeout=2",
         cfg.socket_dir.display(),
@@ -114,7 +126,8 @@ async fn try_query(
                   ELSE (SELECT count(*)::int4 FROM pg_stat_replication \
                         WHERE sync_state IN ('sync', 'quorum')) END, \
              current_setting('ssl') = 'on', \
-             current_setting('wal_level')",
+             current_setting('wal_level'), \
+             current_setting('server_version_num')::int4",
             &[],
         )
         .await?;
@@ -126,6 +139,7 @@ async fn try_query(
         .map(|c| u32::try_from(c).unwrap_or(0));
     let ssl: bool = row.get(4);
     let wal_level: String = row.get(5);
+    let server_version_num: i32 = row.get(6);
     drop(client);
     conn_task.abort();
     Ok((
@@ -135,6 +149,7 @@ async fn try_query(
         sync_standby_count,
         ssl,
         wal_level,
+        server_version_num,
     ))
 }
 

@@ -33,10 +33,13 @@ const AGENT_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Deserialize, ToSchema)]
 pub struct UpgradeRequest {
-    /// Image for the new instance set — a pglord agent image built on the
-    /// PostgreSQL major to upgrade to, shipping every extension this cluster
-    /// uses.
+    /// Image to upgrade to — a pglord agent image built on the PostgreSQL
+    /// major you want, shipping every extension this cluster uses.
     pub target_image: String,
+    /// How to perform the upgrade. Defaults to blue-green, so existing
+    /// callers keep their behaviour.
+    #[serde(default)]
+    pub mode: UpgradeMode,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -50,8 +53,10 @@ pub struct UpgradeDbDto {
 
 #[derive(Serialize, ToSchema)]
 pub struct UpgradeStatusDto {
-    /// "migrating" (building and syncing the new set) or "soaking" (cut over,
-    /// old set fenced and kept as the rollback target).
+    /// "blue_green" (a second instance set) or "in_place" (pg_upgrade on this
+    /// cluster's own data directory). Decides which actions apply.
+    pub mode: UpgradeMode,
+    /// Blue-green: "migrating" then "soaking". In-place: "upgrading".
     pub phase: UpgradePhase,
     pub target_image: String,
     /// Generation the new instance set renders as; its pods are named
@@ -100,6 +105,23 @@ pub(crate) fn ready_to_cutover(st: &AgentUpgradeStatus) -> bool {
             .iter()
             .all(|d| d.tables_ready == d.tables_total)
         && st.lag_bytes.is_some_and(|l| l <= READY_LAG_BYTES)
+}
+
+/// Every instance is up and reporting the major we upgraded to.
+///
+/// Deliberately strict: an unreachable instance reports no version, and
+/// concluding success from silence would clear the upgrade while a pod is
+/// still converting.
+pub(crate) fn in_place_complete(
+    obs: &[crate::instance_probe::InstanceObservation],
+    target_major: u32,
+) -> bool {
+    !obs.is_empty()
+        && obs.iter().all(|o| {
+            o.ready
+                && o.server_version_num
+                    .is_some_and(|v| (v as u32) / 10_000 == target_major)
+        })
 }
 
 fn ops(state: &Option<ClusterOps>) -> Result<&ClusterOps, ApiError> {
@@ -156,10 +178,26 @@ pub async fn status_dto(
     spec: &ClusterSpec,
     state: &UpgradeState,
 ) -> UpgradeStatusDto {
+    // In-place has no second set to poll: progress is the instances coming
+    // back on the new major, which the caller already sees in the instance
+    // list.
+    if state.mode == UpgradeMode::InPlace {
+        return UpgradeStatusDto {
+            mode: state.mode,
+            phase: state.phase,
+            target_image: state.target_image.clone(),
+            next_generation: state.next_generation.clone(),
+            ready_to_cutover: false,
+            lag_bytes: None,
+            databases: Vec::new(),
+            error: None,
+        };
+    }
     // After cutover the new set is detached from the old one on purpose, so
     // there is no sync progress left to report — only the pending decision.
     if state.phase == UpgradePhase::Soaking {
         return UpgradeStatusDto {
+            mode: state.mode,
             phase: state.phase,
             target_image: state.target_image.clone(),
             next_generation: state.next_generation.clone(),
@@ -171,6 +209,7 @@ pub async fn status_dto(
     }
     let agent = fetch_agent_status(ops, ns, spec, state).await;
     UpgradeStatusDto {
+        mode: state.mode,
         phase: state.phase,
         target_image: state.target_image.clone(),
         next_generation: state.next_generation.clone(),
@@ -187,6 +226,16 @@ pub async fn status_dto(
             .collect(),
         error: agent.error,
     }
+}
+
+/// Cutover, rollback and finalize are blue-green concepts; an in-place
+/// upgrade has no second set to switch between.
+fn reject_non_blue_green(state: &UpgradeState) -> Result<(), ApiError> {
+    if state.mode != UpgradeMode::BlueGreen {
+        return Err(ApiError::conflict("invalid_upgrade_phase")
+            .with_detail("This operation applies to a blue-green upgrade."));
+    }
+    Ok(())
 }
 
 /// Load the cluster and its upgrade state, requiring the state to be in one of
@@ -304,29 +353,74 @@ pub async fn start_upgrade(
         .map_err(ApiError::internal)?
         .unwrap_or_else(|| spec.instance_name(0));
 
-    // Logical replication cannot be built on wal_level = replica, and the
-    // level only changes at server start — so this is a restart the user has
-    // to take before, not during, the upgrade.
     let observations = crate::instance_probe::observe_cluster(&ops.http, &spec, &ns).await;
-    match observations
+    let running_major = observations
         .iter()
         .find(|o| o.pod == primary)
-        .and_then(|o| o.wal_level.as_deref())
+        .and_then(|o| o.server_version_num)
+        .map(|v| (v as u32) / 10_000);
+
+    // Upgrades only go forward. The running server is authoritative; the
+    // image tag is a hint, so a tag we cannot read is not an error.
+    if let (Some(from), Some(to)) = (
+        running_major,
+        pglord_core::upgrade::major_from_image(&target_image),
+    ) && to <= from
     {
-        Some("logical") => {}
-        Some(other) => {
-            return Err(
-                ApiError::conflict("wal_level_not_logical").with_detail(format!(
-                    "The primary runs with wal_level={other}. Restart the cluster \
-                     (Restart cluster) to pick up wal_level=logical, then start the upgrade."
-                )),
-            );
+        return Err(ApiError::conflict("target_not_newer").with_detail(format!(
+            "This cluster runs PostgreSQL {from} and the target image is PostgreSQL {to}."
+        )));
+    }
+
+    if req.mode == UpgradeMode::InPlace {
+        // An in-place upgrade rewrites the data directory with no way back
+        // except a restore, so the backup is a precondition, not advice.
+        if !spec.backup.enabled {
+            return Err(ApiError::conflict("backups_required").with_detail(
+                "An in-place upgrade rewrites the data directory and can only be undone by \
+                 restoring a backup. Configure a backup repository for this cluster first.",
+            ));
         }
-        None => {
-            return Err(ApiError::conflict("wal_level_not_logical").with_detail(
-                "The primary did not report its wal_level; it may be unreachable. \
+        let runs = crate::backup_runs::list(&ops.kube, &ns, &name).await;
+        if !runs
+            .iter()
+            .any(|r| r.state == crate::backup_runs::RunState::Succeeded)
+        {
+            return Err(ApiError::conflict("backup_required")
+                .with_detail("Take a backup before upgrading in place: it is the only way back."));
+        }
+        // Without the running major there is no way to know which tree to
+        // mount for pg_upgrade, and guessing produces a pod that cannot start.
+        if running_major.is_none() {
+            return Err(ApiError::conflict("target_not_newer").with_detail(
+                "The primary did not report its PostgreSQL version; it may be unreachable. \
                  Check the cluster is healthy and retry.",
             ));
+        }
+    } else {
+        // Logical replication cannot be built on wal_level = replica, and the
+        // level only changes at server start — so this is a restart the user
+        // has to take before, not during, the upgrade.
+        match observations
+            .iter()
+            .find(|o| o.pod == primary)
+            .and_then(|o| o.wal_level.as_deref())
+        {
+            Some("logical") => {}
+            Some(other) => {
+                return Err(
+                    ApiError::conflict("wal_level_not_logical").with_detail(format!(
+                        "The primary runs with wal_level={other}. Restart the cluster \
+                         (Restart cluster) to pick up wal_level=logical, then start the upgrade."
+                    )),
+                );
+            }
+            None => {
+                return Err(ApiError::conflict("wal_level_not_logical").with_detail(
+                    "The primary did not report its wal_level; it may be unreachable. \
+                     Check the cluster is healthy and retry.",
+                ));
+            }
         }
     }
 
@@ -334,7 +428,9 @@ pub async fn start_upgrade(
     // Without it the initial copy of a large database retains WAL on the
     // running cluster's volume for as long as it takes, which can fill the
     // disk of the database this upgrade is supposed to leave alone.
-    if let Some(size) = pglord_core::upgrade::wal_retention_for(&spec.storage_size) {
+    if req.mode == UpgradeMode::BlueGreen
+        && let Some(size) = pglord_core::upgrade::wal_retention_for(&spec.storage_size)
+    {
         let url = agent_url(&primary, &spec.name, &ns, "upgrade/prepare");
         let prepared = ops
             .http
@@ -354,13 +450,19 @@ pub async fn start_upgrade(
         }
     }
 
+    let in_place = req.mode == UpgradeMode::InPlace;
     let state = UpgradeState {
         target_image,
         next_generation: next_generation(&spec.generation),
-        phase: UpgradePhase::Migrating,
+        phase: if in_place {
+            UpgradePhase::Upgrading
+        } else {
+            UpgradePhase::Migrating
+        },
         previous_primary: None,
-        mode: UpgradeMode::BlueGreen,
-        from_major: None,
+        mode: req.mode,
+        // Resolved once here so the render stays stable across reconciles.
+        from_major: if in_place { running_major } else { None },
     };
     if !ops
         .store
@@ -384,8 +486,25 @@ pub async fn start_upgrade(
     )
     .await
     .map_err(ApiError::internal)?;
+    if in_place {
+        // Replace the pods so each agent boots into the conversion. Standbys
+        // go first (roll_order), so none is streaming from a primary whose
+        // timeline is about to be rewritten.
+        let roll_ops = ops.clone();
+        let roll_ns = ns.clone();
+        let roll_spec = spec.clone();
+        let roll_primary = primary.clone();
+        tokio::spawn(async move {
+            let order = crate::api::clusters::roll_order(
+                &roll_spec.sts_name(),
+                roll_spec.replicas,
+                &roll_primary,
+            );
+            crate::api::clusters::roll_pods(&roll_ops, &roll_ns, &roll_spec, order).await;
+        });
+    }
     tracing::warn!(
-        cluster = %name, image = %state.target_image, generation = %state.next_generation,
+        cluster = %name, image = %state.target_image, mode = ?state.mode,
         "major upgrade started"
     );
     Ok(StatusCode::ACCEPTED)
@@ -412,6 +531,7 @@ pub async fn cutover_upgrade(
 ) -> Result<StatusCode, ApiError> {
     let ops = ops(&state)?;
     let (spec, owner, upgrade) = require_phase(ops, &ns, &name, UpgradePhase::Migrating).await?;
+    reject_non_blue_green(&upgrade)?;
 
     let agent = fetch_agent_status(ops, &ns, &spec, &upgrade).await;
     // An attempt that cut the data over but lost the record patch leaves the
@@ -530,6 +650,7 @@ pub async fn rollback_upgrade(
 ) -> Result<StatusCode, ApiError> {
     let ops = ops(&state)?;
     let (spec, owner, upgrade) = require_phase(ops, &ns, &name, UpgradePhase::Soaking).await?;
+    reject_non_blue_green(&upgrade)?;
     let previous = upgrade
         .previous_primary
         .clone()
@@ -578,7 +699,28 @@ pub async fn abort_upgrade(
     Path((ns, name)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
     let ops = ops(&state)?;
-    let (spec, _owner, upgrade) = require_phase(ops, &ns, &name, UpgradePhase::Migrating).await?;
+    let Some((spec, owner)) = ops
+        .store
+        .get(&ns, &name)
+        .await
+        .map_err(ApiError::internal)?
+    else {
+        return Err(ApiError::not_found());
+    };
+    let Some(upgrade) = ops
+        .store
+        .upgrade_state(&ns, &name)
+        .await
+        .map_err(ApiError::internal)?
+    else {
+        return Err(ApiError::conflict("no_upgrade_in_progress")
+            .with_detail("This cluster has no major version upgrade in progress."));
+    };
+    if upgrade.phase == UpgradePhase::Soaking {
+        return Err(ApiError::conflict("invalid_upgrade_phase").with_detail(
+            "This upgrade has already cut over; roll it back or finalize it instead.",
+        ));
+    }
     if !ops
         .store
         .set_upgrade(&ns, &name, None, None)
@@ -594,6 +736,36 @@ pub async fn abort_upgrade(
         .await
         .map_err(ApiError::internal)?
         .unwrap_or_else(|| spec.instance_name(0));
+
+    if upgrade.mode == UpgradeMode::InPlace {
+        // Clearing the state reverts the render to the cluster's own (old)
+        // image; the roll puts the instances back on it. Whether that
+        // recovers anything depends on how far the conversion got — if a data
+        // directory was already converted the old image refuses it, which is
+        // what the confirmation warned about.
+        if let Err(err) = crate::reconciler::apply_cluster(
+            &ops.kube, &ops.http, &ns, &spec, &owner, &primary, None,
+        )
+        .await
+        {
+            tracing::warn!(%err, "post-abort apply failed (resync will retry)");
+        }
+        let roll_ops = ops.clone();
+        let roll_ns = ns.clone();
+        let roll_spec = spec.clone();
+        let roll_primary = primary.clone();
+        tokio::spawn(async move {
+            let order = crate::api::clusters::roll_order(
+                &roll_spec.sts_name(),
+                roll_spec.replicas,
+                &roll_primary,
+            );
+            crate::api::clusters::roll_pods(&roll_ops, &roll_ns, &roll_spec, order).await;
+        });
+        tracing::warn!(cluster = %name, "in-place upgrade aborted");
+        return Ok(StatusCode::ACCEPTED);
+    }
+
     // Cleanup before the new set goes away: an abandoned replication slot
     // retains WAL forever, filling the volume of a cluster whose upgrade the
     // user believes they cancelled.
@@ -623,6 +795,7 @@ pub async fn finalize_upgrade(
 ) -> Result<StatusCode, ApiError> {
     let ops = ops(&state)?;
     let (spec, owner, upgrade) = require_phase(ops, &ns, &name, UpgradePhase::Soaking).await?;
+    reject_non_blue_green(&upgrade)?;
     let green_primary = green_primary_pod(&spec, &upgrade);
     let old_sts = spec.sts_name();
 
@@ -690,6 +863,46 @@ pub async fn finalize_upgrade(
     Ok(StatusCode::ACCEPTED)
 }
 
+/// Finish an in-place upgrade once every instance is back on the target
+/// major: adopt the image, re-point the backup stanza, clear the state.
+///
+/// Level-triggered and idempotent, so it can be called from any pass that
+/// has fresh observations. Returns whether it settled anything.
+pub async fn settle_in_place(
+    ops: &ClusterOps,
+    ns: &str,
+    spec: &ClusterSpec,
+    state: &UpgradeState,
+    obs: &[crate::instance_probe::InstanceObservation],
+) -> anyhow::Result<bool> {
+    let Some(target) = pglord_core::upgrade::major_from_image(&state.target_image) else {
+        // Without a readable tag the observed majors cannot be compared to
+        // anything; the user finishes with abort once the cluster is healthy.
+        return Ok(false);
+    };
+    if state.mode != UpgradeMode::InPlace || !in_place_complete(obs, target) {
+        return Ok(false);
+    }
+
+    let mut next = spec.clone();
+    next.image = state.target_image.clone();
+    ops.store.put(ns, &next).await?;
+
+    if next.backup.enabled {
+        // The stanza still describes the old major, exactly as at blue-green's
+        // finalize. In-place always has backups: the start gate requires them.
+        let primary = ops
+            .store
+            .primary(ns, &next.name)
+            .await?
+            .unwrap_or_else(|| next.instance_name(0));
+        post_agent(ops, ns, &next.name, &primary, "backup/stanza-upgrade").await;
+    }
+    ops.store.set_upgrade(ns, &next.name, None, None).await?;
+    tracing::warn!(cluster = %next.name, image = %next.image, "in-place upgrade settled");
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -738,6 +951,69 @@ mod tests {
             error: None,
         };
         assert!(ready_to_cutover(&st));
+    }
+
+    fn obs(pod: &str, ready: bool, ver: Option<i32>) -> crate::instance_probe::InstanceObservation {
+        crate::instance_probe::InstanceObservation {
+            pod: pod.into(),
+            ready,
+            in_recovery: Some(false),
+            lsn: None,
+            pending_restart: false,
+            sync_standby_count: None,
+            ssl: None,
+            wal_level: None,
+            server_version_num: ver,
+        }
+    }
+
+    #[test]
+    fn in_place_completes_only_when_every_instance_is_ready_on_the_target() {
+        let done = vec![
+            obs("demo-0", true, Some(170010)),
+            obs("demo-1", true, Some(170010)),
+        ];
+        assert!(in_place_complete(&done, 17));
+
+        // One still on the old major: the roll has not reached it.
+        let mixed = vec![
+            obs("demo-0", true, Some(170010)),
+            obs("demo-1", true, Some(160013)),
+        ];
+        assert!(!in_place_complete(&mixed, 17));
+        // One not ready yet — converting, or re-cloning.
+        let booting = vec![
+            obs("demo-0", true, Some(170010)),
+            obs("demo-1", false, None),
+        ];
+        assert!(!in_place_complete(&booting, 17));
+        // Unreachable instances report no version: never conclude success
+        // from silence, or the state clears mid-conversion.
+        let silent = vec![obs("demo-0", true, None)];
+        assert!(!in_place_complete(&silent, 17));
+        // An empty observation set is not a completed upgrade.
+        assert!(!in_place_complete(&[], 17));
+    }
+
+    #[test]
+    fn blue_green_verbs_reject_an_in_place_upgrade() {
+        let in_place = UpgradeState {
+            target_image: "pglord-agent:17".into(),
+            next_generation: "g2".into(),
+            phase: UpgradePhase::Upgrading,
+            previous_primary: None,
+            mode: UpgradeMode::InPlace,
+            from_major: Some(16),
+        };
+        let err = reject_non_blue_green(&in_place).expect_err("must reject");
+        assert_eq!(err.code(), "invalid_upgrade_phase");
+
+        let blue_green = UpgradeState {
+            mode: UpgradeMode::BlueGreen,
+            phase: UpgradePhase::Migrating,
+            ..in_place
+        };
+        assert!(reject_non_blue_green(&blue_green).is_ok());
     }
 
     #[test]

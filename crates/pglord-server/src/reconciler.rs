@@ -21,7 +21,7 @@ use pglord_core::render::{
     SUPERUSER_PASSWORD_KEY, credentials_secret_for, credentials_secret_name, labels, pod_fqdn,
     pool_service_name, pooler_config_secret_name, pooler_deployment_name, render_headless_service,
     render_instance_rbac, render_pool_service, render_pooler_config_secret,
-    render_pooler_deployment, render_rw_service, render_statefulset,
+    render_pooler_deployment, render_rw_service,
 };
 use pglord_core::spec::ClusterSpec;
 use rand::RngExt;
@@ -39,9 +39,10 @@ pub fn desired_objects(
     ns: &str,
     owner: &OwnerRef,
     primary_pod: &str,
+    upgrade: Option<&pglord_core::upgrade::UpgradeState>,
 ) -> (StatefulSet, Service, Service) {
     (
-        render_statefulset(spec, ns, owner),
+        pglord_core::render::render_statefulset_for_upgrade(spec, ns, owner, upgrade),
         render_headless_service(spec, ns, owner),
         render_rw_service(spec, ns, owner, primary_pod),
     )
@@ -592,7 +593,7 @@ pub async fn apply_cluster(
     let rb_api: Api<RoleBinding> = Api::namespaced(client.clone(), ns);
     rb_api.patch(&sa_name, &pp, &Patch::Apply(&binding)).await?;
 
-    let (sts, headless, rw) = desired_objects(spec, ns, owner, primary_pod);
+    let (sts, headless, rw) = desired_objects(spec, ns, owner, primary_pod, upgrade);
 
     let sts_api: Api<StatefulSet> = Api::namespaced(client.clone(), ns);
     let sts_name = spec.sts_name();
@@ -639,7 +640,10 @@ pub async fn apply_cluster(
     // would write the subscriber-mode env var back onto the promoted
     // instances — the guard closes the window between finalize's spec write
     // and its clearing of the upgrade state.
-    if let Some(upgrade) = upgrade.filter(|u| u.next_generation != spec.generation) {
+    if let Some(upgrade) = upgrade.filter(|u| {
+        u.mode == pglord_core::upgrade::UpgradeMode::BlueGreen
+            && u.next_generation != spec.generation
+    }) {
         let green = pglord_core::render::render_green_statefulset(spec, ns, owner, upgrade);
         let green_name = green.metadata.name.clone().unwrap_or_default();
         sts_api
@@ -726,7 +730,7 @@ mod tests {
             name: "demo-spec".into(),
             uid: "u".into(),
         };
-        let (sts, headless, rw) = desired_objects(&spec, "ns", &owner, "demo-0");
+        let (sts, headless, rw) = desired_objects(&spec, "ns", &owner, "demo-0", None);
         assert_eq!(sts.metadata.name.as_deref(), Some("demo"));
         assert_eq!(headless.metadata.name.as_deref(), Some("demo-pods"));
         assert_eq!(rw.metadata.name.as_deref(), Some("demo-rw"));

@@ -18,6 +18,8 @@ struct AgentStatus {
     ssl: Option<bool>,
     #[serde(default)]
     wal_level: Option<String>,
+    #[serde(default)]
+    server_version_num: Option<i32>,
 }
 
 #[derive(Debug, Clone)]
@@ -35,6 +37,8 @@ pub struct InstanceObservation {
     /// Live `wal_level`. None when unreachable, or when an older agent that
     /// does not report it answers.
     pub wal_level: Option<String>,
+    /// Live `server_version_num`; the authority on which major is running.
+    pub server_version_num: Option<i32>,
 }
 
 /// Observe every instance of the spec's *own* generation. During a major
@@ -67,6 +71,7 @@ pub async fn observe_cluster(
                 sync_standby_count: s.sync_standby_count,
                 ssl: s.ssl,
                 wal_level: s.wal_level,
+                server_version_num: s.server_version_num,
             },
             None => InstanceObservation {
                 pod,
@@ -77,6 +82,7 @@ pub async fn observe_cluster(
                 sync_standby_count: None,
                 ssl: None,
                 wal_level: None,
+                server_version_num: None,
             },
         });
     }
