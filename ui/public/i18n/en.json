@@ -367,7 +367,10 @@
     "blockedName": "Enter a cluster name to continue.",
     "blockedStorage": "Storage must be a size with a unit, for example 1Gi.",
     "blockedEnv": "Fix the highlighted environment variables to continue.",
-    "createIntro": "Name the cluster and choose its size. Everything here can be changed later except the name."
+    "createIntro": "Name the cluster and choose its size. Everything here can be changed later except the name.",
+    "namespaceHelp": "Which namespace to create the cluster in. Existing ones are suggested; a new one works too, as long as pglord has permission for it.",
+    "namespaceFixedHelp": "This pglord manages a single namespace, so clusters are always created here.",
+    "blockedNamespace": "Choose a namespace to continue."
   },
   "clusterDetail": {
     "back": "Clusters",

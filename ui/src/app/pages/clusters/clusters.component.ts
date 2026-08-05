@@ -234,10 +234,11 @@ export class ClustersComponent implements OnDestroy {
   /** Creating is a page, not a modal: the form has too many sections to sit
    * in a dialog, and a URL means it survives a reload. */
   openCreate(): void {
-    // "all namespaces" falls back to the first known one, or the server
-    // default when nothing exists yet.
-    const ns = this.selectedNs() || this.namespaces()[0] || 'default';
-    void this.router.navigate(['/clusters/new'], { queryParams: { ns } });
+    // Only pass a namespace the user actually chose. Guessing one here is how
+    // "default" ended up being sent to a server that manages a different
+    // namespace; with no selection the page asks the server which to use.
+    const ns = this.selectedNs();
+    void this.router.navigate(['/clusters/new'], ns ? { queryParams: { ns } } : {});
   }
 
   async openDelete(c: ClusterSummary): Promise<void> {

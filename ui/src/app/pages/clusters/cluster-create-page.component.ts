@@ -8,6 +8,7 @@ import { HlmLabel } from '@spartan-ng/helm/label';
 
 import { Api } from '../../api/api';
 import { createCluster } from '../../api/fn/clusters/create-cluster';
+import { listAllClusters } from '../../api/fn/clusters/list-all-clusters';
 import { version } from '../../api/fn/system/version';
 import { ClusterSpec } from '../../api/models/cluster-spec';
 import { problemDetail } from '../../core/problem';
@@ -45,6 +46,39 @@ const REPLICA_CHOICES = [1, 2, 3, 4, 5] as const;
       }
 
       <div class="grid gap-6">
+      <div class="grid gap-1.5">
+        <label hlmLabel for="pg-cluster-namespace">{{ 'clusters.namespace' | transloco }}</label>
+        @if (namespaceFixed()) {
+          <!-- The server manages exactly one namespace, so there is nothing to
+               choose: show which one rather than offering a field that can
+               only be filled in wrongly. -->
+          <p
+            class="border-border bg-muted/40 text-muted-foreground rounded-md border px-3 py-2 font-mono text-sm"
+            data-testid="cluster-namespace-fixed"
+          >
+            {{ namespace() || '…' }}
+          </p>
+        } @else {
+          <input
+            hlmInput
+            id="pg-cluster-namespace"
+            class="font-mono"
+            data-testid="cluster-namespace"
+            list="pg-known-namespaces"
+            [ngModel]="namespace()"
+            (ngModelChange)="namespace.set($event)"
+            autocomplete="off"
+          />
+          <datalist id="pg-known-namespaces">
+            @for (n of knownNamespaces(); track n) {
+              <option [value]="n"></option>
+            }
+          </datalist>
+        }
+        <p class="text-muted-foreground text-xs">
+          {{ (namespaceFixed() ? 'clusters.namespaceFixedHelp' : 'clusters.namespaceHelp') | transloco }}
+        </p>
+      </div>
       <div class="grid gap-1.5">
         <label hlmLabel for="pg-cluster-name">{{ 'clusters.name' | transloco }}</label>
         <input
@@ -257,20 +291,32 @@ export class ClusterCreatePageComponent {
 
   /** Namespace to create in; supplied as a route query param by the list. */
   public readonly ns = input('');
-  /** The namespace the server actually manages. Guessing "default" creates in
-   * a namespace pglord has no RBAC for, which fails at the apiserver. */
-  private readonly serverNs = signal('');
+  /** Where the cluster will be created. Seeded from the route when the list
+   * had a namespace selected, otherwise from the server. */
+  protected readonly namespace = signal('');
+  /** A single-namespace server offers no choice, so the field is read-only. */
+  protected readonly namespaceFixed = signal(true);
+  protected readonly knownNamespaces = signal<string[]>([]);
 
   constructor() {
-    queueMicrotask(() => void this.loadServerNs());
+    queueMicrotask(() => void this.loadNamespaces());
   }
 
-  private async loadServerNs(): Promise<void> {
+  private async loadNamespaces(): Promise<void> {
     try {
       const v = await this.api.invoke(version, {});
-      this.serverNs.set(v.namespace ?? '');
-    } catch {
-      // Non-fatal: an explicit ns query param still works without it.
+      // The route's namespace wins — it is what the user was looking at.
+      this.namespace.set(this.ns() || v.namespace || '');
+      this.namespaceFixed.set(!v.all_namespaces);
+      if (v.all_namespaces) {
+        // Namespaces that already hold clusters make useful suggestions; the
+        // field stays free-form because a new one is perfectly valid.
+        const all = await this.api.invoke(listAllClusters, {});
+        const seen = [...new Set(all.map((c) => c.namespace).filter(Boolean))];
+        this.knownNamespaces.set(seen.sort());
+      }
+    } catch (err) {
+      this.error.set(problemDetail(err));
     }
   }
 
@@ -300,6 +346,9 @@ export class ClusterCreatePageComponent {
   protected readonly nameValid = computed(() => NAME_RE.test(this.name()));
   /** Why submit is unavailable, most-likely cause first. */
   protected readonly blockedReason = computed(() => {
+    if (!this.namespace().trim()) {
+      return 'clusters.blockedNamespace';
+    }
     if (!this.nameValid()) {
       return 'clusters.blockedName';
     }
@@ -311,7 +360,10 @@ export class ClusterCreatePageComponent {
   protected readonly storageValid = computed(() => STORAGE_RE.test(this.storage()));
   protected readonly valid = computed(
     () =>
-      this.nameValid() && this.storageValid() && rowsValid(this.rows()),
+      !!this.namespace().trim() &&
+      this.nameValid() &&
+      this.storageValid() &&
+      rowsValid(this.rows()),
   );
 
   cancel(): void {
@@ -338,13 +390,7 @@ export class ClusterCreatePageComponent {
     this.busy.set(true);
     this.error.set(null);
     try {
-      // The list's namespace when it has one, otherwise the namespace the
-      // server reports it manages — never a guessed "default".
-      const ns = this.ns() || this.serverNs();
-      if (!ns) {
-        this.error.set('Could not determine which namespace to create in.');
-        return;
-      }
+      const ns = this.namespace().trim();
       await this.api.invoke(createCluster, { ns, body: spec });
       // Land on the thing that was just made, not back on the list.
       await this.router.navigate(['/namespaces', ns, 'clusters', spec.name]);
