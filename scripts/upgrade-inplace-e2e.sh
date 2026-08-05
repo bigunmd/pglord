@@ -14,8 +14,15 @@ BUCKET=pglord-inplace
 PREFIX="inplace-$$"
 
 kill_pf() { pkill -f "kubectl.*port-forward.*pglord-server" 2>/dev/null || true; }
+# KEEP=1 leaves the cluster up so a failure can be inspected. Two runs must
+# never overlap: this trap deletes the cluster by name, so a second run's
+# cluster would be destroyed by the first one exiting.
 cleanup() {
-  curl -s -X DELETE "$API/api/v1/clusters/$CLUSTER" >/dev/null 2>&1 || true
+  if [ -z "${KEEP:-}" ]; then
+    curl -s -X DELETE "$API/api/v1/clusters/$CLUSTER" >/dev/null 2>&1 || true
+  else
+    echo "KEEP=1: leaving $CLUSTER up for inspection"
+  fi
   kill_pf
 }
 trap cleanup EXIT
