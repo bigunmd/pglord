@@ -300,6 +300,14 @@ async fn apply_parameters(reader: &RecordReader, cfg: &Config, me: &str, in_reco
             Ok(false) => {}
             Err(err) => tracing::warn!(%err, "failed to write pgbackrest.conf"),
         }
+        // Create the stanza as soon as the repository is configured, not
+        // lazily at the first backup: archive_command starts pushing WAL the
+        // moment archiving is enabled, and archive-push against a repository
+        // with no archive.info fails and keeps failing. Idempotent and cheap,
+        // and only the primary owns the stanza.
+        if !in_recovery && let Err(err) = crate::backup::ensure_stanza(cfg).await {
+            tracing::warn!(%err, "stanza ensure failed; retrying next pass");
+        }
     }
 
     if changed {

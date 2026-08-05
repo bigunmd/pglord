@@ -145,7 +145,11 @@ for _ in $(seq 1 120); do
   state=$(curl -s "$API/api/v1/clusters/$CLUSTER/backups" | python3 -c \
     "import sys,json; r=json.load(sys.stdin).get('runs') or []; print(r[0]['state'] if r else '')" 2>/dev/null || echo "")
   [ "$state" = "succeeded" ] && break
-  [ "$state" = "failed" ] && { echo "FAIL: the backup failed"; exit 1; }
+  if [ "$state" = "failed" ]; then
+    echo "FAIL: the backup failed: $(curl -s "$API/api/v1/clusters/$CLUSTER/backups" | python3 -c \
+      "import sys,json; r=json.load(sys.stdin).get('runs') or []; print(r[0].get('error','') if r else '')")"
+    exit 1
+  fi
   sleep 2
 done
 [ "$state" = "succeeded" ] || { echo "FAIL: backup never succeeded (last state '$state')"; exit 1; }
