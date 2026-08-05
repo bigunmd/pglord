@@ -257,10 +257,24 @@ the same way.
 ### Major version upgrades
 
 Moving to a new PostgreSQL major is a different operation from a minor upgrade,
-and it has its own card on the cluster page. pglord never reinterprets an
-existing data directory: it builds a **second set of instances** on the new
-version next to the running one, copies the data across with logical
-replication, and switches over only when you say so.
+and it has its own card on the cluster page. pglord offers **two modes**, and
+you pick one when you start:
+
+| | Blue-green | In place |
+|---|---|---|
+| Downtime | None until you cut over, then seconds | Minutes, while the data directory converts |
+| Extra disk | A full second copy of the whole cluster | Almost none (`pg_upgrade --link` uses hard links) |
+| Way back | Roll back to the old instances, which are still running | Restore a backup — nothing else |
+| Preconditions | `wal_level=logical` (one rolling restart on older clusters) | Backups enabled and a completed backup |
+| Good for | Clusters that cannot take downtime and have the headroom | Large clusters where a second copy is impractical |
+
+Neither dominates. A 1 TB cluster with two instances holds 2 TB, so blue-green
+needs 4 TB and double the compute for the length of the migration; in place
+needs neither, and pays for it with a write outage and a much harder rollback.
+
+**Blue-green** never reinterprets an existing data directory: it builds a
+second set of instances on the new version next to the running one, copies the
+data across with logical replication, and switches over only when you say so.
 
 The published agent images are what you upgrade to:
 `ghcr.io/<owner>/pglord-agent:16`, `:17`, `:18`, plus a `-timescaledb` variant
@@ -333,6 +347,40 @@ Things to know before you start:
 If the new instances stall, the card shows the reason (an unreachable source, a
 missing extension, or a target image whose major is *older* than the source's,
 which pglord refuses). Abort, fix the cause, and start again.
+
+#### Upgrading in place
+
+Pick **In place** in the start dialog to convert this cluster's own data
+directory with `pg_upgrade --link` instead of building a second copy. There is
+one action and no cutover: pglord replaces the instances, the primary converts
+its directory, and the standbys — which cannot be pg_upgraded — throw their
+data away and re-clone from the converted primary. The cluster returns on the
+new version with the same names, the same volumes and the same connection
+details.
+
+What to know:
+
+- **A backup is required.** pglord refuses to start without backups enabled
+  and a completed backup, because restoring one is the only way back. Take it
+  from the **Backups** section first.
+- **Expect a write outage of minutes**, longer for a large database, and
+  reduced redundancy for a while afterwards as each standby re-clones (which
+  for 1 TB means a full basebackup each — time and network, but no extra
+  disk beyond what the standby already has).
+- **Aborting undoes much less than it does for blue-green.** It puts the
+  previous image back and clears the upgrade. If nothing was converted yet
+  (an unpullable image, a failed compatibility check) the cluster comes back
+  exactly as it was. If a data directory was already converted, the old
+  version refuses to start on it, and you restore the backup. The confirmation
+  says so before it runs.
+- pglord runs `pg_upgrade --check` before the real conversion, so an
+  incompatible extension or datatype stops the upgrade before anything is
+  modified.
+- Optimizer statistics are not carried over by pg_upgrade, so pglord rebuilds
+  them (`vacuumdb --analyze-in-stages`) once the cluster is back. Queries may
+  be slow for a few minutes until that finishes.
+- Automatic failover is suspended for the duration: the instances are down on
+  purpose.
 
 ### Back up to object storage
 

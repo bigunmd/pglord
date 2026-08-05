@@ -100,6 +100,9 @@ extensions-e2e: ## Minikube e2e: declared extensions — per-db scoping and prel
 upgrade-e2e: ## Minikube e2e: blue-green major upgrade 16->17 (rollback, then finalize)
 	./scripts/upgrade-e2e.sh
 
+upgrade-inplace-e2e: ## Minikube e2e: in-place pg_upgrade 16->17 (needs dev MinIO)
+	./scripts/upgrade-inplace-e2e.sh
+
 config-e2e: ## Minikube e2e: live settings, pending restart, rolling restart
 	./scripts/config-e2e.sh
 
