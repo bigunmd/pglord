@@ -220,6 +220,33 @@ deliberately down and mid-conversion.
   proven before anything was built. It also produced the mount-path correction
   above.
 
+## Implementation notes (what building it changed)
+
+1. **Completion compares observed majors, not the image tag.** `settle_in_place`
+   originally parsed the target major out of the tag; `:dev17`, `:latest` or a
+   digest all parse to nothing, which left a fully-converted cluster stuck in
+   `upgrading` forever — and with it, backups broken, because
+   `stanza-upgrade` only runs at settle. It now compares each instance's
+   reported `server_version_num` against the `from_major` recorded at start.
+2. **The in-place major is typed as a number.** The env layer coerces a numeric
+   value to an integer, so a `String` field made the agent fail to load its
+   config entirely (`invalid type: found unsigned int 16`).
+3. **Two backup fixes that the suite forced out, both affecting ordinary use:**
+   the pgBackRest stanza was created lazily at the first backup, so
+   `archive-push` ran against a repository with no `archive.info` and kept
+   failing; and `pgbackrest.conf` lives in the container filesystem, leaving a
+   window after every restart where archiving is on but backups fail for want
+   of `pg1-path`. Both are now written when the repository is configured and
+   before postgres starts. `backup-e2e` runs a single replica and never
+   restarts into a failover, so neither path was covered.
+
+Verified on the stand (`make upgrade-inplace-e2e`): in-place refused with
+`backup_required` before a backup existed, then converted a two-instance
+PostgreSQL 16 cluster to 17 with all 100 rows, a continuing sequence and
+`pgcrypto` intact — under the same object names (`ipdemo`, `ipdemo-0`), with no
+second instance set. `make upgrade-e2e` still passes, so blue-green is
+unaffected.
+
 ## Out of scope (deliberate)
 
 `--clone`/copy modes · the rsync standby-upgrade trick (fragile; re-cloning is
