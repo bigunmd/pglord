@@ -4,7 +4,7 @@ import { BrnDialogRef, injectBrnDialogContext } from '@spartan-ng/brain/dialog';
 import { TranslocoModule } from '@jsverse/transloco';
 
 import { HlmButton } from '@spartan-ng/helm/button';
-import { HlmDialogFooter, HlmDialogHeader, HlmDialogTitle } from '@spartan-ng/helm/dialog';
+import { HlmDialogBody, HlmDialogFooter, HlmDialogHeader, HlmDialogTitle } from '@spartan-ng/helm/dialog';
 import { HlmInput } from '@spartan-ng/helm/input';
 import { HlmLabel } from '@spartan-ng/helm/label';
 
@@ -28,6 +28,7 @@ export interface UpgradeStartResult {
     FormsModule,
     TranslocoModule,
     HlmButton,
+    HlmDialogBody,
     HlmDialogFooter,
     HlmDialogHeader,
     HlmDialogTitle,
@@ -38,48 +39,50 @@ export interface UpgradeStartResult {
     <div hlmDialogHeader>
       <h2 hlmDialogTitle>{{ 'upgrade.startTitle' | transloco: { name: name } }}</h2>
     </div>
-    <div class="grid gap-3 py-1">
-      <fieldset class="grid gap-2">
-        <legend hlmLabel class="mb-1">{{ 'upgrade.mode' | transloco }}</legend>
-        @for (m of modes; track m.value) {
-          <label
-            class="border-border hover:bg-accent/40 flex cursor-pointer gap-2 rounded-lg border p-2"
-            [attr.data-testid]="'upgrade-mode-' + m.value"
-          >
-            <input
-              type="radio"
-              name="pg-upgrade-mode"
-              class="mt-1"
-              [value]="m.value"
-              [ngModel]="mode()"
-              (ngModelChange)="mode.set($event)"
-            />
-            <span class="grid gap-0.5">
-              <span class="text-sm font-medium">{{ m.label | transloco }}</span>
-              <span class="text-muted-foreground text-xs leading-relaxed">
-                {{ m.hint | transloco }}
+    <div hlmDialogBody>
+  <div class="grid gap-3 py-1">
+        <fieldset class="grid gap-2">
+          <legend hlmLabel class="mb-1">{{ 'upgrade.mode' | transloco }}</legend>
+          @for (m of modes; track m.value) {
+            <label
+              class="border-border hover:bg-accent/40 flex cursor-pointer gap-2 rounded-lg border p-2"
+              [attr.data-testid]="'upgrade-mode-' + m.value"
+            >
+              <input
+                type="radio"
+                name="pg-upgrade-mode"
+                class="mt-1"
+                [value]="m.value"
+                [ngModel]="mode()"
+                (ngModelChange)="mode.set($event)"
+              />
+              <span class="grid gap-0.5">
+                <span class="text-sm font-medium">{{ m.label | transloco }}</span>
+                <span class="text-muted-foreground text-xs leading-relaxed">
+                  {{ m.hint | transloco }}
+                </span>
               </span>
-            </span>
-          </label>
-        }
-      </fieldset>
+            </label>
+          }
+        </fieldset>
 
-      <div class="grid gap-2">
-        <label hlmLabel for="pg-upgrade-image">{{ 'upgrade.targetImage' | transloco }}</label>
-        <input
-          hlmInput
-          id="pg-upgrade-image"
-          class="font-mono"
-          data-testid="upgrade-image-input"
-          [ngModel]="image()"
-          (ngModelChange)="image.set($event)"
-        />
-        <p class="text-muted-foreground text-xs leading-relaxed">
-          {{
-            (mode() === 'in_place' ? 'upgrade.inPlaceNeedsBackup' : 'upgrade.startWarning')
-              | transloco
-          }}
-        </p>
+        <div class="grid gap-2">
+          <label hlmLabel for="pg-upgrade-image">{{ 'upgrade.targetImage' | transloco }}</label>
+          <input
+            hlmInput
+            id="pg-upgrade-image"
+            class="font-mono"
+            data-testid="upgrade-image-input"
+            [ngModel]="image()"
+            (ngModelChange)="image.set($event)"
+          />
+          <p class="text-muted-foreground text-xs leading-relaxed">
+            {{
+              (mode() === 'in_place' ? 'upgrade.inPlaceNeedsBackup' : 'upgrade.startWarning')
+                | transloco
+            }}
+          </p>
+        </div>
       </div>
     </div>
     <div hlmDialogFooter>
@@ -124,9 +127,11 @@ export class UpgradeStartDialogComponent {
     <div hlmDialogHeader>
       <h2 hlmDialogTitle>{{ titleKey | transloco: { name: name } }}</h2>
     </div>
-    <p class="text-muted-foreground py-1 text-sm leading-relaxed">
-      {{ warningKey | transloco }}
-    </p>
+    <div hlmDialogBody>
+  <p class="text-muted-foreground py-1 text-sm leading-relaxed">
+        {{ warningKey | transloco }}
+      </p>
+    </div>
     <div hlmDialogFooter>
       <button hlmBtn variant="ghost" (click)="ref.close(false)">
         {{ 'common.cancel' | transloco }}

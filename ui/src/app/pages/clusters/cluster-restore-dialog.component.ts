@@ -3,7 +3,7 @@ import { FormsModule } from '@angular/forms';
 import { TranslocoModule } from '@jsverse/transloco';
 import { BrnDialogRef, injectBrnDialogContext } from '@spartan-ng/brain/dialog';
 import { HlmButton } from '@spartan-ng/helm/button';
-import { HlmDialogFooter, HlmDialogHeader, HlmDialogTitle } from '@spartan-ng/helm/dialog';
+import { HlmDialogBody, HlmDialogFooter, HlmDialogHeader, HlmDialogTitle } from '@spartan-ng/helm/dialog';
 import { HlmInput } from '@spartan-ng/helm/input';
 import { HlmLabel } from '@spartan-ng/helm/label';
 
@@ -39,6 +39,7 @@ function toDateTimeLocal(epochSeconds: number): string {
     FormsModule,
     TranslocoModule,
     HlmButton,
+    HlmDialogBody,
     HlmDialogFooter,
     HlmDialogHeader,
     HlmDialogTitle,
@@ -53,82 +54,85 @@ function toDateTimeLocal(epochSeconds: number): string {
       </p>
     </div>
 
-    <div class="pg-scroll grid max-h-[min(65vh,32rem)] gap-6 overflow-y-auto py-1 pr-2">
-      <div class="grid gap-2">
-        <label hlmLabel for="rs-name">{{ 'restore.targetName' | transloco }}</label>
-        <input
-          hlmInput
-          id="rs-name"
-          data-testid="restore-target"
-          autocomplete="off"
-          [ngModel]="target()"
-          (ngModelChange)="target.set($event)"
-        />
-        <!-- Always rendered, only recoloured: a message that appears on error
-             would resize the dialog under the pointer. -->
-        <p
-          class="text-xs leading-relaxed"
-          [class.text-destructive]="target() && !nameValid()"
-          [class.text-muted-foreground]="!target() || nameValid()"
-        >
-          {{ 'restore.targetHelp' | transloco }}
-        </p>
-      </div>
+    <div hlmDialogBody>
+  <div class="pg-scroll grid max-h-[min(65vh,32rem)] gap-6 overflow-y-auto py-1 pr-2">
+        <div class="grid gap-2">
+          <label hlmLabel for="rs-name">{{ 'restore.targetName' | transloco }}</label>
+          <input
+            hlmInput
+            id="rs-name"
+            data-testid="restore-target"
+            autocomplete="off"
+            [ngModel]="target()"
+            (ngModelChange)="target.set($event)"
+          />
+          <!-- Always rendered, only recoloured: a message that appears on error
+               would resize the dialog under the pointer. -->
+          <p
+            class="text-xs leading-relaxed"
+            [class.text-destructive]="target() && !nameValid()"
+            [class.text-muted-foreground]="!target() || nameValid()"
+          >
+            {{ 'restore.targetHelp' | transloco }}
+          </p>
+        </div>
 
-      <div class="border-border grid gap-4 border-t pt-6">
-        <span hlmLabel>{{ 'restore.point' | transloco }}</span>
-        <div class="bg-muted grid grid-cols-3 gap-1 rounded-lg p-1" role="tablist">
-          @for (m of modes; track m) {
-            <button
-              type="button"
-              class="cursor-pointer rounded-md px-2 py-1.5 text-sm font-medium transition-colors"
-              [class.bg-background]="mode() === m"
-              [class.shadow-sm]="mode() === m"
-              [class.text-muted-foreground]="mode() !== m"
-              role="tab"
-              [attr.aria-selected]="mode() === m"
-              [attr.data-testid]="'restore-mode-' + m"
-              (click)="mode.set(m)"
-            >
-              {{ 'restore.modes.' + m | transloco }}
-            </button>
+        <div class="border-border grid gap-4 border-t pt-6">
+          <span hlmLabel>{{ 'restore.point' | transloco }}</span>
+          <div class="bg-muted grid grid-cols-3 gap-1 rounded-lg p-1" role="tablist">
+            @for (m of modes; track m) {
+              <button
+                type="button"
+                class="cursor-pointer rounded-md px-2 py-1.5 text-sm font-medium transition-colors"
+                [class.bg-background]="mode() === m"
+                [class.shadow-sm]="mode() === m"
+                [class.text-muted-foreground]="mode() !== m"
+                role="tab"
+                [attr.aria-selected]="mode() === m"
+                [attr.data-testid]="'restore-mode-' + m"
+                (click)="mode.set(m)"
+              >
+                {{ 'restore.modes.' + m | transloco }}
+              </button>
+            }
+          </div>
+
+          @if (mode() === 'backup') {
+            <p class="text-muted-foreground text-xs leading-relaxed">
+              {{ 'restore.fromBackup' | transloco: { label: ctx.label ?? '' } }}
+            </p>
+          } @else if (mode() === 'latest') {
+            <p class="text-muted-foreground text-xs leading-relaxed">
+              {{ 'restore.fromLatest' | transloco }}
+            </p>
+          } @else {
+            <div class="grid gap-2">
+              <label hlmLabel for="rs-time">{{ 'restore.targetTime' | transloco }}</label>
+              <input
+                hlmInput
+                id="rs-time"
+                type="datetime-local"
+                step="1"
+                data-testid="restore-time"
+                [ngModel]="targetTime()"
+                (ngModelChange)="targetTime.set($event)"
+              />
+              <p
+                class="text-xs leading-relaxed"
+                [class.text-destructive]="mode() === 'time' && !targetTime()"
+                [class.text-muted-foreground]="mode() !== 'time' || !!targetTime()"
+              >
+                {{ 'restore.targetTimeHelp' | transloco }}
+              </p>
+            </div>
           }
         </div>
 
-        @if (mode() === 'backup') {
-          <p class="text-muted-foreground text-xs leading-relaxed">
-            {{ 'restore.fromBackup' | transloco: { label: ctx.label ?? '' } }}
-          </p>
-        } @else if (mode() === 'latest') {
-          <p class="text-muted-foreground text-xs leading-relaxed">
-            {{ 'restore.fromLatest' | transloco }}
-          </p>
-        } @else {
-          <div class="grid gap-2">
-            <label hlmLabel for="rs-time">{{ 'restore.targetTime' | transloco }}</label>
-            <input
-              hlmInput
-              id="rs-time"
-              type="datetime-local"
-              step="1"
-              data-testid="restore-time"
-              [ngModel]="targetTime()"
-              (ngModelChange)="targetTime.set($event)"
-            />
-            <p
-              class="text-xs leading-relaxed"
-              [class.text-destructive]="mode() === 'time' && !targetTime()"
-              [class.text-muted-foreground]="mode() !== 'time' || !!targetTime()"
-            >
-              {{ 'restore.targetTimeHelp' | transloco }}
-            </p>
-          </div>
-        }
+        <p class="border-border text-muted-foreground border-t pt-6 text-xs leading-relaxed">
+          {{ 'restore.note' | transloco }}
+        </p>
       </div>
 
-      <p class="border-border text-muted-foreground border-t pt-6 text-xs leading-relaxed">
-        {{ 'restore.note' | transloco }}
-      </p>
     </div>
 
     <div hlmDialogFooter>

@@ -26,6 +26,7 @@ import {
 import { BrnDialogRef, injectBrnDialogContext } from '@spartan-ng/brain/dialog';
 import { HlmButton } from '@spartan-ng/helm/button';
 import {
+  HlmDialogBody,
   HlmDialogFooter,
   HlmDialogHeader,
   HlmDialogService,
@@ -98,9 +99,11 @@ export const FORM_DIALOG_CLASS = 'sm:max-w-lg';
     <div hlmDialogHeader>
       <h2 hlmDialogTitle>{{ 'clusterDetail.switchoverTitle' | transloco: { pod: pod } }}</h2>
     </div>
-    <p class="text-muted-foreground py-2 text-sm">
-      {{ 'clusterDetail.switchoverWarning' | transloco }}
-    </p>
+    <div hlmDialogBody>
+  <p class="text-muted-foreground py-2 text-sm">
+        {{ 'clusterDetail.switchoverWarning' | transloco }}
+      </p>
+    </div>
     <div hlmDialogFooter>
       <button hlmBtn variant="ghost" (click)="ref.close(false)">
         {{ 'common.cancel' | transloco }}
@@ -124,9 +127,11 @@ export class SwitchoverDialogComponent {
     <div hlmDialogHeader>
       <h2 hlmDialogTitle>{{ 'clusterDetail.hibernateTitle' | transloco: { name: name } }}</h2>
     </div>
-    <p class="text-muted-foreground py-2 text-sm">
-      {{ 'clusterDetail.hibernateWarning' | transloco }}
-    </p>
+    <div hlmDialogBody>
+  <p class="text-muted-foreground py-2 text-sm">
+        {{ 'clusterDetail.hibernateWarning' | transloco }}
+      </p>
+    </div>
     <div hlmDialogFooter>
       <button hlmBtn variant="ghost" (click)="ref.close(false)">
         {{ 'common.cancel' | transloco }}
@@ -150,9 +155,11 @@ export class HibernateDialogComponent {
     <div hlmDialogHeader>
       <h2 hlmDialogTitle>{{ 'clusterDetail.fenceTitle' | transloco: { pod: pod } }}</h2>
     </div>
-    <p class="text-muted-foreground py-2 text-sm">
-      {{ 'clusterDetail.fenceWarning' | transloco }}
-    </p>
+    <div hlmDialogBody>
+  <p class="text-muted-foreground py-2 text-sm">
+        {{ 'clusterDetail.fenceWarning' | transloco }}
+      </p>
+    </div>
     <div hlmDialogFooter>
       <button hlmBtn variant="ghost" (click)="ref.close(false)">
         {{ 'common.cancel' | transloco }}
@@ -176,7 +183,9 @@ export class FenceDialogComponent {
     <div hlmDialogHeader>
       <h2 hlmDialogTitle>{{ 'config.restartTitle' | transloco: { name: name } }}</h2>
     </div>
-    <p class="text-muted-foreground py-2 text-sm">{{ 'config.restartWarning' | transloco }}</p>
+    <div hlmDialogBody>
+  <p class="text-muted-foreground py-2 text-sm">{{ 'config.restartWarning' | transloco }}</p>
+    </div>
     <div hlmDialogFooter>
       <button hlmBtn variant="ghost" (click)="ref.close(false)">
         {{ 'common.cancel' | transloco }}
@@ -199,7 +208,9 @@ export class RestartDialogComponent {
     <div hlmDialogHeader>
       <h2 hlmDialogTitle>{{ 'secrets.rotateTitle' | transloco: { name: name } }}</h2>
     </div>
-    <p class="text-muted-foreground py-2 text-sm">{{ 'secrets.rotateWarning' | transloco }}</p>
+    <div hlmDialogBody>
+  <p class="text-muted-foreground py-2 text-sm">{{ 'secrets.rotateWarning' | transloco }}</p>
+    </div>
     <div hlmDialogFooter>
       <button hlmBtn variant="ghost" (click)="ref.close(false)">
         {{ 'common.cancel' | transloco }}
@@ -226,9 +237,11 @@ export class RotateCredentialsDialogComponent {
         {{ (enable ? 'sync.enableTitle' : 'sync.disableTitle') | transloco: { name: name } }}
       </h2>
     </div>
-    <p class="text-muted-foreground py-2 text-sm">
-      {{ (enable ? 'sync.enableWarning' : 'sync.disableWarning') | transloco }}
-    </p>
+    <div hlmDialogBody>
+  <p class="text-muted-foreground py-2 text-sm">
+        {{ (enable ? 'sync.enableWarning' : 'sync.disableWarning') | transloco }}
+      </p>
+    </div>
     <div hlmDialogFooter>
       <button hlmBtn variant="ghost" (click)="ref.close(false)">
         {{ 'common.cancel' | transloco }}
@@ -254,6 +267,7 @@ export class SyncDialogComponent {
     FormsModule,
     TranslocoModule,
     HlmButton,
+    HlmDialogBody,
     HlmDialogFooter,
     HlmDialogHeader,
     HlmDialogTitle,
@@ -264,19 +278,21 @@ export class SyncDialogComponent {
     <div hlmDialogHeader>
       <h2 hlmDialogTitle>{{ 'image.title' | transloco: { name: name } }}</h2>
     </div>
-    <div class="grid gap-2 py-1">
-      <label hlmLabel for="pg-image-input">{{ 'image.label' | transloco }}</label>
-      <input
-        hlmInput
-        id="pg-image-input"
-        class="font-mono"
-        data-testid="image-input"
-        [ngModel]="image()"
-        (ngModelChange)="image.set($event)"
-      />
-      <p class="text-muted-foreground text-xs leading-relaxed">
-        {{ 'image.warning' | transloco }}
-      </p>
+    <div hlmDialogBody>
+  <div class="grid gap-2 py-1">
+        <label hlmLabel for="pg-image-input">{{ 'image.label' | transloco }}</label>
+        <input
+          hlmInput
+          id="pg-image-input"
+          class="font-mono"
+          data-testid="image-input"
+          [ngModel]="image()"
+          (ngModelChange)="image.set($event)"
+        />
+        <p class="text-muted-foreground text-xs leading-relaxed">
+          {{ 'image.warning' | transloco }}
+        </p>
+      </div>
     </div>
     <div hlmDialogFooter>
       <button hlmBtn variant="ghost" (click)="ref.close(undefined)">

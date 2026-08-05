@@ -3,7 +3,7 @@ import { FormsModule } from '@angular/forms';
 import { TranslocoModule } from '@jsverse/transloco';
 import { BrnDialogRef, injectBrnDialogContext } from '@spartan-ng/brain/dialog';
 import { HlmButton } from '@spartan-ng/helm/button';
-import { HlmDialogFooter, HlmDialogHeader, HlmDialogTitle } from '@spartan-ng/helm/dialog';
+import { HlmDialogBody, HlmDialogFooter, HlmDialogHeader, HlmDialogTitle } from '@spartan-ng/helm/dialog';
 import { HlmInput } from '@spartan-ng/helm/input';
 import { HlmLabel } from '@spartan-ng/helm/label';
 
@@ -22,6 +22,7 @@ export interface PoolerDialogContext {
     FormsModule,
     TranslocoModule,
     HlmButton,
+    HlmDialogBody,
     HlmDialogFooter,
     HlmDialogHeader,
     HlmDialogTitle,
@@ -33,78 +34,81 @@ export interface PoolerDialogContext {
       <h2 hlmDialogTitle>{{ 'pooler.editTitle' | transloco }}</h2>
     </div>
 
-    <div class="grid gap-4 py-1">
-      <p class="text-muted-foreground text-xs leading-relaxed">
-        {{ 'pooler.explainer' | transloco }}
-      </p>
-      <label hlmLabel class="flex items-center gap-2">
-        <input
-          type="checkbox"
-          class="accent-primary"
-          data-testid="pooler-enabled"
-          [ngModel]="enabled()"
-          (ngModelChange)="enabled.set($event)"
-        />
-        {{ 'pooler.enable' | transloco }}
-      </label>
-
-      @if (enabled()) {
-        <div class="grid grid-cols-2 gap-4">
-          <div class="grid gap-2">
-            <label hlmLabel for="pooler-replicas">{{ 'pooler.replicas' | transloco }}</label>
-            <input
-              hlmInput
-              id="pooler-replicas"
-              data-testid="pooler-replicas"
-              type="number"
-              min="1"
-              max="10"
-              [ngModel]="replicas()"
-              (ngModelChange)="replicas.set($event)"
-            />
-          </div>
-          <div class="grid gap-2">
-            <label hlmLabel for="pooler-mode">{{ 'pooler.poolMode' | transloco }}</label>
-            <select
-              id="pooler-mode"
-              data-testid="pooler-mode"
-              class="border-input bg-background h-9 rounded-md border px-3 text-sm"
-              [ngModel]="poolMode()"
-              (ngModelChange)="poolMode.set($event)"
-            >
-              <option value="transaction">{{ 'pooler.modeTransaction' | transloco }}</option>
-              <option value="session">{{ 'pooler.modeSession' | transloco }}</option>
-            </select>
-          </div>
-          <div class="grid gap-2">
-            <label hlmLabel for="pooler-max-conn">{{ 'pooler.maxClientConn' | transloco }}</label>
-            <input
-              hlmInput
-              id="pooler-max-conn"
-              data-testid="pooler-max-conn"
-              type="number"
-              min="1"
-              [ngModel]="maxClientConn()"
-              (ngModelChange)="maxClientConn.set($event)"
-            />
-          </div>
-          <div class="grid gap-2">
-            <label hlmLabel for="pooler-pool-size">{{ 'pooler.defaultPoolSize' | transloco }}</label>
-            <input
-              hlmInput
-              id="pooler-pool-size"
-              data-testid="pooler-pool-size"
-              type="number"
-              min="1"
-              [ngModel]="defaultPoolSize()"
-              (ngModelChange)="defaultPoolSize.set($event)"
-            />
-          </div>
-        </div>
+    <div hlmDialogBody>
+  <div class="grid gap-4 py-1">
         <p class="text-muted-foreground text-xs leading-relaxed">
-          {{ 'pooler.modeHelp' | transloco }}
+          {{ 'pooler.explainer' | transloco }}
         </p>
-      }
+        <label hlmLabel class="flex items-center gap-2">
+          <input
+            type="checkbox"
+            class="accent-primary"
+            data-testid="pooler-enabled"
+            [ngModel]="enabled()"
+            (ngModelChange)="enabled.set($event)"
+          />
+          {{ 'pooler.enable' | transloco }}
+        </label>
+
+        @if (enabled()) {
+          <div class="grid grid-cols-2 gap-4">
+            <div class="grid gap-2">
+              <label hlmLabel for="pooler-replicas">{{ 'pooler.replicas' | transloco }}</label>
+              <input
+                hlmInput
+                id="pooler-replicas"
+                data-testid="pooler-replicas"
+                type="number"
+                min="1"
+                max="10"
+                [ngModel]="replicas()"
+                (ngModelChange)="replicas.set($event)"
+              />
+            </div>
+            <div class="grid gap-2">
+              <label hlmLabel for="pooler-mode">{{ 'pooler.poolMode' | transloco }}</label>
+              <select
+                id="pooler-mode"
+                data-testid="pooler-mode"
+                class="border-input bg-background h-9 rounded-md border px-3 text-sm"
+                [ngModel]="poolMode()"
+                (ngModelChange)="poolMode.set($event)"
+              >
+                <option value="transaction">{{ 'pooler.modeTransaction' | transloco }}</option>
+                <option value="session">{{ 'pooler.modeSession' | transloco }}</option>
+              </select>
+            </div>
+            <div class="grid gap-2">
+              <label hlmLabel for="pooler-max-conn">{{ 'pooler.maxClientConn' | transloco }}</label>
+              <input
+                hlmInput
+                id="pooler-max-conn"
+                data-testid="pooler-max-conn"
+                type="number"
+                min="1"
+                [ngModel]="maxClientConn()"
+                (ngModelChange)="maxClientConn.set($event)"
+              />
+            </div>
+            <div class="grid gap-2">
+              <label hlmLabel for="pooler-pool-size">{{ 'pooler.defaultPoolSize' | transloco }}</label>
+              <input
+                hlmInput
+                id="pooler-pool-size"
+                data-testid="pooler-pool-size"
+                type="number"
+                min="1"
+                [ngModel]="defaultPoolSize()"
+                (ngModelChange)="defaultPoolSize.set($event)"
+              />
+            </div>
+          </div>
+          <p class="text-muted-foreground text-xs leading-relaxed">
+            {{ 'pooler.modeHelp' | transloco }}
+          </p>
+        }
+      </div>
+
     </div>
 
     <div hlmDialogFooter>

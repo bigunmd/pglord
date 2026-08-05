@@ -3,7 +3,7 @@ import { FormsModule } from '@angular/forms';
 import { TranslocoModule } from '@jsverse/transloco';
 import { BrnDialogRef, injectBrnDialogContext } from '@spartan-ng/brain/dialog';
 import { HlmButton } from '@spartan-ng/helm/button';
-import { HlmDialogFooter, HlmDialogHeader, HlmDialogTitle } from '@spartan-ng/helm/dialog';
+import { HlmDialogBody, HlmDialogFooter, HlmDialogHeader, HlmDialogTitle } from '@spartan-ng/helm/dialog';
 import { HlmInput } from '@spartan-ng/helm/input';
 import { HlmLabel } from '@spartan-ng/helm/label';
 
@@ -24,6 +24,7 @@ export interface ClusterEditContext {
     FormsModule,
     TranslocoModule,
     HlmButton,
+    HlmDialogBody,
     HlmDialogFooter,
     HlmDialogHeader,
     HlmDialogTitle,
@@ -34,50 +35,52 @@ export interface ClusterEditContext {
     <div hlmDialogHeader>
       <h2 hlmDialogTitle>{{ 'clusterDetail.editTitle' | transloco }}</h2>
     </div>
-    <div class="grid gap-6 py-1">
-      <div class="grid gap-2">
-        <span hlmLabel>{{ 'clusters.replicas' | transloco }}</span>
-        <div class="bg-muted grid grid-cols-5 gap-1 rounded-lg p-1" role="tablist">
-          @for (n of replicaChoices; track n) {
-            <button
-              type="button"
-              class="cursor-pointer rounded-md px-3 py-1.5 font-mono text-sm font-medium transition-colors"
-              [class.bg-background]="replicas() === n"
-              [class.shadow-sm]="replicas() === n"
-              [class.text-muted-foreground]="replicas() !== n"
-              role="tab"
-              [attr.aria-selected]="replicas() === n"
-              [attr.data-testid]="'edit-replicas-' + n"
-              (click)="replicas.set(n)"
-            >
-              {{ n }}
-            </button>
-          }
+    <div hlmDialogBody>
+  <div class="grid gap-6 py-1">
+        <div class="grid gap-2">
+          <span hlmLabel>{{ 'clusters.replicas' | transloco }}</span>
+          <div class="bg-muted grid grid-cols-5 gap-1 rounded-lg p-1" role="tablist">
+            @for (n of replicaChoices; track n) {
+              <button
+                type="button"
+                class="cursor-pointer rounded-md px-3 py-1.5 font-mono text-sm font-medium transition-colors"
+                [class.bg-background]="replicas() === n"
+                [class.shadow-sm]="replicas() === n"
+                [class.text-muted-foreground]="replicas() !== n"
+                role="tab"
+                [attr.aria-selected]="replicas() === n"
+                [attr.data-testid]="'edit-replicas-' + n"
+                (click)="replicas.set(n)"
+              >
+                {{ n }}
+              </button>
+            }
+          </div>
+          <p
+            class="min-h-8 text-xs leading-relaxed"
+            [class.text-destructive]="shrinking()"
+            [class.text-muted-foreground]="!shrinking()"
+          >
+            {{ (shrinking() ? 'clusterDetail.scaleDownWarning' : 'clusters.replicasHint') | transloco }}
+          </p>
         </div>
-        <p
-          class="min-h-8 text-xs leading-relaxed"
-          [class.text-destructive]="shrinking()"
-          [class.text-muted-foreground]="!shrinking()"
-        >
-          {{ (shrinking() ? 'clusterDetail.scaleDownWarning' : 'clusters.replicasHint') | transloco }}
-        </p>
-      </div>
-      <div class="border-border grid gap-2 border-t pt-6">
-        <label hlmLabel for="pg-edit-storage">{{ 'clusters.storage' | transloco }}</label>
-        <input
-          hlmInput
-          id="pg-edit-storage"
-          data-testid="edit-storage"
-          [ngModel]="storage()"
-          (ngModelChange)="storage.set($event)"
-        />
-        <p
-          class="text-xs leading-relaxed"
-          [class.text-destructive]="!storageValid()"
-          [class.text-muted-foreground]="storageValid()"
-        >
-          {{ 'clusterDetail.storageGrowOnly' | transloco }}
-        </p>
+        <div class="border-border grid gap-2 border-t pt-6">
+          <label hlmLabel for="pg-edit-storage">{{ 'clusters.storage' | transloco }}</label>
+          <input
+            hlmInput
+            id="pg-edit-storage"
+            data-testid="edit-storage"
+            [ngModel]="storage()"
+            (ngModelChange)="storage.set($event)"
+          />
+          <p
+            class="text-xs leading-relaxed"
+            [class.text-destructive]="!storageValid()"
+            [class.text-muted-foreground]="storageValid()"
+          >
+            {{ 'clusterDetail.storageGrowOnly' | transloco }}
+          </p>
+        </div>
       </div>
     </div>
     <div hlmDialogFooter>

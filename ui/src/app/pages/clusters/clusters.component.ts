@@ -4,7 +4,7 @@ import { TranslocoModule } from '@jsverse/transloco';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { lucideDatabase, lucideMoon, lucidePlus, lucideTrash2 } from '@ng-icons/lucide';
 import { HlmButton } from '@spartan-ng/helm/button';
-import { HlmDialogFooter, HlmDialogHeader, HlmDialogService, HlmDialogTitle } from '@spartan-ng/helm/dialog';
+import { HlmDialogBody, HlmDialogFooter, HlmDialogHeader, HlmDialogService, HlmDialogTitle } from '@spartan-ng/helm/dialog';
 import { HlmTableImports } from '@spartan-ng/helm/table';
 import { BrnDialogRef, injectBrnDialogContext } from '@spartan-ng/brain/dialog';
 import { firstValueFrom } from 'rxjs';
@@ -20,12 +20,21 @@ const REFRESH_MS = 5000;
 /** Confirm destructive delete; resolves true only on explicit confirmation. */
 @Component({
   selector: 'pg-cluster-delete-dialog',
-  imports: [TranslocoModule, HlmButton, HlmDialogFooter, HlmDialogHeader, HlmDialogTitle],
+  imports: [
+    TranslocoModule,
+    HlmButton,
+    HlmDialogBody,
+    HlmDialogFooter,
+    HlmDialogHeader,
+    HlmDialogTitle,
+  ],
   template: `
     <div hlmDialogHeader>
       <h2 hlmDialogTitle>{{ 'clusters.deleteTitle' | transloco: { name: name } }}</h2>
     </div>
-    <p class="text-muted-foreground py-2 text-sm">{{ 'clusters.deleteWarning' | transloco }}</p>
+    <div hlmDialogBody>
+  <p class="text-muted-foreground py-2 text-sm">{{ 'clusters.deleteWarning' | transloco }}</p>
+    </div>
     <div hlmDialogFooter>
       <button hlmBtn variant="ghost" (click)="ref.close(false)">
         {{ 'common.cancel' | transloco }}

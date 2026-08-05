@@ -8,6 +8,7 @@ import {
   computed,
   inject,
   input,
+  ViewEncapsulation,
 } from '@angular/core';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { lucideX } from '@ng-icons/lucide';
@@ -28,6 +29,20 @@ type HlmDialogContentContext = {
   imports: [NgComponentOutlet, HlmButton, HlmDialogClose, NgIcon],
   providers: [provideIcons({ lucideX })],
   changeDetection: ChangeDetectionStrategy.OnPush,
+  // The dialog's real content is a dynamically created component, so its host
+  // element sits between this box and the header/body/footer. Left unstyled it
+  // is a plain block that swallows the layout — which is why a grid here never
+  // laid out the three rows. Encapsulation.None scopes `:host` to this
+  // element's tag, so the rule is precise rather than global.
+  encapsulation: ViewEncapsulation.None,
+  styles: `
+    hlm-dialog-content > *:not([data-slot='dialog-close']) {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      flex: 1 1 auto;
+    }
+  `,
   host: {
     'data-slot': 'dialog-content',
     '[attr.data-state]': 'state()',
@@ -67,11 +82,11 @@ export class HlmDialogContent {
 
   constructor() {
     classes(() => [
-      // p-6/gap-6, not p-4/gap-4: these dialogs carry real forms, and the
-      // footer's edge-bleed margins below are tied to this padding value.
-      // max-h + overflow-y-auto are load-bearing — without them a form taller
-      // than the viewport is silently clipped with no way to reach the rest.
-      'bg-popover text-popover-foreground data-open:animate-in data-closed:animate-out data-closed:fade-out-0 data-open:fade-in-0 data-closed:zoom-out-95 data-open:zoom-in-95 ring-foreground/10 grid max-h-[calc(100dvh-4rem)] max-w-[calc(100%-2rem)] gap-6 overflow-y-auto overscroll-contain rounded-xl p-6 text-sm ring-1 duration-100 sm:max-w-sm relative mx-auto w-full outline-none sm:mx-0',
+      // A bounded flex column that clips: the header and footer are fixed
+      // rows and only [hlmDialogBody] scrolls. No padding here — each row pads
+      // itself, so the footer can span the full width without negative
+      // margins, and no gap, so rows meet their own borders cleanly.
+      'bg-popover text-popover-foreground data-open:animate-in data-closed:animate-out data-closed:fade-out-0 data-open:fade-in-0 data-closed:zoom-out-95 data-open:zoom-in-95 ring-foreground/10 flex max-h-[85dvh] max-w-[calc(100%-2rem)] flex-col overflow-hidden rounded-xl text-sm ring-1 duration-100 sm:max-w-sm relative mx-auto w-full outline-none sm:mx-0',
       this._dynamicComponentClass,
     ]);
   }

@@ -7,6 +7,6 @@ import { classes } from '@spartan-ng/helm/utils';
 })
 export class HlmDialogHeader {
   constructor() {
-    classes(() => 'gap-2 flex flex-col');
+    classes(() => 'flex shrink-0 flex-col gap-1.5 px-6 pt-6 pb-4');
   }
 }

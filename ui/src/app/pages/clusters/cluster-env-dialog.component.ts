@@ -3,7 +3,7 @@ import { FormsModule } from '@angular/forms';
 import { TranslocoModule } from '@jsverse/transloco';
 import { BrnDialogRef, injectBrnDialogContext } from '@spartan-ng/brain/dialog';
 import { HlmButton } from '@spartan-ng/helm/button';
-import { HlmDialogFooter, HlmDialogHeader, HlmDialogTitle } from '@spartan-ng/helm/dialog';
+import { HlmDialogBody, HlmDialogFooter, HlmDialogHeader, HlmDialogTitle } from '@spartan-ng/helm/dialog';
 import { HlmInput } from '@spartan-ng/helm/input';
 import { HlmLabel } from '@spartan-ng/helm/label';
 
@@ -39,6 +39,7 @@ export interface EnvDialogResult {
     FormsModule,
     TranslocoModule,
     HlmButton,
+    HlmDialogBody,
     HlmDialogFooter,
     HlmDialogHeader,
     HlmDialogTitle,
@@ -51,62 +52,65 @@ export interface EnvDialogResult {
       <h2 hlmDialogTitle>{{ 'secrets.editTitle' | transloco }}</h2>
     </div>
 
-    <div class="pg-scroll grid max-h-[min(65vh,32rem)] gap-6 overflow-y-auto py-1 pr-2">
-      <div class="grid gap-2">
-        <label hlmLabel for="ev-creds">{{ 'secrets.credentialsSecret' | transloco }}</label>
-        <input
-          hlmInput
-          id="ev-creds"
-          data-testid="credentials-secret"
-          [placeholder]="ctx.generatedName"
-          [disabled]="ctx.existing"
-          [ngModel]="credentialsSecret()"
-          (ngModelChange)="credentialsSecret.set($event)"
-        />
-        <p class="text-muted-foreground text-xs leading-relaxed">
-          {{
-            (ctx.existing ? 'secrets.credentialsSecretFixed' : 'secrets.credentialsSecretHelp')
-              | transloco
-          }}
-        </p>
-      </div>
-
-      <div class="border-border border-t pt-6">
-        <pg-env-editor [(rows)]="rows" />
-      </div>
-
-      <div class="border-border grid gap-4 border-t pt-6">
-        <span hlmLabel>{{ 'secrets.init' | transloco }}</span>
-        <p class="text-muted-foreground text-xs leading-relaxed">
-          {{ 'secrets.initHelp' | transloco }}
-        </p>
+    <div hlmDialogBody>
+  <div class="pg-scroll grid max-h-[min(65vh,32rem)] gap-6 overflow-y-auto py-1 pr-2">
         <div class="grid gap-2">
-          <label hlmLabel for="ev-init-cm">{{ 'secrets.initConfigMap' | transloco }}</label>
+          <label hlmLabel for="ev-creds">{{ 'secrets.credentialsSecret' | transloco }}</label>
           <input
             hlmInput
-            id="ev-init-cm"
-            data-testid="init-configmap"
-            [ngModel]="initConfigMap()"
-            (ngModelChange)="initConfigMap.set($event)"
-          />
-        </div>
-        <div class="grid gap-2">
-          <label hlmLabel for="ev-init-secret">{{ 'secrets.initSecret' | transloco }}</label>
-          <input
-            hlmInput
-            id="ev-init-secret"
-            data-testid="init-secret"
-            [ngModel]="initSecret()"
-            (ngModelChange)="initSecret.set($event)"
+            id="ev-creds"
+            data-testid="credentials-secret"
+            [placeholder]="ctx.generatedName"
+            [disabled]="ctx.existing"
+            [ngModel]="credentialsSecret()"
+            (ngModelChange)="credentialsSecret.set($event)"
           />
           <p class="text-muted-foreground text-xs leading-relaxed">
-            {{ 'secrets.initSecretHelp' | transloco }}
+            {{
+              (ctx.existing ? 'secrets.credentialsSecretFixed' : 'secrets.credentialsSecretHelp')
+                | transloco
+            }}
           </p>
         </div>
-        <p class="text-muted-foreground text-xs leading-relaxed">
-          {{ 'secrets.initOnceNote' | transloco }}
-        </p>
+
+        <div class="border-border border-t pt-6">
+          <pg-env-editor [(rows)]="rows" />
+        </div>
+
+        <div class="border-border grid gap-4 border-t pt-6">
+          <span hlmLabel>{{ 'secrets.init' | transloco }}</span>
+          <p class="text-muted-foreground text-xs leading-relaxed">
+            {{ 'secrets.initHelp' | transloco }}
+          </p>
+          <div class="grid gap-2">
+            <label hlmLabel for="ev-init-cm">{{ 'secrets.initConfigMap' | transloco }}</label>
+            <input
+              hlmInput
+              id="ev-init-cm"
+              data-testid="init-configmap"
+              [ngModel]="initConfigMap()"
+              (ngModelChange)="initConfigMap.set($event)"
+            />
+          </div>
+          <div class="grid gap-2">
+            <label hlmLabel for="ev-init-secret">{{ 'secrets.initSecret' | transloco }}</label>
+            <input
+              hlmInput
+              id="ev-init-secret"
+              data-testid="init-secret"
+              [ngModel]="initSecret()"
+              (ngModelChange)="initSecret.set($event)"
+            />
+            <p class="text-muted-foreground text-xs leading-relaxed">
+              {{ 'secrets.initSecretHelp' | transloco }}
+            </p>
+          </div>
+          <p class="text-muted-foreground text-xs leading-relaxed">
+            {{ 'secrets.initOnceNote' | transloco }}
+          </p>
+        </div>
       </div>
+
     </div>
 
     <div hlmDialogFooter>

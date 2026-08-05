@@ -5,7 +5,7 @@ import { NgIcon, provideIcons } from '@ng-icons/core';
 import { lucidePlus, lucideTrash2 } from '@ng-icons/lucide';
 import { BrnDialogRef, injectBrnDialogContext } from '@spartan-ng/brain/dialog';
 import { HlmButton } from '@spartan-ng/helm/button';
-import { HlmDialogFooter, HlmDialogHeader, HlmDialogTitle } from '@spartan-ng/helm/dialog';
+import { HlmDialogBody, HlmDialogFooter, HlmDialogHeader, HlmDialogTitle } from '@spartan-ng/helm/dialog';
 import { HlmInput } from '@spartan-ng/helm/input';
 import { HlmLabel } from '@spartan-ng/helm/label';
 
@@ -28,6 +28,7 @@ interface KeyValue {
     TranslocoModule,
     NgIcon,
     HlmButton,
+    HlmDialogBody,
     HlmDialogFooter,
     HlmDialogHeader,
     HlmDialogTitle,
@@ -42,109 +43,112 @@ interface KeyValue {
       <h2 hlmDialogTitle>{{ 'workload.editTitle' | transloco }}</h2>
     </div>
 
-    <!-- Viewport-relative so the form uses tall screens instead of a fixed box.
-         pg-scroll reserves the scrollbar gutter so nothing is clipped by it. -->
-    <div class="pg-scroll grid max-h-[min(65vh,34rem)] gap-6 overflow-y-auto py-1 pr-2">
-      <div class="grid gap-2">
-        <span hlmLabel>{{ 'workload.antiAffinity' | transloco }}</span>
-        <div class="bg-muted grid grid-cols-3 gap-1 rounded-lg p-1" role="tablist">
-          @for (mode of modes; track mode) {
-            <button
-              type="button"
-              class="cursor-pointer rounded-md px-2 py-1.5 text-sm font-medium transition-colors"
-              [class.bg-background]="antiAffinity() === mode"
-              [class.shadow-sm]="antiAffinity() === mode"
-              [class.text-muted-foreground]="antiAffinity() !== mode"
-              role="tab"
-              [attr.aria-selected]="antiAffinity() === mode"
-              [attr.data-testid]="'anti-affinity-' + mode"
-              (click)="antiAffinity.set(mode)"
-            >
-              {{ 'workload.antiAffinityModes.' + mode | transloco }}
-            </button>
-          }
-        </div>
-        <p class="text-muted-foreground min-h-9 text-xs leading-relaxed">
-          {{ 'workload.antiAffinityHelp.' + antiAffinity() | transloco }}
-        </p>
-      </div>
-
-      <div class="border-border grid gap-3 border-t pt-5">
-        <span hlmLabel>{{ 'workload.resources' | transloco }}</span>
-        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          @for (f of resourceFields; track f.key) {
-            <div class="grid gap-2">
-              <label hlmLabel [for]="'res-' + f.key">{{ 'workload.' + f.key | transloco }}</label>
-              <input
-                hlmInput
-                [id]="'res-' + f.key"
-                [attr.data-testid]="'res-' + f.key"
-                [placeholder]="f.placeholder"
-                [ngModel]="resources()[f.key]"
-                (ngModelChange)="setResource(f.key, $event)"
-              />
-            </div>
-          }
-        </div>
-        <p
-          class="text-xs leading-relaxed"
-          [class.text-destructive]="!resourcesValid()"
-          [class.text-muted-foreground]="resourcesValid()"
-        >
-          {{ 'workload.resourcesHelp' | transloco }}
-        </p>
-      </div>
-
-      @for (group of groups; track group.kind) {
-        <div class="border-border grid gap-3 border-t pt-5">
-          <span hlmLabel>{{ 'workload.' + group.kind | transloco }}</span>
-          @for (row of rowsOf(group.kind); track $index) {
-            <div class="flex items-center gap-3">
-              <input
-                hlmInput
-                class="flex-1"
-                [attr.data-testid]="group.kind + '-key-' + $index"
-                [placeholder]="'workload.keyPlaceholder' | transloco"
-                [ngModel]="row.key"
-                (ngModelChange)="setRow(group.kind, $index, $event, row.value)"
-              />
-              <input
-                hlmInput
-                class="flex-1"
-                [placeholder]="'workload.valuePlaceholder' | transloco"
-                [ngModel]="row.value"
-                (ngModelChange)="setRow(group.kind, $index, row.key, $event)"
-              />
+    <div hlmDialogBody>
+  <!-- Viewport-relative so the form uses tall screens instead of a fixed box.
+           pg-scroll reserves the scrollbar gutter so nothing is clipped by it. -->
+      <div class="pg-scroll grid max-h-[min(65vh,34rem)] gap-6 overflow-y-auto py-1 pr-2">
+        <div class="grid gap-2">
+          <span hlmLabel>{{ 'workload.antiAffinity' | transloco }}</span>
+          <div class="bg-muted grid grid-cols-3 gap-1 rounded-lg p-1" role="tablist">
+            @for (mode of modes; track mode) {
               <button
-                hlmBtn
-                variant="ghost"
-                size="icon-sm"
-                [attr.aria-label]="'workload.removeRow' | transloco"
-                (click)="removeRow(group.kind, $index)"
+                type="button"
+                class="cursor-pointer rounded-md px-2 py-1.5 text-sm font-medium transition-colors"
+                [class.bg-background]="antiAffinity() === mode"
+                [class.shadow-sm]="antiAffinity() === mode"
+                [class.text-muted-foreground]="antiAffinity() !== mode"
+                role="tab"
+                [attr.aria-selected]="antiAffinity() === mode"
+                [attr.data-testid]="'anti-affinity-' + mode"
+                (click)="antiAffinity.set(mode)"
               >
-                <ng-icon name="lucideTrash2" size="14" />
+                {{ 'workload.antiAffinityModes.' + mode | transloco }}
               </button>
-            </div>
-          }
-          <button
-            hlmBtn
-            variant="outline"
-            size="sm"
-            class="justify-self-start"
-            [attr.data-testid]="'add-' + group.kind"
-            (click)="addRow(group.kind)"
-          >
-            <ng-icon name="lucidePlus" size="14" />
-            {{ 'workload.addRow' | transloco }}
-          </button>
+            }
+          </div>
+          <p class="text-muted-foreground min-h-9 text-xs leading-relaxed">
+            {{ 'workload.antiAffinityHelp.' + antiAffinity() | transloco }}
+          </p>
         </div>
-      }
 
-      @if (reservedUsed(); as bad) {
-        <p class="text-destructive text-xs" role="alert">
-          {{ 'workload.reservedKey' | transloco: { key: bad } }}
-        </p>
-      }
+        <div class="border-border grid gap-3 border-t pt-5">
+          <span hlmLabel>{{ 'workload.resources' | transloco }}</span>
+          <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            @for (f of resourceFields; track f.key) {
+              <div class="grid gap-2">
+                <label hlmLabel [for]="'res-' + f.key">{{ 'workload.' + f.key | transloco }}</label>
+                <input
+                  hlmInput
+                  [id]="'res-' + f.key"
+                  [attr.data-testid]="'res-' + f.key"
+                  [placeholder]="f.placeholder"
+                  [ngModel]="resources()[f.key]"
+                  (ngModelChange)="setResource(f.key, $event)"
+                />
+              </div>
+            }
+          </div>
+          <p
+            class="text-xs leading-relaxed"
+            [class.text-destructive]="!resourcesValid()"
+            [class.text-muted-foreground]="resourcesValid()"
+          >
+            {{ 'workload.resourcesHelp' | transloco }}
+          </p>
+        </div>
+
+        @for (group of groups; track group.kind) {
+          <div class="border-border grid gap-3 border-t pt-5">
+            <span hlmLabel>{{ 'workload.' + group.kind | transloco }}</span>
+            @for (row of rowsOf(group.kind); track $index) {
+              <div class="flex items-center gap-3">
+                <input
+                  hlmInput
+                  class="flex-1"
+                  [attr.data-testid]="group.kind + '-key-' + $index"
+                  [placeholder]="'workload.keyPlaceholder' | transloco"
+                  [ngModel]="row.key"
+                  (ngModelChange)="setRow(group.kind, $index, $event, row.value)"
+                />
+                <input
+                  hlmInput
+                  class="flex-1"
+                  [placeholder]="'workload.valuePlaceholder' | transloco"
+                  [ngModel]="row.value"
+                  (ngModelChange)="setRow(group.kind, $index, row.key, $event)"
+                />
+                <button
+                  hlmBtn
+                  variant="ghost"
+                  size="icon-sm"
+                  [attr.aria-label]="'workload.removeRow' | transloco"
+                  (click)="removeRow(group.kind, $index)"
+                >
+                  <ng-icon name="lucideTrash2" size="14" />
+                </button>
+              </div>
+            }
+            <button
+              hlmBtn
+              variant="outline"
+              size="sm"
+              class="justify-self-start"
+              [attr.data-testid]="'add-' + group.kind"
+              (click)="addRow(group.kind)"
+            >
+              <ng-icon name="lucidePlus" size="14" />
+              {{ 'workload.addRow' | transloco }}
+            </button>
+          </div>
+        }
+
+        @if (reservedUsed(); as bad) {
+          <p class="text-destructive text-xs" role="alert">
+            {{ 'workload.reservedKey' | transloco: { key: bad } }}
+          </p>
+        }
+      </div>
+
     </div>
 
     <div hlmDialogFooter>
