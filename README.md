@@ -33,7 +33,7 @@ pglord makes the opposite choice by default:
   `PostgresCluster` CRD, so you can move to `kubectl apply` and cluster-wide operation
   later without changing how anything behaves. You opt in; you don't start there.
 
-The cost is real and stated plainly below and in [Current
+pglord is young, and the cost of that choice is stated plainly in [Current
 limitations](docs/user-guide.md#current-limitations).
 
 ## What it does
@@ -94,20 +94,6 @@ operator" is available elsewhere and may well be enough for you.
 pglord's — shuts the cluster down for the conversion. Only CloudNativePG and pglord
 document an *online* path, and in both cases it is logical replication into a second
 copy of the cluster, which costs double the disk and compute while it runs.
-
-### Where pglord is behind
-
-- **Maturity.** Version 0.1, no production track record, one contributor. The others
-  have years of operational history and real communities.
-- **Authentication is all-or-nothing.** Any valid credential is a full admin; there are
-  no viewer or operator roles.
-- **Instances must run a pglord agent image.** Stock `postgres:NN` images are not usable,
-  because the agent is PID 1 and supervises postgres. Prebuilt images are published for
-  PostgreSQL 16–18 with and without TimescaleDB.
-- **No disaster-recovery standby clusters** across Kubernetes clusters, no declarative
-  tablespaces, no maintenance windows.
-- **Restore always creates a new cluster**, and the restored cluster starts with backups
-  switched off.
 
 ## Install
 
