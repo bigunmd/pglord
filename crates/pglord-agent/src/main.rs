@@ -147,6 +147,13 @@ async fn main() -> anyhow::Result<()> {
             }
         });
     }
+    // pg_upgrade carries no optimizer statistics, so a freshly converted
+    // cluster is correct but slow until they are rebuilt — which reads to a
+    // user as a failed upgrade.
+    if !cfg.upgrade_in_place.is_empty() && cfg.role == Role::Primary {
+        let cfg_v = cfg.clone();
+        tokio::spawn(async move { pglord_agent::pgupgrade::analyze(&cfg_v).await });
+    }
     // Blue-green major upgrade: this instance set's primary builds itself from
     // the running cluster by logical replication instead of waiting for data.
     if !cfg.upgrade_source.is_empty() && cfg.role == Role::Primary {

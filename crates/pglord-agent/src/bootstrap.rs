@@ -116,6 +116,22 @@ async fn check_major_version(pgdata: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Whether this boot should convert the data directory in place, and from
+/// which major.
+///
+/// Some only when the marker names a major, PGDATA exists, and its version
+/// still matches that major — so a pod restarting after a successful
+/// conversion simply starts normally instead of trying to upgrade again.
+pub fn in_place_pending(pgdata: &Path, cfg: &Config) -> Option<u32> {
+    let want = cfg.in_place_major()?;
+    let on_disk: u32 = std::fs::read_to_string(pgdata.join("PG_VERSION"))
+        .ok()?
+        .trim()
+        .parse()
+        .ok()?;
+    (on_disk == want).then_some(want)
+}
+
 fn has_standby_signal(pgdata: &Path) -> bool {
     pgdata.join("standby.signal").exists()
 }
@@ -143,6 +159,23 @@ pub async fn ensure_bootstrapped(
         return bootstrap_restore(cfg, restore).await;
     }
     if is_bootstrapped(&cfg.pgdata) {
+        if let Some(old_major) = in_place_pending(&cfg.pgdata, cfg) {
+            return match cfg.role {
+                // The primary converts its directory. Standbys cannot be
+                // pg_upgraded at all, so they discard their data and clone the
+                // converted primary through the ordinary basebackup path.
+                Role::Primary => crate::pgupgrade::run(cfg, old_major, hba_rules).await,
+                _ => {
+                    tracing::warn!(
+                        old_major,
+                        "in-place upgrade: discarding standby data to re-clone from the primary"
+                    );
+                    std::fs::remove_dir_all(&cfg.pgdata).context("wipe standby PGDATA")?;
+                    std::fs::create_dir_all(&cfg.pgdata).context("recreate PGDATA")?;
+                    bootstrap_standby(cfg).await
+                }
+            };
+        }
         check_major_version(&cfg.pgdata).await?;
         if cfg.role == Role::Standby && !has_standby_signal(&cfg.pgdata) {
             tracing::warn!("ex-primary PGDATA with standby role: rewinding to new primary");
@@ -415,7 +448,7 @@ async fn bootstrap_standby(cfg: &Config) -> anyhow::Result<()> {
     bail!("pg_basebackup did not succeed within the retry budget");
 }
 
-fn append(path: &Path, content: &str) -> anyhow::Result<()> {
+pub(crate) fn append(path: &Path, content: &str) -> anyhow::Result<()> {
     use std::io::Write;
     let mut f = std::fs::OpenOptions::new()
         .append(true)
@@ -586,6 +619,34 @@ mod tests {
         assert!(!has_standby_signal(&dir));
         std::fs::write(dir.join("standby.signal"), "").expect("write");
         assert!(has_standby_signal(&dir));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn in_place_is_pending_only_for_an_older_pgdata_with_the_marker() {
+        let dir = std::env::temp_dir().join("pglord-agent-test-inplace");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let cfg_with = |v: &str| -> Config {
+            let mut c: Config =
+                serde_json::from_value(serde_json::json!({ "role": "primary" })).expect("config");
+            c.upgrade_in_place = v.to_string();
+            c.pgdata = dir.clone();
+            c
+        };
+
+        // No data directory yet: a fresh instance initdbs, it does not upgrade.
+        assert_eq!(in_place_pending(&dir, &cfg_with("16")), None);
+
+        std::fs::write(dir.join("PG_VERSION"), "16\n").expect("write");
+        assert_eq!(in_place_pending(&dir, &cfg_with("16")), Some(16));
+        // No marker: the ordinary major-mismatch refusal must still apply.
+        assert_eq!(in_place_pending(&dir, &cfg_with("")), None);
+        // Already converted (a pod restart after success): nothing to do, or
+        // the instance would try to upgrade its upgraded directory.
+        std::fs::write(dir.join("PG_VERSION"), "17\n").expect("write");
+        assert_eq!(in_place_pending(&dir, &cfg_with("16")), None);
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -9,6 +9,7 @@ pub mod http;
 pub mod initdb;
 pub mod metrics;
 pub mod params;
+pub mod pgupgrade;
 pub mod postboot;
 pub mod record;
 pub mod rolestrategy;

@@ -61,6 +61,10 @@ pub struct Config {
     pub s3_access_key: String,
     #[serde(default = "default_empty")]
     pub s3_secret_key: String,
+    /// In-place major upgrade: the major this instance's data directory is
+    /// being converted *from*. Empty = ordinary boot.
+    #[serde(default = "default_empty")]
+    pub upgrade_in_place: String,
     /// Blue-green major upgrades: when set, this instance belongs to the new
     /// (green) set and its primary bootstraps as a logical subscriber of the
     /// named host — the running cluster's rw Service. Empty = ordinary
@@ -97,6 +101,11 @@ fn default_superuser() -> String {
 }
 
 impl Config {
+    /// The major an in-place upgrade is converting this data directory from.
+    pub fn in_place_major(&self) -> Option<u32> {
+        self.upgrade_in_place.parse().ok()
+    }
+
     pub fn load() -> anyhow::Result<Config> {
         Ok(Figment::new()
             .merge(Toml::file("config.toml"))
