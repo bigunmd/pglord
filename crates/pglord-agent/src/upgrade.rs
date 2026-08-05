@@ -65,6 +65,18 @@ pub async fn fence_writes(cfg: &Config) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Cap how much WAL this migration's slot may pin on the source, before the
+/// slot exists. See `pglord_core::upgrade::wal_retention_for` for why.
+pub async fn set_wal_retention(cfg: &Config, size: &str) -> anyhow::Result<()> {
+    let (client, _conn) = crate::postboot::connect_local(cfg).await?;
+    client
+        .batch_execute(&pglord_core::upgrade::set_wal_retention_sql(size))
+        .await?;
+    client.batch_execute("SELECT pg_reload_conf()").await?;
+    tracing::info!(%size, "upgrade: capped replication-slot WAL retention");
+    Ok(())
+}
+
 pub async fn unfence_writes(cfg: &Config) -> anyhow::Result<()> {
     let (client, _conn) = crate::postboot::connect_local(cfg).await?;
     client
@@ -106,6 +118,12 @@ pub async fn cleanup_source_artifacts(cfg: &Config) -> anyhow::Result<()> {
             &[],
         )
         .await?;
+    // The retention cap exists only for the migration; leaving it behind would
+    // silently change how much WAL this cluster keeps for its own standbys.
+    client
+        .batch_execute(pglord_core::upgrade::RESET_WAL_RETENTION_SQL)
+        .await?;
+    client.batch_execute("SELECT pg_reload_conf()").await?;
     tracing::info!(dropped, "upgrade artifacts cleaned up");
     Ok(())
 }
@@ -461,6 +479,21 @@ pub async fn status(cfg: &Config) -> UpgradeAgentStatus {
         }
     }
     out.established = all_subscribed;
+
+    // A slot whose WAL was reclaimed cannot be resumed: report it as the
+    // failure it is rather than letting the card show a stalled copy.
+    if let Ok(row) = source
+        .query_one(pglord_core::upgrade::LOST_SLOTS_SQL, &[])
+        .await
+        && row.get::<_, i64>(0) > 0
+    {
+        out.established = false;
+        out.error = Some(
+            "the source removed WAL this migration still needed (replication slot lost); \
+             abort the upgrade and retry — a faster copy or a larger volume is required"
+                .to_string(),
+        );
+    }
 
     out.lag_bytes = source
         .query_one(

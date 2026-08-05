@@ -88,6 +88,39 @@ pub fn drop_subscription_sql(db: &str) -> String {
     format!("DROP SUBSCRIPTION IF EXISTS \"{}\"", subscription_name(db))
 }
 
+/// Fraction of an instance's volume the migration's replication slot may pin.
+const WAL_RETENTION_FRACTION: u64 = 4; // a quarter
+
+/// The `max_slot_wal_keep_size` to hold the source to while a migration runs.
+///
+/// A logical slot retains every WAL segment from its creation until the
+/// subscriber confirms it, and the initial copy of a large database runs for
+/// hours. Unbounded, that fills the *running* cluster's volume and takes down
+/// the database the upgrade was supposed to leave untouched. Capping it means
+/// a migration that falls too far behind loses its slot and fails visibly —
+/// the upgrade is abandoned instead of the production cluster.
+///
+/// None when the size cannot be parsed: better to leave postgres's own
+/// default than to derive a limit from a value we do not understand.
+pub fn wal_retention_for(storage_size: &str) -> Option<String> {
+    let bytes = crate::spec::quantity_bytes(storage_size)?;
+    let mb = (bytes / WAL_RETENTION_FRACTION) / (1 << 20);
+    // Below postgres's own minimum useful window the cap would invalidate the
+    // slot almost immediately, which is worse than not capping at all.
+    (mb >= 64).then(|| format!("{mb}MB"))
+}
+
+pub fn set_wal_retention_sql(size: &str) -> String {
+    format!("ALTER SYSTEM SET max_slot_wal_keep_size = '{size}'")
+}
+
+pub const RESET_WAL_RETENTION_SQL: &str = "ALTER SYSTEM RESET max_slot_wal_keep_size";
+
+/// Slots whose retained WAL was removed: the migration behind them is dead and
+/// cannot be resumed, only restarted.
+pub const LOST_SLOTS_SQL: &str = "SELECT count(*)::int8 FROM pg_replication_slots \
+     WHERE slot_name LIKE 'pglord\\_upgrade\\_%' AND wal_status = 'lost'";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,6 +145,18 @@ mod tests {
         assert!(sql.contains("password=it''s"), "{sql}");
         assert!(sql.contains("PUBLICATION pglord_upgrade"), "{sql}");
         assert!(sql.contains("\"pglord_upgrade_appdb\""), "{sql}");
+    }
+
+    #[test]
+    fn wal_retention_is_a_quarter_of_the_volume() {
+        assert_eq!(wal_retention_for("1Ti").as_deref(), Some("262144MB"));
+        assert_eq!(wal_retention_for("4Gi").as_deref(), Some("1024MB"));
+        assert_eq!(wal_retention_for("1Gi").as_deref(), Some("256MB"));
+        // Too small to be a useful window: leave postgres's default alone
+        // rather than invalidate the slot the moment it is created.
+        assert_eq!(wal_retention_for("100Mi"), None);
+        // Unparseable: never derive a limit from a value we do not understand.
+        assert_eq!(wal_retention_for("banana"), None);
     }
 
     #[test]

@@ -330,6 +330,30 @@ pub async fn start_upgrade(
         }
     }
 
+    // Bound the WAL the migration may pin here, *before* any slot exists.
+    // Without it the initial copy of a large database retains WAL on the
+    // running cluster's volume for as long as it takes, which can fill the
+    // disk of the database this upgrade is supposed to leave alone.
+    if let Some(size) = pglord_core::upgrade::wal_retention_for(&spec.storage_size) {
+        let url = agent_url(&primary, &spec.name, &ns, "upgrade/prepare");
+        let prepared = ops
+            .http
+            .post(&url)
+            .timeout(AGENT_TIMEOUT)
+            .json(&serde_json::json!({ "max_slot_wal_keep_size": size }))
+            .send()
+            .await
+            .is_ok_and(|r| r.status().is_success());
+        if !prepared {
+            return Err(
+                ApiError::new(StatusCode::BAD_GATEWAY, "upgrade_prepare_failed").with_detail(
+                    "Could not limit how much WAL the migration may retain on the current \
+                     primary. Starting anyway risks filling its volume, so nothing was changed.",
+                ),
+            );
+        }
+    }
+
     let state = UpgradeState {
         target_image,
         next_generation: next_generation(&spec.generation),

@@ -289,6 +289,22 @@ The flow is four steps, and you are in control of the last three:
 Aborting before the cutover is free: the new instances are deleted and the
 running cluster never noticed.
 
+**What it costs while it runs.** The new set is a full-size copy of the whole
+cluster, not just of the primary — same instance count, same volume size, same
+CPU and memory requests. A 1 TB cluster with two instances holds 2 TB, so an
+upgrade needs **4 TB and double the compute** from the moment you start until
+you finalize, and all of it has to be schedulable at once. Check you have the
+headroom before starting; there is no way to run the migration with a smaller
+copy.
+
+pglord also caps how much WAL the migration may pin on the running cluster, at
+a quarter of an instance's volume. Without that cap the initial copy of a large
+database retains WAL for as long as it takes and can fill the volume of the
+database you are still serving from. If a migration falls further behind than
+the cap allows it loses its replication slot and fails visibly — abort it and
+retry with a faster copy or a bigger volume. Losing an upgrade is the intended
+trade against losing the running cluster.
+
 Things to know before you start:
 
 - **No schema changes (DDL) between starting and cutting over.** Logical

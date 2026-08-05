@@ -29,6 +29,7 @@ pub fn router(cfg: Arc<Config>) -> Router {
         .route("/backup/stanza-upgrade", post(stanza_upgrade))
         .route("/upgrade/status", get(upgrade_status))
         .route("/upgrade/cutover", post(upgrade_cutover))
+        .route("/upgrade/prepare", post(upgrade_prepare))
         .route("/upgrade/fence", post(upgrade_fence))
         .route("/upgrade/unfence", post(upgrade_unfence))
         .route("/upgrade/cleanup", post(upgrade_cleanup))
@@ -95,6 +96,23 @@ async fn upgrade_cutover(State(cfg): State<Arc<Config>>) -> impl IntoResponse {
         return refusal;
     }
     json_result(crate::upgrade::cutover(&cfg).await)
+}
+
+#[derive(serde::Deserialize)]
+struct WalRetentionRequest {
+    max_slot_wal_keep_size: String,
+}
+
+/// Bound the WAL a migration may pin here, before its slot is created.
+async fn upgrade_prepare(
+    State(cfg): State<Arc<Config>>,
+    Json(req): Json<WalRetentionRequest>,
+) -> impl IntoResponse {
+    let st = status::query_status(&cfg).await;
+    if let Some(refusal) = require_primary(&st, "upgrade preparation") {
+        return refusal;
+    }
+    json_result(crate::upgrade::set_wal_retention(&cfg, &req.max_slot_wal_keep_size).await)
 }
 
 async fn upgrade_fence(State(cfg): State<Arc<Config>>) -> impl IntoResponse {
