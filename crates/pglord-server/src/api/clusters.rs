@@ -254,7 +254,7 @@ pub async fn create_cluster(
     ops.store
         .put(&ns, &spec)
         .await
-        .map_err(ApiError::internal)?;
+        .map_err(ApiError::from_kube)?;
     Ok((StatusCode::CREATED, Json(spec)))
 }
 

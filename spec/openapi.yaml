@@ -2146,7 +2146,20 @@ components:
       type: object
       required:
       - version
+      - namespace
+      - all_namespaces
       properties:
+        all_namespaces:
+          type: boolean
+          description: |-
+            The server watches every namespace, so `namespace` is only its own
+            home and clusters may live anywhere.
+        namespace:
+          type: string
+          description: |-
+            The namespace this server manages. Clients that have no namespace
+            context of their own — creating the very first cluster, for instance —
+            must target this one rather than guessing "default".
         version:
           type: string
     WorkloadSpec:

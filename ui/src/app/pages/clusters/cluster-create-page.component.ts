@@ -8,6 +8,7 @@ import { HlmLabel } from '@spartan-ng/helm/label';
 
 import { Api } from '../../api/api';
 import { createCluster } from '../../api/fn/clusters/create-cluster';
+import { version } from '../../api/fn/system/version';
 import { ClusterSpec } from '../../api/models/cluster-spec';
 import { problemDetail } from '../../core/problem';
 import { BreadcrumbsComponent } from '../../shell/breadcrumbs.component';
@@ -256,6 +257,22 @@ export class ClusterCreatePageComponent {
 
   /** Namespace to create in; supplied as a route query param by the list. */
   public readonly ns = input('');
+  /** The namespace the server actually manages. Guessing "default" creates in
+   * a namespace pglord has no RBAC for, which fails at the apiserver. */
+  private readonly serverNs = signal('');
+
+  constructor() {
+    queueMicrotask(() => void this.loadServerNs());
+  }
+
+  private async loadServerNs(): Promise<void> {
+    try {
+      const v = await this.api.invoke(version, {});
+      this.serverNs.set(v.namespace ?? '');
+    } catch {
+      // Non-fatal: an explicit ns query param still works without it.
+    }
+  }
 
   protected readonly busy = signal(false);
   protected readonly error = signal<string | null>(null);
@@ -321,9 +338,13 @@ export class ClusterCreatePageComponent {
     this.busy.set(true);
     this.error.set(null);
     try {
-      // Create in the namespace the list is showing; the server default
-      // applies when the UI has no namespace context yet.
-      const ns = this.ns() || 'default';
+      // The list's namespace when it has one, otherwise the namespace the
+      // server reports it manages — never a guessed "default".
+      const ns = this.ns() || this.serverNs();
+      if (!ns) {
+        this.error.set('Could not determine which namespace to create in.');
+        return;
+      }
       await this.api.invoke(createCluster, { ns, body: spec });
       // Land on the thing that was just made, not back on the list.
       await this.router.navigate(['/namespaces', ns, 'clusters', spec.name]);

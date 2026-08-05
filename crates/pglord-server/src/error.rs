@@ -73,6 +73,36 @@ impl ApiError {
         e
     }
 
+    /// Map a failure that came from the Kubernetes API.
+    ///
+    /// A permission denial is the operator's most common misconfiguration —
+    /// a namespace outside pglord's Role, or RBAC that was never applied —
+    /// and reporting it as a bare 500 "An internal error occurred." tells
+    /// nobody anything. Everything else still collapses to 500.
+    pub fn from_kube(err: anyhow::Error) -> Self {
+        for cause in err.chain() {
+            if let Some(kube::Error::Api(api)) = cause.downcast_ref::<kube::Error>() {
+                match api.code {
+                    403 => {
+                        return Self::new(StatusCode::FORBIDDEN, "kube_forbidden").with_detail(
+                            format!(
+                                "Kubernetes refused the operation: {}. Check that pglord's \
+                                 RBAC covers this namespace — see the Permissions page.",
+                                api.message
+                            ),
+                        );
+                    }
+                    404 => {
+                        return Self::new(StatusCode::NOT_FOUND, "kube_not_found")
+                            .with_detail(format!("Kubernetes reported: {}", api.message));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Self::internal(err)
+    }
+
     pub fn with_detail(mut self, detail: impl Into<Cow<'static, str>>) -> Self {
         self.detail = detail.into();
         self
@@ -142,6 +172,31 @@ mod tests {
             resp.headers()[axum::http::header::WWW_AUTHENTICATE],
             "Bearer"
         );
+    }
+
+    #[tokio::test]
+    async fn kube_forbidden_is_not_reported_as_an_internal_error() {
+        // The operator's most common misconfiguration must name itself; a
+        // bare 500 sent people digging through server logs.
+        let denied = kube::Error::Api(Box::new(kube::core::Status {
+            message: "configmaps is forbidden in namespace \"default\"".into(),
+            reason: "Forbidden".into(),
+            code: 403,
+            ..Default::default()
+        }));
+        let err = ApiError::from_kube(anyhow::Error::new(denied).context("put spec"));
+        assert_eq!(err.code(), "kube_forbidden");
+        let resp = err.into_response();
+        assert_eq!(resp.status(), axum::http::StatusCode::FORBIDDEN);
+        let body = resp.into_body().collect().await.expect("body").to_bytes();
+        let text = String::from_utf8_lossy(&body);
+        assert!(text.contains("configmaps is forbidden"), "{text}");
+    }
+
+    #[test]
+    fn a_non_api_kube_failure_still_collapses_to_internal() {
+        let err = ApiError::from_kube(anyhow::anyhow!("connection reset"));
+        assert_eq!(err.code(), "internal");
     }
 
     #[tokio::test]
