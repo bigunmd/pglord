@@ -62,12 +62,10 @@ import { rollbackUpgrade } from '../../api/fn/clusters/rollback-upgrade';
 import { abortUpgrade } from '../../api/fn/clusters/abort-upgrade';
 import { finalizeUpgrade } from '../../api/fn/clusters/finalize-upgrade';
 import { WorkloadSpec } from '../../api/models/workload-spec';
-import { BackupSpec } from '../../api/models/backup-spec';
 import { BackupList } from '../../api/models/backup-list';
 import { BackupRun } from '../../api/models/backup-run';
 import { listBackups } from '../../api/fn/backups/list-backups';
 import { createBackup } from '../../api/fn/backups/create-backup';
-import { ClusterBackupDialogComponent } from './cluster-backup-dialog.component';
 import { ClusterRestoreDialogComponent } from './cluster-restore-dialog.component';
 import {
   ClusterEnvDialogComponent,
@@ -635,7 +633,7 @@ export class ImageDialogComponent {
               size="sm"
               data-testid="open-backup-config"
               [disabled]="busy() || d.hibernated"
-              (click)="openBackupConfig(d)"
+              (click)="openBackupConfig()"
             >
               {{ 'backups.configure' | transloco }}
             </button>
@@ -1308,17 +1306,8 @@ export class ClusterDetailComponent implements OnDestroy {
     }
   }
 
-  async openBackupConfig(d: ClusterDetail): Promise<void> {
-    const backup = await firstValueFrom(
-      this.dialog.open<BackupSpec | undefined>(ClusterBackupDialogComponent, {
-        context: { backup: d.backup },
-        contentClass: FORM_DIALOG_CLASS,
-      }).closed$,
-    );
-    if (!backup) {
-      return;
-    }
-    await this.run(() => this.api.invoke(patchCluster, { ns: this.ns(), name: this.name(), body: { backup } }));
+  openBackupConfig(): void {
+    void this.router.navigate(['/namespaces', this.ns(), 'clusters', this.name(), 'backup']);
   }
 
   protected readonly backupKinds = ['full', 'diff', 'incr'] as const;

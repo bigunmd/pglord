@@ -63,6 +63,13 @@ export const routes: Routes = [
           ),
       },
       {
+        path: 'namespaces/:ns/clusters/:name/backup',
+        loadComponent: () =>
+          import('./pages/clusters/cluster-backup-page.component').then(
+            (m) => m.ClusterBackupPageComponent,
+          ),
+      },
+      {
         path: 'namespaces/:ns/clusters/:name',
         loadComponent: () =>
           import('./pages/clusters/cluster-detail.component').then(

@@ -80,7 +80,8 @@
     "triggers": {
       "manual": "Manual",
       "schedule": "Scheduled"
-    }
+    },
+    "intro": "Point this cluster at object storage and choose when backups run. Credentials stay in a Secret you own."
   },
   "workload": {
     "title": "Placement and resources",
