@@ -8,6 +8,10 @@ KUBECTL="minikube -p pglord kubectl --"
 API=http://127.0.0.1:18106
 CLUSTER=ipdemo
 BUCKET=pglord-inplace
+# A stanza belongs to one database (system id). The bucket outlives a run, so
+# each run needs its own repository path or pgBackRest correctly refuses to
+# reuse the previous cluster's stanza.
+PREFIX="inplace-$$"
 
 kill_pf() { pkill -f "kubectl.*port-forward.*pglord-server" 2>/dev/null || true; }
 cleanup() {
@@ -72,6 +76,7 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API/api/v1/clusters" \
       \"s3_endpoint\": \"https://minio.pglord.svc.cluster.local:9000\",
       \"verify_tls\": false,
       \"s3_bucket\": \"$BUCKET\",
+      \"path_prefix\": \"$PREFIX\",
       \"s3_credentials_secret\": \"backup-credentials\"
     }
   }")
