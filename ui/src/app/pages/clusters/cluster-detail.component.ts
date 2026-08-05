@@ -78,8 +78,6 @@ import { listRequiredSecrets } from '../../api/fn/clusters/list-required-secrets
 import { RestoreRequest } from '../../api/models/restore-request';
 import { restoreCluster } from '../../api/fn/backups/restore-cluster';
 import { ClusterEditDialogComponent } from './cluster-edit-dialog.component';
-import { ClusterHbaDialogComponent } from './cluster-hba-dialog.component';
-import { HbaRule } from '../../api/models/hba-rule';
 import { ClusterWorkloadDialogComponent } from './cluster-workload-dialog.component';
 import { ClusterTlsDialogComponent } from './cluster-tls-dialog.component';
 import { TlsSpec } from '../../api/models/tls-spec';
@@ -1070,7 +1068,7 @@ export class ImageDialogComponent {
             size="sm"
             data-testid="open-hba"
             [disabled]="busy() || d.hibernated"
-            (click)="openHba(d)"
+            (click)="openHba()"
           >
             <ng-icon name="lucideShield" size="14" />
             {{ 'hba.edit' | transloco }}
@@ -1428,19 +1426,8 @@ export class ClusterDetailComponent implements OnDestroy {
     ]);
   }
 
-  async openHba(d: ClusterDetail): Promise<void> {
-    const rules = await firstValueFrom(
-      this.dialog.open<HbaRule[] | undefined>(ClusterHbaDialogComponent, {
-        context: { rules: d.pg_hba ?? [] },
-        contentClass: EDITOR_DIALOG_CLASS,
-      }).closed$,
-    );
-    if (!rules) {
-      return;
-    }
-    await this.run(() =>
-      this.api.invoke(patchCluster, { ns: this.ns(), name: this.name(), body: { pg_hba: rules } }),
-    );
+  openHba(): void {
+    void this.router.navigate(['/namespaces', this.ns(), 'clusters', this.name(), 'hba']);
   }
 
   /** The primary's connected-sync-standby count, if it is reporting one. */

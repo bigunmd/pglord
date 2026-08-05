@@ -56,6 +56,13 @@ export const routes: Routes = [
           ),
       },
       {
+        path: 'namespaces/:ns/clusters/:name/hba',
+        loadComponent: () =>
+          import('./pages/clusters/cluster-hba-page.component').then(
+            (m) => m.ClusterHbaPageComponent,
+          ),
+      },
+      {
         path: 'namespaces/:ns/clusters/:name',
         loadComponent: () =>
           import('./pages/clusters/cluster-detail.component').then(

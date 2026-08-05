@@ -169,7 +169,8 @@
     "noneSet": "No rules defined — any client with a valid password can connect.",
     "databasePlaceholder": "all",
     "userPlaceholder": "all",
-    "addressPlaceholder": "10.0.0.0/8"
+    "addressPlaceholder": "10.0.0.0/8",
+    "intro": "Decide which clients may connect and how they authenticate. Rules apply with a reload — no restart."
   },
   "tls": {
     "title": "TLS",
