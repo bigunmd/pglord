@@ -214,6 +214,8 @@ mod tests {
             next_generation: "g2".into(),
             phase,
             previous_primary: None,
+            mode: pglord_core::upgrade::UpgradeMode::BlueGreen,
+            from_major: None,
         };
         assert!(failover_enabled(None));
         // While replicating, the cluster is still fully itself: normal HA.

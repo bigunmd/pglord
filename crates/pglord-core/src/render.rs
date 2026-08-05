@@ -8,12 +8,12 @@ use k8s_openapi::api::apps::v1::{
     StatefulSetSpec, StatefulSetUpdateStrategy,
 };
 use k8s_openapi::api::core::v1::{
-    Affinity, ConfigMapVolumeSource, Container, ContainerPort, EnvVar, EnvVarSource, HTTPGetAction,
-    LocalObjectReference, ObjectFieldSelector, PersistentVolumeClaim, PersistentVolumeClaimSpec,
-    PodAffinityTerm, PodAntiAffinity, PodSecurityContext, PodSpec, PodTemplateSpec, Probe,
-    ResourceRequirements, SecretKeySelector, SecretVolumeSource, Service, ServiceAccount,
-    ServicePort, ServiceSpec, TCPSocketAction, Toleration as K8sToleration, Volume, VolumeMount,
-    VolumeResourceRequirements, WeightedPodAffinityTerm,
+    Affinity, ConfigMapVolumeSource, Container, ContainerPort, EmptyDirVolumeSource, EnvVar,
+    EnvVarSource, HTTPGetAction, LocalObjectReference, ObjectFieldSelector, PersistentVolumeClaim,
+    PersistentVolumeClaimSpec, PodAffinityTerm, PodAntiAffinity, PodSecurityContext, PodSpec,
+    PodTemplateSpec, Probe, ResourceRequirements, SecretKeySelector, SecretVolumeSource, Service,
+    ServiceAccount, ServicePort, ServiceSpec, TCPSocketAction, Toleration as K8sToleration, Volume,
+    VolumeMount, VolumeResourceRequirements, WeightedPodAffinityTerm,
 };
 use k8s_openapi::api::rbac::v1::{PolicyRule, Role, RoleBinding, RoleRef, Subject};
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
@@ -136,6 +136,21 @@ pub struct OwnerRef {
 }
 
 pub const AGENT_HTTP_PORT: i32 = 8008;
+
+/// emptyDir carrying the previous major's PostgreSQL tree during an in-place
+/// upgrade, populated by an initContainer running the cluster's old image.
+pub const OLD_BIN_VOLUME: &str = "pglord-oldbin";
+
+/// Where a PostgreSQL major's binaries live in the agent images.
+pub fn old_lib_path(major: u32) -> String {
+    format!("/usr/lib/postgresql/{major}")
+}
+
+/// Where its share tree lives. The binaries hold this as an absolute
+/// compiled-in path, so an old tree has to be mounted here and nowhere else.
+pub fn old_share_path(major: u32) -> String {
+    format!("/usr/share/postgresql/{major}")
+}
 pub const PG_PORT: i32 = 5432;
 
 pub fn labels(name: &str) -> BTreeMap<String, String> {
@@ -437,6 +452,21 @@ pub fn render_instance_rbac(
 }
 
 pub fn render_statefulset(spec: &ClusterSpec, ns: &str, owner: &OwnerRef) -> StatefulSet {
+    render_statefulset_for_upgrade(spec, ns, owner, None)
+}
+
+/// The instance set, optionally shaped for an in-place major upgrade.
+///
+/// For an in-place upgrade the pod runs the *target* image over this cluster's
+/// own data directory, with the previous major's tree mounted alongside so
+/// pg_upgrade has both bindirs. Blue-green (or no upgrade) renders exactly
+/// what it always did — its second set comes from render_green_statefulset.
+pub fn render_statefulset_for_upgrade(
+    spec: &ClusterSpec,
+    ns: &str,
+    owner: &OwnerRef,
+    upgrade: Option<&crate::upgrade::UpgradeState>,
+) -> StatefulSet {
     let container = Container {
         name: "postgres".to_string(),
         image: Some(spec.image.clone()),
@@ -518,6 +548,65 @@ pub fn render_statefulset(spec: &ClusterSpec, ns: &str, owner: &OwnerRef) -> Sta
         ..Default::default()
     };
 
+    // In-place upgrade: the target image over this cluster's own data
+    // directory, with the previous major's tree mounted where it was
+    // originally installed. The paths are load-bearing — Debian compiles the
+    // share directory into the binaries as an absolute path, so an old initdb
+    // reached through any other location cannot find its files.
+    let in_place = upgrade.filter(|u| u.mode == crate::upgrade::UpgradeMode::InPlace);
+    let in_place_major = in_place.and_then(|u| u.from_major);
+    let mut container = container;
+    let mut init_containers = None;
+    if let (Some(u), Some(major)) = (in_place, in_place_major) {
+        container.image = Some(u.target_image.clone());
+        if let Some(env) = container.env.as_mut() {
+            env.push(EnvVar {
+                name: "PGLORD_AGENT_UPGRADE_IN_PLACE".to_string(),
+                value: Some(major.to_string()),
+                ..Default::default()
+            });
+        }
+        if let Some(mounts) = container.volume_mounts.as_mut() {
+            mounts.extend([
+                VolumeMount {
+                    name: OLD_BIN_VOLUME.to_string(),
+                    mount_path: old_lib_path(major),
+                    sub_path: Some("lib".to_string()),
+                    read_only: Some(true),
+                    ..Default::default()
+                },
+                VolumeMount {
+                    name: OLD_BIN_VOLUME.to_string(),
+                    mount_path: old_share_path(major),
+                    sub_path: Some("share".to_string()),
+                    read_only: Some(true),
+                    ..Default::default()
+                },
+            ]);
+        }
+        init_containers = Some(vec![Container {
+            name: "pglord-oldbin".to_string(),
+            // The cluster's CURRENT image: the only place the old major is.
+            image: Some(spec.image.clone()),
+            image_pull_policy: Some("IfNotPresent".to_string()),
+            command: Some(vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                format!(
+                    "cp -a {}/. /oldbin/lib/ && cp -a {}/. /oldbin/share/",
+                    old_lib_path(major),
+                    old_share_path(major)
+                ),
+            ]),
+            volume_mounts: Some(vec![VolumeMount {
+                name: OLD_BIN_VOLUME.to_string(),
+                mount_path: "/oldbin".to_string(),
+                ..Default::default()
+            }]),
+            ..Default::default()
+        }]);
+    }
+
     StatefulSet {
         metadata: meta(&spec.sts_name(), ns, &spec.name, owner),
         spec: Some(StatefulSetSpec {
@@ -567,6 +656,7 @@ pub fn render_statefulset(spec: &ClusterSpec, ns: &str, owner: &OwnerRef) -> Sta
                         fs_group_change_policy: Some("OnRootMismatch".to_string()),
                         ..Default::default()
                     }),
+                    init_containers,
                     containers: vec![container],
                     affinity: anti_affinity(spec),
                     node_selector: (!spec.workload.node_selector.is_empty())
@@ -583,6 +673,13 @@ pub fn render_statefulset(spec: &ClusterSpec, ns: &str, owner: &OwnerRef) -> Sta
                     volumes: {
                         let mut volumes = init_script_volumes(spec);
                         volumes.extend(tls_volumes(spec));
+                        if in_place_major.is_some() {
+                            volumes.push(Volume {
+                                name: OLD_BIN_VOLUME.to_string(),
+                                empty_dir: Some(EmptyDirVolumeSource::default()),
+                                ..Default::default()
+                            });
+                        }
                         (!volumes.is_empty()).then_some(volumes)
                     },
                     ..Default::default()
@@ -951,6 +1048,8 @@ mod tests {
             next_generation: "g2".into(),
             phase: crate::upgrade::UpgradePhase::Migrating,
             previous_primary: None,
+            mode: crate::upgrade::UpgradeMode::BlueGreen,
+            from_major: None,
         };
         let sts = render_green_statefulset(&spec, "pglord", &owner, &upgrade);
         assert_eq!(sts.metadata.name.as_deref(), Some("demo-g2"));
@@ -977,6 +1076,92 @@ mod tests {
         );
     }
 
+    fn in_place_state() -> crate::upgrade::UpgradeState {
+        crate::upgrade::UpgradeState {
+            target_image: "pglord-agent:17".into(),
+            next_generation: "g2".into(),
+            phase: crate::upgrade::UpgradePhase::Upgrading,
+            previous_primary: None,
+            mode: crate::upgrade::UpgradeMode::InPlace,
+            from_major: Some(16),
+        }
+    }
+
+    #[test]
+    fn in_place_render_adds_the_old_tree_at_its_original_paths() {
+        let (spec, owner) = demo();
+        let sts = render_statefulset_for_upgrade(&spec, "pglord", &owner, Some(&in_place_state()));
+        // Same instance set: no generation suffix, no second StatefulSet.
+        assert_eq!(sts.metadata.name.as_deref(), Some("demo"));
+        let pod = sts.spec.expect("spec").template.spec.expect("pod");
+
+        let init = pod.init_containers.expect("init containers");
+        assert_eq!(init.len(), 1);
+        // The initContainer runs the CURRENT image — that is where PG 16 is.
+        assert_eq!(init[0].image.as_deref(), Some("pglord-agent:dev"));
+
+        let main = &pod.containers[0];
+        assert_eq!(main.image.as_deref(), Some("pglord-agent:17"));
+        let mounts = main.volume_mounts.clone().expect("mounts");
+        // Load-bearing: Debian compiles the share path in absolutely, so the
+        // old tree must appear exactly where it was installed or initdb fails
+        // with "could not open version file".
+        let lib = mounts
+            .iter()
+            .find(|m| m.mount_path == "/usr/lib/postgresql/16")
+            .expect("lib mount");
+        let share = mounts
+            .iter()
+            .find(|m| m.mount_path == "/usr/share/postgresql/16")
+            .expect("share mount");
+        assert_eq!(lib.name, OLD_BIN_VOLUME);
+        assert_eq!(lib.sub_path.as_deref(), Some("lib"));
+        assert_eq!(share.sub_path.as_deref(), Some("share"));
+
+        let env = main.env.clone().expect("env");
+        let marker = env
+            .iter()
+            .find(|e| e.name == "PGLORD_AGENT_UPGRADE_IN_PLACE")
+            .expect("var");
+        assert_eq!(marker.value.as_deref(), Some("16"));
+    }
+
+    #[test]
+    fn a_blue_green_or_absent_upgrade_renders_exactly_as_before() {
+        let (spec, owner) = demo();
+        let plain = render_statefulset(&spec, "pglord", &owner);
+        assert_eq!(
+            render_statefulset_for_upgrade(&spec, "pglord", &owner, None),
+            plain
+        );
+        // Blue-green renders its second set separately; the main set must
+        // stay untouched while one is running.
+        let bg = crate::upgrade::UpgradeState {
+            mode: crate::upgrade::UpgradeMode::BlueGreen,
+            from_major: None,
+            ..in_place_state()
+        };
+        assert_eq!(
+            render_statefulset_for_upgrade(&spec, "pglord", &owner, Some(&bg)),
+            plain
+        );
+    }
+
+    #[test]
+    fn in_place_without_a_known_old_major_renders_unchanged() {
+        // from_major is resolved at start; with none there is nothing to
+        // mount, and guessing a path would produce a pod that cannot start.
+        let (spec, owner) = demo();
+        let st = crate::upgrade::UpgradeState {
+            from_major: None,
+            ..in_place_state()
+        };
+        assert_eq!(
+            render_statefulset_for_upgrade(&spec, "pglord", &owner, Some(&st)),
+            render_statefulset(&spec, "pglord", &owner)
+        );
+    }
+
     #[test]
     fn green_never_inherits_a_restore_source() {
         let (_, owner) = demo();
@@ -993,6 +1178,8 @@ mod tests {
             next_generation: "g2".into(),
             phase: crate::upgrade::UpgradePhase::Migrating,
             previous_primary: None,
+            mode: crate::upgrade::UpgradeMode::BlueGreen,
+            from_major: None,
         };
         let green = render_green_statefulset(&spec, "pglord", &owner, &upgrade);
         let env = green

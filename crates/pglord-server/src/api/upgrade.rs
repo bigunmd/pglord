@@ -16,7 +16,7 @@ use k8s_openapi::api::apps::v1::StatefulSet;
 use kube::api::Api;
 use pglord_core::render::{AGENT_HTTP_PORT, pod_fqdn};
 use pglord_core::spec::ClusterSpec;
-use pglord_core::upgrade::{UpgradePhase, UpgradeState, next_generation};
+use pglord_core::upgrade::{UpgradeMode, UpgradePhase, UpgradeState, next_generation};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -359,6 +359,8 @@ pub async fn start_upgrade(
         next_generation: next_generation(&spec.generation),
         phase: UpgradePhase::Migrating,
         previous_primary: None,
+        mode: UpgradeMode::BlueGreen,
+        from_major: None,
     };
     if !ops
         .store
@@ -747,6 +749,8 @@ mod tests {
             next_generation: "g2".into(),
             phase: UpgradePhase::Migrating,
             previous_primary: None,
+            mode: UpgradeMode::BlueGreen,
+            from_major: None,
         };
         assert_eq!(green_sts_name(&spec, &state), "demo-g2");
         assert_eq!(green_primary_pod(&spec, &state), "demo-g2-0");

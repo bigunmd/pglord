@@ -15,6 +15,22 @@ pub const UPGRADE_ANNOTATION: &str = "pglord.dev/upgrade";
 /// One publication of this name per user database on the source side.
 pub const PUBLICATION: &str = "pglord_upgrade";
 
+/// How a major upgrade is performed. Absent from state written before
+/// in-place existed, which must keep meaning blue-green.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, utoipa::ToSchema)]
+#[cfg_attr(feature = "crd", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum UpgradeMode {
+    /// Build a second instance set and replicate into it. No downtime, at the
+    /// cost of a full second copy of the cluster.
+    #[default]
+    BlueGreen,
+    /// Convert this cluster's own data directory with `pg_upgrade --link`.
+    /// Minutes of downtime and almost no extra disk, recoverable only from a
+    /// backup.
+    InPlace,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[cfg_attr(feature = "crd", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
@@ -25,6 +41,9 @@ pub enum UpgradePhase {
     /// Cutover happened: applications write to green, the old set is fenced
     /// read-only and kept as the rollback target.
     Soaking,
+    /// In-place: the instances are converting their data directory. This is
+    /// the downtime window.
+    Upgrading,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
@@ -37,6 +56,32 @@ pub struct UpgradeState {
     /// The recorded primary before cutover; rollback restores it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub previous_primary: Option<String>,
+    #[serde(default)]
+    pub mode: UpgradeMode,
+    /// The major being upgraded from, resolved once at start so the render
+    /// stays stable across reconciles. In-place only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_major: Option<u32>,
+}
+
+/// The PostgreSQL major an image tag advertises, when it says so.
+///
+/// Tags are arbitrary strings, so this is a convenience and never an
+/// authority — the running server's own `server_version_num` decides.
+/// Recognises a bare major ("…:17"), a leading major with a suffix
+/// ("…:18-timescaledb") and a trailing "-pgNN" ("…:v1.2.3-pg16").
+pub fn major_from_image(image: &str) -> Option<u32> {
+    // Strip a registry host:port before looking for the tag separator: the
+    // colon in "registry:5000/img" does not introduce a tag.
+    let (host, tag) = image.rsplit_once(':')?;
+    if host.is_empty() || tag.contains('/') {
+        return None;
+    }
+    if let Some((_, pg)) = tag.rsplit_once("-pg") {
+        return pg.parse().ok();
+    }
+    let head: String = tag.chars().take_while(char::is_ascii_digit).collect();
+    head.parse().ok()
 }
 
 /// The generation an upgrade started from `current` produces. Unparseable
@@ -207,10 +252,61 @@ mod tests {
             next_generation: "g2".into(),
             phase: UpgradePhase::Migrating,
             previous_primary: None,
+            mode: UpgradeMode::BlueGreen,
+            from_major: None,
         };
         let json = serde_json::to_string(&st).expect("serialize");
         assert!(json.contains("\"migrating\""), "{json}");
         let back: UpgradeState = serde_json::from_str(&json).expect("parse");
         assert_eq!(back, st);
+    }
+
+    #[test]
+    fn mode_defaults_to_blue_green_for_stored_state() {
+        // State written before in-place existed carries no mode; it must keep
+        // parsing, as blue-green, or a deploy breaks every in-flight upgrade.
+        let st: UpgradeState = serde_json::from_str(
+            r#"{"target_image":"a:18","next_generation":"g2","phase":"migrating"}"#,
+        )
+        .expect("parse");
+        assert_eq!(st.mode, UpgradeMode::BlueGreen);
+        assert_eq!(st.from_major, None);
+    }
+
+    #[test]
+    fn in_place_state_roundtrips() {
+        let st = UpgradeState {
+            target_image: "pglord-agent:17".into(),
+            next_generation: "g2".into(),
+            phase: UpgradePhase::Upgrading,
+            previous_primary: None,
+            mode: UpgradeMode::InPlace,
+            from_major: Some(16),
+        };
+        let json = serde_json::to_string(&st).expect("serialize");
+        assert!(json.contains("\"in_place\""), "{json}");
+        assert!(json.contains("\"upgrading\""), "{json}");
+        assert_eq!(
+            serde_json::from_str::<UpgradeState>(&json).expect("parse"),
+            st
+        );
+    }
+
+    #[test]
+    fn major_parses_from_conventional_image_tags() {
+        assert_eq!(major_from_image("pglord-agent:17"), Some(17));
+        assert_eq!(
+            major_from_image("ghcr.io/o/pglord-agent:18-timescaledb"),
+            Some(18)
+        );
+        assert_eq!(
+            major_from_image("ghcr.io/o/pglord-agent:v1.2.3-pg16"),
+            Some(16)
+        );
+        // Tags are arbitrary: an unreadable one is not an error, it just means
+        // the running server's reported version is the only authority.
+        assert_eq!(major_from_image("pglord-agent:dev"), None);
+        assert_eq!(major_from_image("pglord-agent"), None);
+        assert_eq!(major_from_image("registry:5000/pglord-agent"), None);
     }
 }
