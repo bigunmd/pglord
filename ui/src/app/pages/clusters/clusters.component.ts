@@ -33,7 +33,7 @@ const REFRESH_MS = 5000;
       <h2 hlmDialogTitle>{{ 'clusters.deleteTitle' | transloco: { name: name } }}</h2>
     </div>
     <div hlmDialogBody>
-  <p class="text-muted-foreground py-2 text-sm">{{ 'clusters.deleteWarning' | transloco }}</p>
+  <p class="text-muted-foreground text-sm">{{ 'clusters.deleteWarning' | transloco }}</p>
     </div>
     <div hlmDialogFooter>
       <button hlmBtn variant="ghost" (click)="ref.close(false)">

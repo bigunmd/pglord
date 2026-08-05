@@ -122,13 +122,13 @@ export class UpgradeStartDialogComponent {
  * confirmed. */
 @Component({
   selector: 'pg-upgrade-confirm-dialog',
-  imports: [TranslocoModule, HlmButton, HlmDialogFooter, HlmDialogHeader, HlmDialogTitle],
+  imports: [TranslocoModule, HlmButton, HlmDialogFooter, HlmDialogHeader, HlmDialogTitle, HlmDialogBody],
   template: `
     <div hlmDialogHeader>
       <h2 hlmDialogTitle>{{ titleKey | transloco: { name: name } }}</h2>
     </div>
     <div hlmDialogBody>
-  <p class="text-muted-foreground py-1 text-sm leading-relaxed">
+  <p class="text-muted-foreground text-sm leading-relaxed">
         {{ warningKey | transloco }}
       </p>
     </div>

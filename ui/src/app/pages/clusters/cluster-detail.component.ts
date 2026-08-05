@@ -94,13 +94,13 @@ export const FORM_DIALOG_CLASS = 'sm:max-w-lg';
 /** Confirm a planned switchover; resolves true only on explicit confirmation. */
 @Component({
   selector: 'pg-switchover-dialog',
-  imports: [TranslocoModule, HlmButton, HlmDialogFooter, HlmDialogHeader, HlmDialogTitle],
+  imports: [TranslocoModule, HlmButton, HlmDialogFooter, HlmDialogHeader, HlmDialogTitle, HlmDialogBody],
   template: `
     <div hlmDialogHeader>
       <h2 hlmDialogTitle>{{ 'clusterDetail.switchoverTitle' | transloco: { pod: pod } }}</h2>
     </div>
     <div hlmDialogBody>
-  <p class="text-muted-foreground py-2 text-sm">
+  <p class="text-muted-foreground text-sm">
         {{ 'clusterDetail.switchoverWarning' | transloco }}
       </p>
     </div>
@@ -122,13 +122,13 @@ export class SwitchoverDialogComponent {
 /** Confirm hibernation: every instance stops and connections drop. */
 @Component({
   selector: 'pg-hibernate-dialog',
-  imports: [TranslocoModule, HlmButton, HlmDialogFooter, HlmDialogHeader, HlmDialogTitle],
+  imports: [TranslocoModule, HlmButton, HlmDialogFooter, HlmDialogHeader, HlmDialogTitle, HlmDialogBody],
   template: `
     <div hlmDialogHeader>
       <h2 hlmDialogTitle>{{ 'clusterDetail.hibernateTitle' | transloco: { name: name } }}</h2>
     </div>
     <div hlmDialogBody>
-  <p class="text-muted-foreground py-2 text-sm">
+  <p class="text-muted-foreground text-sm">
         {{ 'clusterDetail.hibernateWarning' | transloco }}
       </p>
     </div>
@@ -150,13 +150,13 @@ export class HibernateDialogComponent {
 /** Confirm fencing one instance: postgres stops, the pod stays. */
 @Component({
   selector: 'pg-fence-dialog',
-  imports: [TranslocoModule, HlmButton, HlmDialogFooter, HlmDialogHeader, HlmDialogTitle],
+  imports: [TranslocoModule, HlmButton, HlmDialogFooter, HlmDialogHeader, HlmDialogTitle, HlmDialogBody],
   template: `
     <div hlmDialogHeader>
       <h2 hlmDialogTitle>{{ 'clusterDetail.fenceTitle' | transloco: { pod: pod } }}</h2>
     </div>
     <div hlmDialogBody>
-  <p class="text-muted-foreground py-2 text-sm">
+  <p class="text-muted-foreground text-sm">
         {{ 'clusterDetail.fenceWarning' | transloco }}
       </p>
     </div>
@@ -178,13 +178,13 @@ export class FenceDialogComponent {
 /** Confirm a rolling restart. */
 @Component({
   selector: 'pg-restart-dialog',
-  imports: [TranslocoModule, HlmButton, HlmDialogFooter, HlmDialogHeader, HlmDialogTitle],
+  imports: [TranslocoModule, HlmButton, HlmDialogFooter, HlmDialogHeader, HlmDialogTitle, HlmDialogBody],
   template: `
     <div hlmDialogHeader>
       <h2 hlmDialogTitle>{{ 'config.restartTitle' | transloco: { name: name } }}</h2>
     </div>
     <div hlmDialogBody>
-  <p class="text-muted-foreground py-2 text-sm">{{ 'config.restartWarning' | transloco }}</p>
+  <p class="text-muted-foreground text-sm">{{ 'config.restartWarning' | transloco }}</p>
     </div>
     <div hlmDialogFooter>
       <button hlmBtn variant="ghost" (click)="ref.close(false)">
@@ -203,13 +203,13 @@ export class RestartDialogComponent {
 
 @Component({
   selector: 'pg-rotate-credentials-dialog',
-  imports: [TranslocoModule, HlmButton, HlmDialogFooter, HlmDialogHeader, HlmDialogTitle],
+  imports: [TranslocoModule, HlmButton, HlmDialogFooter, HlmDialogHeader, HlmDialogTitle, HlmDialogBody],
   template: `
     <div hlmDialogHeader>
       <h2 hlmDialogTitle>{{ 'secrets.rotateTitle' | transloco: { name: name } }}</h2>
     </div>
     <div hlmDialogBody>
-  <p class="text-muted-foreground py-2 text-sm">{{ 'secrets.rotateWarning' | transloco }}</p>
+  <p class="text-muted-foreground text-sm">{{ 'secrets.rotateWarning' | transloco }}</p>
     </div>
     <div hlmDialogFooter>
       <button hlmBtn variant="ghost" (click)="ref.close(false)">
@@ -230,7 +230,7 @@ export class RotateCredentialsDialogComponent {
  * strict-blocking trade-off plainly. */
 @Component({
   selector: 'pg-sync-dialog',
-  imports: [TranslocoModule, HlmButton, HlmDialogFooter, HlmDialogHeader, HlmDialogTitle],
+  imports: [TranslocoModule, HlmButton, HlmDialogFooter, HlmDialogHeader, HlmDialogTitle, HlmDialogBody],
   template: `
     <div hlmDialogHeader>
       <h2 hlmDialogTitle>
@@ -238,7 +238,7 @@ export class RotateCredentialsDialogComponent {
       </h2>
     </div>
     <div hlmDialogBody>
-  <p class="text-muted-foreground py-2 text-sm">
+  <p class="text-muted-foreground text-sm">
         {{ (enable ? 'sync.enableWarning' : 'sync.disableWarning') | transloco }}
       </p>
     </div>

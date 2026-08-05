@@ -14,6 +14,6 @@ import { classes } from '@spartan-ng/helm/utils';
 })
 export class HlmDialogBody {
   constructor() {
-    classes(() => 'min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 py-1');
+    classes(() => 'min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 pt-1 pb-6');
   }
 }
