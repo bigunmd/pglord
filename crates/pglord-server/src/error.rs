@@ -79,7 +79,8 @@ impl ApiError {
     /// a namespace outside pglord's Role, or RBAC that was never applied —
     /// and reporting it as a bare 500 "An internal error occurred." tells
     /// nobody anything. Everything else still collapses to 500.
-    pub fn from_kube(err: anyhow::Error) -> Self {
+    pub fn from_kube(err: impl Into<anyhow::Error>) -> Self {
+        let err = err.into();
         for cause in err.chain() {
             if let Some(kube::Error::Api(api)) = cause.downcast_ref::<kube::Error>() {
                 match api.code {

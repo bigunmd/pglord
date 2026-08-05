@@ -79,7 +79,7 @@ pub async fn list_backups(
         .store
         .get(&ns, &name)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(ApiError::from_kube)?
     else {
         return Err(ApiError::not_found());
     };
@@ -96,7 +96,7 @@ pub async fn list_backups(
         .store
         .primary(&ns, &name)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(ApiError::from_kube)?
         .unwrap_or_else(|| spec.instance_name(0));
     let url = format!(
         "http://{}:{}/backups",
@@ -161,7 +161,7 @@ pub async fn create_backup(
         .store
         .get(&ns, &name)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(ApiError::from_kube)?
     else {
         return Err(ApiError::not_found());
     };
@@ -179,7 +179,7 @@ pub async fn create_backup(
         ops.store
             .upgrade_state(&ns, &name)
             .await
-            .map_err(ApiError::internal)?
+            .map_err(ApiError::from_kube)?
             .map(|u| u.phase),
         Some(pglord_core::upgrade::UpgradePhase::Soaking)
     ) {
@@ -199,7 +199,7 @@ pub async fn create_backup(
     let kind = body.and_then(|Json(b)| b.kind).unwrap_or_default();
     start_backup(ops, &ns, &spec, kind, "manual")
         .await
-        .map_err(ApiError::internal)?;
+        .map_err(ApiError::from_kube)?;
     Ok(StatusCode::ACCEPTED)
 }
 

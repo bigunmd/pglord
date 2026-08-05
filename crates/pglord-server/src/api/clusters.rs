@@ -245,7 +245,7 @@ pub async fn create_cluster(
         .store
         .get(&ns, &spec.name)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(ApiError::from_kube)?
         .is_some()
     {
         return Err(ApiError::conflict("already_exists")
@@ -274,7 +274,7 @@ pub async fn list_clusters(
     Path(ns): Path<String>,
 ) -> Result<Json<Vec<ClusterSummary>>, ApiError> {
     let ops = ops(&state)?;
-    let specs = ops.store.list_all().await.map_err(ApiError::internal)?;
+    let specs = ops.store.list_all().await.map_err(ApiError::from_kube)?;
     let mut out = Vec::new();
     for (spec_ns, spec) in specs {
         if spec_ns == ns {
@@ -298,7 +298,7 @@ pub async fn list_all_clusters(
     State(state): State<Option<ClusterOps>>,
 ) -> Result<Json<Vec<ClusterSummary>>, ApiError> {
     let ops = ops(&state)?;
-    let specs = ops.store.list_all().await.map_err(ApiError::internal)?;
+    let specs = ops.store.list_all().await.map_err(ApiError::from_kube)?;
     let mut out = Vec::with_capacity(specs.len());
     for (spec_ns, spec) in specs {
         out.push(summarize(ops, &spec_ns, spec).await);
@@ -329,7 +329,7 @@ pub async fn get_cluster(
         .store
         .get(&ns, &name)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(ApiError::from_kube)?
     else {
         return Err(ApiError::not_found());
     };
@@ -337,7 +337,7 @@ pub async fn get_cluster(
         .store
         .primary(&ns, &name)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(ApiError::from_kube)?
         .unwrap_or_else(|| spec.instance_name(0));
     let observations = crate::instance_probe::observe_cluster(&ops.http, &spec, &ns).await;
     let ready_replicas = observations.iter().filter(|o| o.ready).count() as i32;
@@ -353,7 +353,7 @@ pub async fn get_cluster(
         deployments
             .get_opt(&pglord_core::render::pooler_deployment_name(&spec.name))
             .await
-            .map_err(ApiError::internal)?
+            .map_err(ApiError::from_kube)?
             .and_then(|d| d.status)
             .and_then(|s| s.ready_replicas)
             .unwrap_or(0)
@@ -388,7 +388,7 @@ pub async fn get_cluster(
         .store
         .upgrade_state(&ns, &name)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(ApiError::from_kube)?
     {
         Some(state) => {
             // An in-place upgrade finishes by observation, not by a user
@@ -515,7 +515,7 @@ pub async fn patch_cluster(
         .store
         .get(&ns, &name)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(ApiError::from_kube)?
     else {
         return Err(ApiError::not_found());
     };
@@ -545,7 +545,7 @@ pub async fn patch_cluster(
     ops.store
         .put(&ns, &next)
         .await
-        .map_err(ApiError::internal)?;
+        .map_err(ApiError::from_kube)?;
 
     if next.replicas < current.replicas {
         crate::reconciler::delete_orphan_pvcs(
@@ -563,7 +563,7 @@ pub async fn patch_cluster(
             .store
             .primary(&ns, &name)
             .await
-            .map_err(ApiError::internal)?
+            .map_err(ApiError::from_kube)?
             .unwrap_or_else(|| next.instance_name(0));
         // The StatefulSet must carry the new template before any pod dies, or
         // a deleted pod would come back on the old one. Same field manager as
@@ -572,7 +572,7 @@ pub async fn patch_cluster(
         // (reject_upgrading), so passing None cannot drop a green set.
         crate::reconciler::apply_cluster(&ops.kube, &ops.http, &ns, &next, &owner, &primary, None)
             .await
-            .map_err(ApiError::internal)?;
+            .map_err(ApiError::from_kube)?;
         let ops = ops.clone();
         let roll_spec = next.clone();
         let roll_ns = ns.clone();
@@ -614,7 +614,7 @@ pub async fn switchover(
         .store
         .get(&ns, &name)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(ApiError::from_kube)?
     else {
         return Err(ApiError::not_found());
     };
@@ -635,7 +635,7 @@ pub async fn switchover(
         .store
         .primary(&ns, &name)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(ApiError::from_kube)?
         .unwrap_or_else(|| spec.instance_name(0));
     if current == req.target {
         return Err(ApiError::conflict("already_primary")
@@ -660,7 +660,7 @@ pub async fn switchover(
         .store
         .set_primary(&ns, &name, &req.target)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(ApiError::from_kube)?
     {
         return Err(ApiError::conflict("record_changed")
             .with_detail("The primary record changed concurrently; retry."));
@@ -708,7 +708,7 @@ pub async fn restart_cluster(
         .store
         .get(&ns, &name)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(ApiError::from_kube)?
     else {
         return Err(ApiError::not_found());
     };
@@ -718,7 +718,7 @@ pub async fn restart_cluster(
         .store
         .primary(&ns, &name)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(ApiError::from_kube)?
         .unwrap_or_else(|| spec.instance_name(0));
 
     let ops = ops.clone();
@@ -757,7 +757,7 @@ pub(crate) async fn reject_upgrading(
         .store
         .upgrade_state(ns, name)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(ApiError::from_kube)?
         .is_some()
     {
         return Err(ApiError::conflict("upgrade_in_progress").with_detail(
@@ -791,7 +791,7 @@ pub async fn hibernate(
         .store
         .get(&ns, &name)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(ApiError::from_kube)?
     else {
         return Err(ApiError::not_found());
     };
@@ -804,7 +804,7 @@ pub async fn hibernate(
     ops.store
         .put(&ns, &spec)
         .await
-        .map_err(ApiError::internal)?;
+        .map_err(ApiError::from_kube)?;
     tracing::warn!(cluster = %name, "HIBERNATE: scaling to zero, PVCs retained");
     Ok(StatusCode::ACCEPTED)
 }
@@ -833,7 +833,7 @@ pub async fn wake(
         .store
         .get(&ns, &name)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(ApiError::from_kube)?
     else {
         return Err(ApiError::not_found());
     };
@@ -846,7 +846,7 @@ pub async fn wake(
     ops.store
         .put(&ns, &spec)
         .await
-        .map_err(ApiError::internal)?;
+        .map_err(ApiError::from_kube)?;
     tracing::warn!(cluster = %name, replicas = spec.replicas, "WAKE: restoring instances");
     Ok(StatusCode::ACCEPTED)
 }
@@ -877,7 +877,7 @@ pub async fn fence_instance(
         .store
         .get(&ns, &name)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(ApiError::from_kube)?
     else {
         return Err(ApiError::not_found());
     };
@@ -894,7 +894,7 @@ pub async fn fence_instance(
         .store
         .primary(&ns, &name)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(ApiError::from_kube)?
         .unwrap_or_else(|| spec.instance_name(0));
     if pod == primary {
         return Err(ApiError::conflict("cannot_fence_primary")
@@ -909,7 +909,7 @@ pub async fn fence_instance(
     ops.store
         .put(&ns, &spec)
         .await
-        .map_err(ApiError::internal)?;
+        .map_err(ApiError::from_kube)?;
     tracing::warn!(cluster = %name, %pod, "FENCE: instance held down by spec");
     Ok(StatusCode::ACCEPTED)
 }
@@ -940,7 +940,7 @@ pub async fn unfence_instance(
         .store
         .get(&ns, &name)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(ApiError::from_kube)?
     else {
         return Err(ApiError::not_found());
     };
@@ -961,7 +961,7 @@ pub async fn unfence_instance(
     ops.store
         .put(&ns, &spec)
         .await
-        .map_err(ApiError::internal)?;
+        .map_err(ApiError::from_kube)?;
     tracing::warn!(cluster = %name, %pod, "UNFENCE: instance released");
     Ok(StatusCode::ACCEPTED)
 }
@@ -1024,7 +1024,7 @@ pub async fn delete_cluster(
         .store
         .delete(&ns, &name)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(ApiError::from_kube)?
     {
         Ok(StatusCode::NO_CONTENT)
     } else {

@@ -251,14 +251,14 @@ async fn require_phase(
     name: &str,
     allowed: UpgradePhase,
 ) -> Result<(ClusterSpec, pglord_core::render::OwnerRef, UpgradeState), ApiError> {
-    let Some((spec, owner)) = ops.store.get(ns, name).await.map_err(ApiError::internal)? else {
+    let Some((spec, owner)) = ops.store.get(ns, name).await.map_err(ApiError::from_kube)? else {
         return Err(ApiError::not_found());
     };
     let Some(state) = ops
         .store
         .upgrade_state(ns, name)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(ApiError::from_kube)?
     else {
         return Err(ApiError::conflict("no_upgrade_in_progress")
             .with_detail("This cluster has no major version upgrade in progress."));
@@ -328,7 +328,7 @@ pub async fn start_upgrade(
         .store
         .get(&ns, &name)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(ApiError::from_kube)?
     else {
         return Err(ApiError::not_found());
     };
@@ -344,7 +344,7 @@ pub async fn start_upgrade(
         .store
         .upgrade_state(&ns, &name)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(ApiError::from_kube)?
         .is_some()
     {
         return Err(ApiError::conflict("upgrade_in_progress")
@@ -355,7 +355,7 @@ pub async fn start_upgrade(
         .store
         .primary(&ns, &name)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(ApiError::from_kube)?
         .unwrap_or_else(|| spec.instance_name(0));
 
     let observations = crate::instance_probe::observe_cluster(&ops.http, &spec, &ns).await;
@@ -473,7 +473,7 @@ pub async fn start_upgrade(
         .store
         .set_upgrade(&ns, &name, Some(&state), None)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(ApiError::from_kube)?
     {
         return Err(ApiError::conflict("upgrade_in_progress")
             .with_detail("The cluster changed while starting the upgrade; retry."));
@@ -490,7 +490,7 @@ pub async fn start_upgrade(
         Some(&state),
     )
     .await
-    .map_err(ApiError::internal)?;
+    .map_err(ApiError::from_kube)?;
     if in_place {
         // Replace the pods so each agent boots into the conversion. Standbys
         // go first (roll_order), so none is streaming from a primary whose
@@ -555,7 +555,7 @@ pub async fn cutover_upgrade(
         .store
         .primary(&ns, &name)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(ApiError::from_kube)?
         .unwrap_or_else(|| spec.instance_name(0));
     let green_primary = green_primary_pod(&spec, &upgrade);
 
@@ -608,7 +608,7 @@ pub async fn cutover_upgrade(
         .store
         .set_upgrade(&ns, &name, Some(&next_state), Some(&green_primary))
         .await
-        .map_err(ApiError::internal)?
+        .map_err(ApiError::from_kube)?
     {
         post_agent(ops, &ns, &spec.name, &blue_primary, "upgrade/unfence").await;
         return Err(
@@ -667,7 +667,7 @@ pub async fn rollback_upgrade(
         .store
         .set_upgrade(&ns, &name, None, Some(&previous))
         .await
-        .map_err(ApiError::internal)?
+        .map_err(ApiError::from_kube)?
     {
         return Err(ApiError::conflict("record_changed")
             .with_detail("The cluster record changed; re-read the cluster and retry."));
@@ -708,7 +708,7 @@ pub async fn abort_upgrade(
         .store
         .get(&ns, &name)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(ApiError::from_kube)?
     else {
         return Err(ApiError::not_found());
     };
@@ -716,7 +716,7 @@ pub async fn abort_upgrade(
         .store
         .upgrade_state(&ns, &name)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(ApiError::from_kube)?
     else {
         return Err(ApiError::conflict("no_upgrade_in_progress")
             .with_detail("This cluster has no major version upgrade in progress."));
@@ -730,7 +730,7 @@ pub async fn abort_upgrade(
         .store
         .set_upgrade(&ns, &name, None, None)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(ApiError::from_kube)?
     {
         return Err(ApiError::conflict("record_changed")
             .with_detail("The cluster record changed; re-read the cluster and retry."));
@@ -739,7 +739,7 @@ pub async fn abort_upgrade(
         .store
         .primary(&ns, &name)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(ApiError::from_kube)?
         .unwrap_or_else(|| spec.instance_name(0));
 
     if upgrade.mode == UpgradeMode::InPlace {
@@ -814,7 +814,7 @@ pub async fn finalize_upgrade(
     ops.store
         .put(&ns, &next)
         .await
-        .map_err(ApiError::internal)?;
+        .map_err(ApiError::from_kube)?;
 
     if next.backup.enabled {
         // The stanza still describes the old major; without this every backup
@@ -835,7 +835,7 @@ pub async fn finalize_upgrade(
         .store
         .set_upgrade(&ns, &name, None, None)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(ApiError::from_kube)?
     {
         return Err(ApiError::conflict("record_changed")
             .with_detail("The cluster record changed; re-read the cluster and retry."));

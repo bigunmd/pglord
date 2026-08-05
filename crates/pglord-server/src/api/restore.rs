@@ -143,7 +143,7 @@ pub async fn restore_cluster(
         .store
         .get(&ns, &name)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(ApiError::from_kube)?
     else {
         return Err(ApiError::not_found());
     };
@@ -167,7 +167,7 @@ pub async fn restore_cluster(
         .store
         .get(&ns, &spec.name)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(ApiError::from_kube)?
         .is_some()
     {
         return Err(ApiError::conflict("already_exists")
@@ -176,7 +176,7 @@ pub async fn restore_cluster(
     ops.store
         .put(&ns, &spec)
         .await
-        .map_err(ApiError::internal)?;
+        .map_err(ApiError::from_kube)?;
     tracing::info!(
         source = %name,
         target = %spec.name,

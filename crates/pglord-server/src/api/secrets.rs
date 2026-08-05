@@ -75,7 +75,7 @@ pub async fn list_required_secrets(
         .store
         .get(&ns, &name)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(ApiError::from_kube)?
     else {
         return Err(ApiError::not_found());
     };
@@ -91,12 +91,12 @@ pub async fn list_required_secrets(
             ResourceKind::Secret => secrets
                 .get_opt(&required.name)
                 .await
-                .map_err(ApiError::internal)?
+                .map_err(ApiError::from_kube)?
                 .map(|s| s.data.unwrap_or_default().into_keys().collect()),
             ResourceKind::ConfigMap => config_maps
                 .get_opt(&required.name)
                 .await
-                .map_err(ApiError::internal)?
+                .map_err(ApiError::from_kube)?
                 .map(|c| c.data.unwrap_or_default().into_keys().collect()),
         };
         let (exists, missing_keys) = match present_keys {
@@ -185,7 +185,7 @@ pub async fn rotate_credentials(
         .store
         .get(&ns, &name)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(ApiError::from_kube)?
     else {
         return Err(ApiError::not_found());
     };
@@ -200,7 +200,7 @@ pub async fn rotate_credentials(
         .store
         .primary(&ns, &name)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(ApiError::from_kube)?
         .unwrap_or_else(|| spec.instance_name(0));
 
     let ops = ops.clone();
