@@ -110,8 +110,25 @@ pub fn wal_retention_for(storage_size: &str) -> Option<String> {
     (mb >= 64).then(|| format!("{mb}MB"))
 }
 
-pub fn set_wal_retention_sql(size: &str) -> String {
-    format!("ALTER SYSTEM SET max_slot_wal_keep_size = '{size}'")
+/// A postgres size literal: digits with an optional unit, nothing else.
+///
+/// The value reaches the agent over its control endpoint, which is
+/// unauthenticated by design, and lands inside a single-quoted `ALTER SYSTEM`
+/// string executed as superuser. Without this check a crafted value closes the
+/// quote and appends arbitrary statements — the same reason role passwords are
+/// charset-checked before they are dollar-quoted.
+pub fn is_valid_wal_size(s: &str) -> bool {
+    let digits = s.trim_end_matches(|c: char| c.is_ascii_alphabetic());
+    let unit = &s[digits.len()..];
+    !digits.is_empty()
+        && digits.chars().all(|c| c.is_ascii_digit())
+        && matches!(unit, "" | "kB" | "MB" | "GB" | "TB")
+}
+
+/// None when `size` is not a plain size literal; the caller must reject it
+/// rather than interpolate it.
+pub fn set_wal_retention_sql(size: &str) -> Option<String> {
+    is_valid_wal_size(size).then(|| format!("ALTER SYSTEM SET max_slot_wal_keep_size = '{size}'"))
 }
 
 pub const RESET_WAL_RETENTION_SQL: &str = "ALTER SYSTEM RESET max_slot_wal_keep_size";
@@ -157,6 +174,30 @@ mod tests {
         assert_eq!(wal_retention_for("100Mi"), None);
         // Unparseable: never derive a limit from a value we do not understand.
         assert_eq!(wal_retention_for("banana"), None);
+    }
+
+    #[test]
+    fn wal_size_rejects_anything_but_a_size_literal() {
+        for good in ["256MB", "1GB", "1024", "4TB", "512kB"] {
+            assert!(is_valid_wal_size(good), "{good} should be accepted");
+            assert!(set_wal_retention_sql(good).is_some());
+        }
+        // The endpoint is unauthenticated and the value is single-quoted into
+        // an ALTER SYSTEM run as superuser: everything else must be refused.
+        for bad in [
+            "",
+            "MB",
+            "1MB'; DROP DATABASE postgres; --",
+            "1 MB",
+            "-1MB",
+            "1mb",
+            "1MB2",
+            "$(whoami)",
+            "1MB\nALTER SYSTEM SET fsync=off",
+        ] {
+            assert!(!is_valid_wal_size(bad), "{bad:?} should be rejected");
+            assert_eq!(set_wal_retention_sql(bad), None, "{bad:?}");
+        }
     }
 
     #[test]

@@ -68,10 +68,11 @@ pub async fn fence_writes(cfg: &Config) -> anyhow::Result<()> {
 /// Cap how much WAL this migration's slot may pin on the source, before the
 /// slot exists. See `pglord_core::upgrade::wal_retention_for` for why.
 pub async fn set_wal_retention(cfg: &Config, size: &str) -> anyhow::Result<()> {
+    let Some(sql) = pglord_core::upgrade::set_wal_retention_sql(size) else {
+        anyhow::bail!("invalid size literal");
+    };
     let (client, _conn) = crate::postboot::connect_local(cfg).await?;
-    client
-        .batch_execute(&pglord_core::upgrade::set_wal_retention_sql(size))
-        .await?;
+    client.batch_execute(&sql).await?;
     client.batch_execute("SELECT pg_reload_conf()").await?;
     tracing::info!(%size, "upgrade: capped replication-slot WAL retention");
     Ok(())

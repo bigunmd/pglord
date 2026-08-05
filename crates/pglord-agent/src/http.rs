@@ -108,6 +108,14 @@ async fn upgrade_prepare(
     State(cfg): State<Arc<Config>>,
     Json(req): Json<WalRetentionRequest>,
 ) -> impl IntoResponse {
+    // Reject before touching postgres, and with the same 400 shape the other
+    // endpoints use for a value that fails its charset check.
+    if !pglord_core::upgrade::is_valid_wal_size(&req.max_slot_wal_keep_size) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "max_slot_wal_keep_size must be a size literal" })),
+        );
+    }
     let st = status::query_status(&cfg).await;
     if let Some(refusal) = require_primary(&st, "upgrade preparation") {
         return refusal;
