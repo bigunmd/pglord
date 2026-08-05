@@ -84,12 +84,24 @@ StatefulSet — there is only ever one instance set in this mode) is rendered
 with:
 
 - `image = target_image`;
-- an **initContainer** `pglord-oldbin` running the *current* image, with
-  `command: ["sh","-c","cp -a /usr/lib/postgresql/<old> /pgbin/lib/ && cp -a /usr/share/postgresql/<old> /pgbin/share/"]`;
-- an `emptyDir` volume `pgbin` mounted at `/pgbin` in both containers;
+- an **initContainer** `pglord-oldbin` running the *current* image, copying
+  `/usr/lib/postgresql/<old>/.` and `/usr/share/postgresql/<old>/.` into two
+  subpaths of an `emptyDir`;
+- that `emptyDir` mounted into the main container **at the old tree's original
+  absolute paths** — `/usr/lib/postgresql/<old>` (subPath `lib`) and
+  `/usr/share/postgresql/<old>` (subPath `share`);
 - `PGLORD_AGENT_UPGRADE_IN_PLACE=<old-major>` on the main container, which is
-  what tells the agent an in-place upgrade is expected and where the old
-  binaries are.
+  what tells the agent an in-place upgrade is expected.
+
+**The mount paths are load-bearing, not cosmetic.** Debian compiles the share
+directory into the binaries as an absolute path, so a PG 16 `initdb` copied to
+`/pgbin/...` looks for `/usr/share/postgresql/16` and fails with
+`could not open version file`. Mounting the tree where it was originally
+installed makes the old binaries work unmodified. Verified on the stand's
+images before this design was finalized: with the tree mounted at its original
+paths, `pg_upgrade --check` reports *"Clusters are compatible"*, and a real
+`--link` run converted a 1000-row PG 16 cluster that PG 17.10 then started and
+served, with `pgcrypto` still working.
 
 The old major comes from the *spec's* current image only when the tag is
 parseable; otherwise the server reads it from the primary's reported
@@ -107,12 +119,22 @@ the existing major-version guard:
 
 - **PGDATA exists, its major is below the binary's, and
   `PGLORD_AGENT_UPGRADE_IN_PLACE` is set:**
-  - *primary*: run `pg_upgrade --link --old-datadir=$PGDATA
-    --new-datadir=$PGDATA.new --old-bindir=/pgbin/lib/<old>/bin
-    --new-bindir=/usr/lib/postgresql/<new>/bin`, following the standard
-    sequence (initdb the new directory first, run `--check`, then the real
-    run, then swap directories and re-apply pglord's managed conf block).
-    A failed `--check` aborts before anything is modified.
+  - *primary*: `initdb` a fresh `$PGDATA.new`, run `pg_upgrade --check`, then
+    the real `pg_upgrade --link` with
+    `--old-bindir=/usr/lib/postgresql/<old>/bin` and
+    `--new-bindir=/usr/lib/postgresql/<new>/bin`; on success remove the old
+    directory and rename `$PGDATA.new` to `$PGDATA`, then re-apply pglord's
+    managed `postgresql.conf` block and `pg_hba.conf` (the new directory is a
+    fresh initdb and carries neither). A failed `--check` aborts before
+    anything is modified.
+
+    `$PGDATA.new` must sit on the **same volume** as `$PGDATA` — `--link`
+    creates hard links, which cannot cross filesystems. `$PGDATA` is
+    `/var/lib/postgresql/data/pgdata` inside the PVC mounted at
+    `/var/lib/postgresql/data`, so a sibling path satisfies this. Removing the
+    old directory afterwards is safe precisely because the files are hard
+    links: the data survives under its new name (this is what pg_upgrade's own
+    `delete_old_cluster.sh` does).
   - *standby*: wipe PGDATA and fall through to the existing
     `bootstrap_standby` path, which basebackups from the (now upgraded)
     primary. Standbys therefore need no pg_upgrade at all.
@@ -190,11 +212,13 @@ deliberately down and mid-conversion.
   works, object names are unchanged (`updemo-0`, not `updemo-g2-0`), and the
   volume did not grow by the size of the data. Also assert start is refused
   without a backup.
-- **Early spike, before the rest:** prove on the stand that a PG 16 server
-  binary copied out of the 16 image runs under the 17 image well enough for
-  `pg_upgrade --check`. The whole mode depends on it; if it fails, the
-  fallback is the multi-major image discussed and rejected here, and that
-  changes the image deliverable.
+- **Spike: done, before this spec was finalized.** A PG 16 tree copied out of
+  the 16 image and mounted at its original absolute paths inside the 17 image
+  passes `pg_upgrade --check` ("Clusters are compatible") and completes a real
+  `--link` upgrade: 1000 rows preserved, PG 17.10 serving from the converted
+  directory, `pgcrypto` intact. This is what the mode rested on, so it was
+  proven before anything was built. It also produced the mount-path correction
+  above.
 
 ## Out of scope (deliberate)
 
