@@ -41,6 +41,7 @@ import {
   UpgradeConfirmDialogComponent,
   UpgradeStartDialogComponent,
   type UpgradeConfirmKind,
+  type UpgradeStartResult,
 } from './cluster-upgrade-dialog.component';
 
 import { Api } from '../../api/api';
@@ -873,10 +874,17 @@ export class ImageDialogComponent {
           <div class="border-border mt-2 rounded-lg border p-3 text-sm" data-testid="upgrade-card">
             <div class="flex flex-wrap items-center gap-2">
               <span class="font-medium">
-                {{ (u.phase === 'soaking' ? 'upgrade.soaking' : 'upgrade.migrating') | transloco }}
+                {{
+                  (u.mode === 'in_place'
+                    ? 'upgrade.upgrading'
+                    : u.phase === 'soaking'
+                      ? 'upgrade.soaking'
+                      : 'upgrade.migrating'
+                  ) | transloco
+                }}
               </span>
               <span class="text-muted-foreground font-mono text-xs">{{ u.target_image }}</span>
-              @if (u.phase === 'migrating') {
+              @if (u.mode === 'blue_green' && u.phase === 'migrating') {
                 <span
                   class="text-muted-foreground text-xs"
                   data-testid="upgrade-readiness"
@@ -903,8 +911,25 @@ export class ImageDialogComponent {
               </p>
             }
 
+            @if (u.mode === 'in_place') {
+              <p class="text-muted-foreground mt-2 text-xs" data-testid="upgrade-inplace-note">
+                {{ 'upgrade.inPlaceRunning' | transloco }}
+              </p>
+            }
+
             <div class="mt-3 flex flex-wrap gap-2">
-              @if (u.phase === 'migrating') {
+              @if (u.mode === 'in_place') {
+                <button
+                  hlmBtn
+                  variant="ghost"
+                  size="sm"
+                  data-testid="upgrade-abort"
+                  [disabled]="busy()"
+                  (click)="confirmUpgrade('abort', true)"
+                >
+                  {{ 'upgrade.abort' | transloco }}
+                </button>
+              } @else if (u.phase === 'migrating') {
                 <button
                   hlmBtn
                   size="sm"
@@ -1518,30 +1543,30 @@ export class ClusterDetailComponent implements OnDestroy {
   }
 
   async openUpgrade(d: ClusterDetail): Promise<void> {
-    const image = await firstValueFrom(
-      this.dialog.open<string | undefined>(UpgradeStartDialogComponent, {
+    const chosen = await firstValueFrom(
+      this.dialog.open<UpgradeStartResult | undefined>(UpgradeStartDialogComponent, {
         context: { name: d.name },
         contentClass: FORM_DIALOG_CLASS,
       }).closed$,
     );
-    if (!image) {
+    if (!chosen) {
       return;
     }
     await this.run(() =>
       this.api.invoke(startUpgrade, {
         ns: this.ns(),
         name: this.name(),
-        body: { target_image: image },
+        body: { target_image: chosen.image, mode: chosen.mode },
       }),
     );
   }
 
   /** Every step past "start" is irreversible in some way, so each one is
    * confirmed with copy that names what it costs. */
-  async confirmUpgrade(kind: UpgradeConfirmKind): Promise<void> {
+  async confirmUpgrade(kind: UpgradeConfirmKind, inPlace = false): Promise<void> {
     const confirmed = await firstValueFrom(
       this.dialog.open<boolean>(UpgradeConfirmDialogComponent, {
-        context: { name: this.name(), kind },
+        context: { name: this.name(), kind, inPlace },
         contentClass: FORM_DIALOG_CLASS,
       }).closed$,
     );

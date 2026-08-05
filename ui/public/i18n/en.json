@@ -419,6 +419,15 @@
     "finalizeWarning": "The previous instances and their volumes are deleted. After this there is no way back.",
     "abort": "Abort",
     "abortTitle": "Abort the upgrade of {{name}}?",
-    "abortWarning": "The new instances and their volumes are deleted. The running cluster is untouched."
+    "abortWarning": "The new instances and their volumes are deleted. The running cluster is untouched.",
+    "mode": "How should this upgrade run?",
+    "modeBlueGreen": "Blue-green — no downtime",
+    "modeBlueGreenHint": "Builds a second copy of the whole cluster and replicates into it. Needs double the disk and compute until you finalize.",
+    "modeInPlace": "In place — minutes of downtime",
+    "modeInPlaceHint": "Converts this cluster's data directory with pg_upgrade. Almost no extra disk, but the only way back is restoring a backup.",
+    "upgrading": "Converting the data directory",
+    "inPlaceRunning": "Instances are converting and re-cloning. This is the downtime window.",
+    "abortInPlaceTitle": "Abort the upgrade of {{name}}?",
+    "abortInPlaceWarning": "Puts the previous image back and clears the upgrade. If a data directory has already been converted, the old version cannot start on it and you will need to restore your backup."
   }
 }
