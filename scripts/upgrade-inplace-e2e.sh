@@ -118,6 +118,24 @@ case "$body" in
 esac
 echo "OK refused with backup_required"
 
+echo "==> restarting so WAL archiving takes effect"
+# archive_mode is a restart-only setting and the archive config is written
+# after postgres first boots, so a cluster created with backups on still needs
+# one restart before pgBackRest will accept a backup.
+curl -s -o /dev/null -X POST "$API/api/v1/clusters/$CLUSTER/restart"
+$KUBECTL -n pglord wait --for=delete "pod/$CLUSTER-1" --timeout=120s >/dev/null 2>&1 || true
+$KUBECTL -n pglord wait --for=condition=Ready "pod/$CLUSTER-1" --timeout=180s >/dev/null 2>&1 || true
+$KUBECTL -n pglord wait --for=delete "pod/$CLUSTER-0" --timeout=120s >/dev/null 2>&1 || true
+$KUBECTL -n pglord wait --for=condition=Ready "pod/$CLUSTER-0" --timeout=180s >/dev/null 2>&1 || true
+archive=""
+for _ in $(seq 1 90); do
+  archive=$(psql_on "$(primary_pod)" postgres "SHOW archive_mode")
+  [ "$archive" = "on" ] && break
+  sleep 2
+done
+[ "$archive" = "on" ] || { echo "FAIL: archive_mode is '$archive', expected on"; exit 1; }
+echo "OK archiving enabled"
+
 echo "==> taking a backup"
 code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API/api/v1/clusters/$CLUSTER/backups" \
   -H 'content-type: application/json' -d '{"kind":"full"}')
