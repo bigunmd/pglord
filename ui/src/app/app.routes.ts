@@ -49,6 +49,13 @@ export const routes: Routes = [
           ),
       },
       {
+        path: 'namespaces/:ns/clusters/:name/config',
+        loadComponent: () =>
+          import('./pages/clusters/cluster-config-page.component').then(
+            (m) => m.ClusterConfigPageComponent,
+          ),
+      },
+      {
         path: 'namespaces/:ns/clusters/:name',
         loadComponent: () =>
           import('./pages/clusters/cluster-detail.component').then(

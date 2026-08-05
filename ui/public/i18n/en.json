@@ -131,7 +131,8 @@
     "pendingRestart": "Some settings need a restart before they take effect.",
     "restart": "Restart cluster",
     "restartTitle": "Restart {{name}}?",
-    "restartWarning": "Instances restart one at a time, standbys first and the primary last. Connections drop briefly as each instance comes back."
+    "restartWarning": "Instances restart one at a time, standbys first and the primary last. Connections drop briefly as each instance comes back.",
+    "intro": "Override PostgreSQL settings for this cluster. Anything left out keeps the server default."
   },
   "sync": {
     "title": "Synchronous replication",

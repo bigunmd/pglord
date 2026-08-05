@@ -47,9 +47,7 @@ import {
 import { Api } from '../../api/api';
 import { ClusterDetail } from '../../api/models/cluster-detail';
 import { SpecChange } from '../../api/models/spec-change';
-import { GucInfo } from '../../api/models/guc-info';
 import { getCluster } from '../../api/fn/clusters/get-cluster';
-import { listGucs } from '../../api/fn/system/list-gucs';
 import { patchCluster } from '../../api/fn/clusters/patch-cluster';
 import { restartCluster } from '../../api/fn/clusters/restart-cluster';
 import { hibernate } from '../../api/fn/clusters/hibernate';
@@ -79,7 +77,6 @@ import { ResourceList } from '../../api/models/resource-list';
 import { listRequiredSecrets } from '../../api/fn/clusters/list-required-secrets';
 import { RestoreRequest } from '../../api/models/restore-request';
 import { restoreCluster } from '../../api/fn/backups/restore-cluster';
-import { ClusterConfigDialogComponent } from './cluster-config-dialog.component';
 import { ClusterEditDialogComponent } from './cluster-edit-dialog.component';
 import { ClusterHbaDialogComponent } from './cluster-hba-dialog.component';
 import { HbaRule } from '../../api/models/hba-rule';
@@ -979,7 +976,7 @@ export class ImageDialogComponent {
             size="sm"
             data-testid="open-config"
             [disabled]="busy() || d.hibernated"
-            (click)="openConfig(d)"
+            (click)="openConfig()"
           >
             <ng-icon name="lucideSettings" size="14" />
             {{ 'config.edit' | transloco }}
@@ -1387,26 +1384,8 @@ export class ClusterDetailComponent implements OnDestroy {
     await this.run(() => this.api.invoke(patchCluster, { ns: this.ns(), name: this.name(), body: { workload } }));
   }
 
-  async openConfig(d: ClusterDetail): Promise<void> {
-    let catalog: GucInfo[];
-    try {
-      catalog = await this.api.invoke(listGucs);
-    } catch {
-      this.error.set('Could not load the settings catalog.');
-      return;
-    }
-    const parameters = await firstValueFrom(
-      this.dialog.open<Record<string, string> | undefined>(ClusterConfigDialogComponent, {
-        context: { parameters: d.parameters ?? {}, catalog },
-        contentClass: EDITOR_DIALOG_CLASS,
-      }).closed$,
-    );
-    if (!parameters) {
-      return;
-    }
-    await this.run(() =>
-      this.api.invoke(patchCluster, { ns: this.ns(), name: this.name(), body: { parameters } }),
-    );
+  openConfig(): void {
+    void this.router.navigate(['/namespaces', this.ns(), 'clusters', this.name(), 'config']);
   }
 
   async openTls(d: ClusterDetail): Promise<void> {
