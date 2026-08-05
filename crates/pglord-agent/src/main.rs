@@ -160,7 +160,7 @@ async fn main() -> anyhow::Result<()> {
     // pg_upgrade carries no optimizer statistics, so a freshly converted
     // cluster is correct but slow until they are rebuilt — which reads to a
     // user as a failed upgrade.
-    if !cfg.upgrade_in_place.is_empty() && cfg.role == Role::Primary {
+    if cfg.upgrade_in_place.is_some() && cfg.role == Role::Primary {
         let cfg_v = cfg.clone();
         tokio::spawn(async move { pglord_agent::pgupgrade::analyze(&cfg_v).await });
     }

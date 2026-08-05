@@ -627,25 +627,25 @@ mod tests {
         let dir = std::env::temp_dir().join("pglord-agent-test-inplace");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("mkdir");
-        let cfg_with = |v: &str| -> Config {
+        let cfg_with = |v: Option<u32>| -> Config {
             let mut c: Config =
                 serde_json::from_value(serde_json::json!({ "role": "primary" })).expect("config");
-            c.upgrade_in_place = v.to_string();
+            c.upgrade_in_place = v;
             c.pgdata = dir.clone();
             c
         };
 
         // No data directory yet: a fresh instance initdbs, it does not upgrade.
-        assert_eq!(in_place_pending(&dir, &cfg_with("16")), None);
+        assert_eq!(in_place_pending(&dir, &cfg_with(Some(16))), None);
 
         std::fs::write(dir.join("PG_VERSION"), "16\n").expect("write");
-        assert_eq!(in_place_pending(&dir, &cfg_with("16")), Some(16));
+        assert_eq!(in_place_pending(&dir, &cfg_with(Some(16))), Some(16));
         // No marker: the ordinary major-mismatch refusal must still apply.
-        assert_eq!(in_place_pending(&dir, &cfg_with("")), None);
+        assert_eq!(in_place_pending(&dir, &cfg_with(None)), None);
         // Already converted (a pod restart after success): nothing to do, or
         // the instance would try to upgrade its upgraded directory.
         std::fs::write(dir.join("PG_VERSION"), "17\n").expect("write");
-        assert_eq!(in_place_pending(&dir, &cfg_with("16")), None);
+        assert_eq!(in_place_pending(&dir, &cfg_with(Some(16))), None);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

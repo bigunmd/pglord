@@ -62,9 +62,12 @@ pub struct Config {
     #[serde(default = "default_empty")]
     pub s3_secret_key: String,
     /// In-place major upgrade: the major this instance's data directory is
-    /// being converted *from*. Empty = ordinary boot.
-    #[serde(default = "default_empty")]
-    pub upgrade_in_place: String,
+    /// being converted *from*. None = ordinary boot.
+    ///
+    /// Typed as a number, not a string: the env layer coerces a numeric value
+    /// to an integer, and a String field then fails to deserialize outright.
+    #[serde(default)]
+    pub upgrade_in_place: Option<u32>,
     /// Blue-green major upgrades: when set, this instance belongs to the new
     /// (green) set and its primary bootstraps as a logical subscriber of the
     /// named host — the running cluster's rw Service. Empty = ordinary
@@ -103,7 +106,7 @@ fn default_superuser() -> String {
 impl Config {
     /// The major an in-place upgrade is converting this data directory from.
     pub fn in_place_major(&self) -> Option<u32> {
-        self.upgrade_in_place.parse().ok()
+        self.upgrade_in_place
     }
 
     pub fn load() -> anyhow::Result<Config> {
