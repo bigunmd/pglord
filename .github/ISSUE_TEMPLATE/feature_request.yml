@@ -1,0 +1,64 @@
+name: Feature request
+description: Suggest something pglord should do
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before writing: the [Current
+        limitations](https://github.com/bigunmd/pglord/blob/master/docs/user-guide.md#current-limitations)
+        section lists what is knowingly missing, and
+        `docs/superpowers/specs/` records what was considered and deliberately
+        left out, and why. If your idea is in an "Out of scope" list and that
+        reasoning is wrong, say so — that is the most useful kind of request.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: >
+        What are you trying to do, and what stops you today? Describe the
+        situation rather than the solution — the fix may not be the one you
+        have in mind.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like pglord to do
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you are doing instead
+      description: >
+        Workarounds you have tried, or how another operator solves this. Useful
+        even when the answer is "nothing".
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      multiple: true
+      options:
+        - Availability (failover, switchover, replication)
+        - Backups and restore
+        - Upgrades
+        - Configuration (GUCs, pg_hba, roles, extensions)
+        - Authentication and authorization
+        - Operator mode / multi-namespace
+        - Web UI
+        - REST API
+        - Metrics and observability
+        - Packaging (Helm chart, manifests, images)
+        - Documentation
+
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: Contribution
+      options:
+        - label: I would be willing to work on this

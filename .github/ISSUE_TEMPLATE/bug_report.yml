@@ -1,0 +1,116 @@
+name: Bug report
+description: Something does not behave the way it should
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. The fields below are the ones that usually
+        decide what pglord does, so filling them in saves a round trip.
+
+        **Security issue?** Do not use this form — see
+        [SECURITY.md](https://github.com/bigunmd/pglord/blob/master/SECURITY.md).
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you got instead.
+      placeholder: |
+        I created a cluster with 2 replicas and ...
+        I expected ...
+        Instead ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: >
+        Steps, and the cluster spec if one is involved. A `kubectl get cm
+        <cluster>-spec -o yaml` (or the PostgresCluster CR in operator mode)
+        is ideal — redact credentials.
+      render: shell
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: pglord version
+      description: "`GET /api/v1/version`, the chart's appVersion, or the server image tag."
+      placeholder: "0.2.1"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: How is pglord installed
+      options:
+        - Helm chart
+        - Raw manifests (deploy/k8s)
+        - minikube dev stand (make stand-deploy)
+        - Built from source / cargo run
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Mode
+      description: "`PGLORD_SPEC_BACKEND` and `PGLORD_ALL_NAMESPACES`."
+      options:
+        - Standalone — configmap backend, single namespace (default)
+        - Operator — crd backend, single namespace
+        - Operator — crd backend, all namespaces
+    validations:
+      required: true
+
+  - type: dropdown
+    id: auth
+    attributes:
+      label: Authentication mode
+      description: Relevant for anything returning 401 or 403.
+      multiple: true
+      options:
+        - None (open, the default)
+        - Static tokens
+        - OIDC
+        - OIDC with Kubernetes RBAC (PGLORD_AUTH_OIDC_RBAC)
+        - Kubernetes tokens (PGLORD_AUTH_KUBERNETES)
+
+  - type: input
+    id: agent-image
+    attributes:
+      label: Agent image
+      description: Decides the PostgreSQL major. Empty means the server default.
+      placeholder: "ghcr.io/bigunmd/pglord-agent:18"
+
+  - type: input
+    id: k8s
+    attributes:
+      label: Kubernetes version and distribution
+      placeholder: "v1.31, EKS / GKE / k3s / minikube"
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: >
+        Server logs (`kubectl -n pglord logs deploy/pglord-server`) and, for
+        anything involving a cluster's own behaviour, the agent container of
+        the affected pod. Redact credentials.
+      render: shell
+
+  - type: textarea
+    id: preflight
+    attributes:
+      label: Permissions
+      description: >
+        If pglord failed to create or change something, paste
+        `GET /api/v1/preflight` or a screenshot of the Permissions page — a
+        surprising number of failures are missing RBAC.
+      render: shell

@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/bigunmd/pglord/security/advisories/new
+    about: Report privately. Please do not open a public issue.
+  - name: User guide
+    url: https://github.com/bigunmd/pglord/blob/master/docs/user-guide.md
+    about: Install, day-2 operations, authentication, troubleshooting, and the current limitations.
+  - name: Design specs and implementation plans
+    url: https://github.com/bigunmd/pglord/tree/master/docs/superpowers
+    about: Why non-obvious decisions were made, and what was deliberately left out of scope.
