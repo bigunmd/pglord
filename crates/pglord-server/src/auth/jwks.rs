@@ -60,17 +60,19 @@ impl OidcValidator {
         &self.client_id
     }
 
-    pub async fn validate(&self, token: &str) -> bool {
+    /// None = rejected. Some(claims) = a valid token; the caller may map the
+    /// claims to an authorization subject.
+    pub async fn validate(&self, token: &str) -> Option<serde_json::Value> {
         match self.validate_inner(token).await {
-            Ok(()) => true,
+            Ok(claims) => Some(claims),
             Err(e) => {
                 tracing::warn!(error = %e, "OIDC token rejected");
-                false
+                None
             }
         }
     }
 
-    async fn validate_inner(&self, token: &str) -> anyhow::Result<()> {
+    async fn validate_inner(&self, token: &str) -> anyhow::Result<serde_json::Value> {
         let header = decode_header(token)?;
         // Asymmetric signatures only: accepting an HMAC alg here would let a
         // client sign tokens with the *public* key material (alg confusion).
@@ -97,8 +99,7 @@ impl OidcValidator {
         validation.set_audience(&[self.audience.as_str()]);
         validation.set_issuer(&[self.issuer.as_str()]);
         validation.set_required_spec_claims(&["exp", "aud", "iss"]);
-        decode::<serde_json::Value>(token, &key, &validation)?;
-        Ok(())
+        Ok(decode::<serde_json::Value>(token, &key, &validation)?.claims)
     }
 
     /// Cached key lookup; on a miss, refetch the JWKS (rate-limited) so
@@ -266,9 +267,29 @@ aHCSV9HUW+HVYQd4vniU6qpC
         let idp = spawn_idp().await;
         let v = validator(&idp);
         let token = mint(Some("test-key"), &idp.base, "pglord", now() + 3600);
-        assert!(v.validate(&token).await);
-        assert!(v.validate(&token).await);
+        assert!(v.validate(&token).await.is_some());
+        assert!(v.validate(&token).await.is_some());
         assert_eq!(idp.jwks_fetches.load(Ordering::SeqCst), 1, "cache hit");
+    }
+
+    #[tokio::test]
+    async fn valid_token_returns_its_claims() {
+        // The claims are what the RBAC path maps to a Kubernetes subject, so
+        // they have to survive validation rather than be decoded and dropped.
+        let idp = spawn_idp().await;
+        let v = validator(&idp);
+        let mut header = Header::new(Algorithm::RS256);
+        header.kid = Some("test-key".into());
+        let claims = serde_json::json!({
+            "iss": idp.base, "aud": "pglord", "exp": now() + 3600,
+            "sub": "alice", "email": "alice@corp.com",
+            "groups": ["platform-team", "sre"],
+        });
+        let key = EncodingKey::from_rsa_pem(TEST_PEM.as_bytes()).expect("test key");
+        let token = encode(&header, &claims, &key).expect("encode");
+        let got = v.validate(&token).await.expect("accepted");
+        assert_eq!(got["email"], "alice@corp.com");
+        assert_eq!(got["groups"][1], "sre");
     }
 
     #[tokio::test]
@@ -276,7 +297,7 @@ aHCSV9HUW+HVYQd4vniU6qpC
         let idp = spawn_idp().await;
         let v = validator(&idp);
         let token = mint(Some("test-key"), &idp.base, "pglord", now() - 3600);
-        assert!(!v.validate(&token).await);
+        assert!(v.validate(&token).await.is_none());
     }
 
     #[tokio::test]
@@ -284,7 +305,7 @@ aHCSV9HUW+HVYQd4vniU6qpC
         let idp = spawn_idp().await;
         let v = validator(&idp);
         let token = mint(Some("test-key"), &idp.base, "other-app", now() + 3600);
-        assert!(!v.validate(&token).await);
+        assert!(v.validate(&token).await.is_none());
     }
 
     #[tokio::test]
@@ -297,7 +318,7 @@ aHCSV9HUW+HVYQd4vniU6qpC
             "pglord",
             now() + 3600,
         );
-        assert!(!v.validate(&token).await);
+        assert!(v.validate(&token).await.is_none());
     }
 
     #[tokio::test]
@@ -309,7 +330,7 @@ aHCSV9HUW+HVYQd4vniU6qpC
         let claims = serde_json::json!({"iss": idp.base, "aud": "pglord", "exp": now() + 3600});
         let key = EncodingKey::from_secret(b"guessable");
         let token = encode(&header, &claims, &key).expect("encode");
-        assert!(!v.validate(&token).await);
+        assert!(v.validate(&token).await.is_none());
         assert_eq!(
             idp.jwks_fetches.load(Ordering::SeqCst),
             0,
@@ -322,7 +343,7 @@ aHCSV9HUW+HVYQd4vniU6qpC
         let idp = spawn_idp().await;
         let v = validator(&idp);
         let token = mint(None, &idp.base, "pglord", now() + 3600);
-        assert!(!v.validate(&token).await);
+        assert!(v.validate(&token).await.is_none());
     }
 
     #[tokio::test]
@@ -330,9 +351,9 @@ aHCSV9HUW+HVYQd4vniU6qpC
         let idp = spawn_idp().await;
         let v = validator(&idp);
         let good = mint(Some("test-key"), &idp.base, "pglord", now() + 3600);
-        assert!(v.validate(&good).await);
+        assert!(v.validate(&good).await.is_some());
         let unknown = mint(Some("rotated-key"), &idp.base, "pglord", now() + 3600);
-        assert!(!v.validate(&unknown).await);
+        assert!(v.validate(&unknown).await.is_none());
         assert_eq!(
             idp.jwks_fetches.load(Ordering::SeqCst),
             1,
@@ -345,10 +366,10 @@ aHCSV9HUW+HVYQd4vniU6qpC
         let idp = spawn_idp().await;
         let v = validator(&idp).with_refetch_min(Duration::ZERO);
         let good = mint(Some("test-key"), &idp.base, "pglord", now() + 3600);
-        assert!(v.validate(&good).await);
+        assert!(v.validate(&good).await.is_some());
         idp.serve_second_key.store(true, Ordering::SeqCst);
         let rotated = mint(Some("rotated-key"), &idp.base, "pglord", now() + 3600);
-        assert!(v.validate(&rotated).await);
+        assert!(v.validate(&rotated).await.is_some());
         assert_eq!(idp.jwks_fetches.load(Ordering::SeqCst), 2, "one refetch");
     }
 
@@ -366,6 +387,6 @@ aHCSV9HUW+HVYQd4vniU6qpC
             "pglord",
             now() + 3600,
         );
-        assert!(!v.validate(&token).await);
+        assert!(v.validate(&token).await.is_none());
     }
 }

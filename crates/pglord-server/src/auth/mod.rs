@@ -107,7 +107,7 @@ pub async fn middleware(
         return next.run(req).await;
     }
     if let Some(oidc) = &auth.oidc
-        && oidc.validate(token).await
+        && oidc.validate(token).await.is_some()
     {
         return next.run(req).await;
     }
