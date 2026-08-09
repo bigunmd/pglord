@@ -2172,12 +2172,19 @@ components:
       - version
       - namespace
       - all_namespaces
+      - default_agent_image
       properties:
         all_namespaces:
           type: boolean
           description: |-
             The server watches every namespace, so `namespace` is only its own
             home and clusters may live anywhere.
+        default_agent_image:
+          type: string
+          description: |-
+            The image a cluster gets when it names none — which is what decides
+            its PostgreSQL major. Reported so the UI can show it instead of
+            leaving the most consequential default invisible.
         namespace:
           type: string
           description: |-

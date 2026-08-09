@@ -10,6 +10,13 @@ export interface VersionResponse {
   all_namespaces: boolean;
 
   /**
+   * The image a cluster gets when it names none — which is what decides
+   * its PostgreSQL major. Reported so the UI can show it instead of
+   * leaving the most consequential default invisible.
+   */
+  default_agent_image: string;
+
+  /**
    * The namespace this server manages. Clients that have no namespace
    * context of their own — creating the very first cluster, for instance —
    * must target this one rather than guessing "default".

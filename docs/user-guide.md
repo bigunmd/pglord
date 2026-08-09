@@ -58,17 +58,27 @@ helm install pglord ./charts/pglord \
   --set agentImage=ghcr.io/bigunmd/pglord-agent:17
 ```
 
-**Set `agentImage`.** It is the image your Postgres instances run, used whenever
-a cluster is created without naming one. The built-in default,
-`pglord-agent:dev`, exists only on a development machine — leave it in place on
-a real cluster and every cluster you create sits in `ImagePullBackOff`.
+**`agentImage` picks your PostgreSQL major.** It is the image your Postgres
+instances run whenever a cluster is created without naming one, and it defaults
+to `ghcr.io/bigunmd/pglord-agent:18`. Set it if you want a different major or
+your own registry:
+
+```bash
+  --set agentImage=ghcr.io/bigunmd/pglord-agent:17
+```
 
 Agent images are tagged by **PostgreSQL major**, not by pglord version, because
-the major is what decides whether your data can be read: `17`, `18`,
-`17-timescaledb`. Release-pinned tags exist alongside them as
-`<pglord-version>-pg<major>`, e.g. `0.2.0-pg17`. The server image is tagged with
-the pglord version (`0.2.0`, or `latest`), and the chart defaults `image.tag` to
-its own `appVersion`, so you normally set only `image.repository`.
+the major is what decides whether your data can be read: `16`, `17`, `18`, each
+also with a `-timescaledb` variant. Release-pinned tags exist alongside them as
+`<pglord-version>-pg<major>`, e.g. `0.2.0-pg17`. Nothing is tagged `latest` on
+the agent side on purpose — a moving major would change the version your data
+can be read by. The server image *is* tagged with the pglord version (`0.2.0`,
+or `latest`), and the chart defaults `image.tag` to its own `appVersion`, so you
+normally set only `image.repository`.
+
+Choose the major deliberately: changing it later is a [major version
+upgrade](#major-version-upgrades), the most involved operation pglord performs.
+The create form shows the image a cluster will get before you submit it.
 
 Installing into a different namespace needs nothing more than `--namespace`:
 pglord is namespaced throughout, so two installations in two namespaces are

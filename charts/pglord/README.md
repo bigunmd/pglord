@@ -22,13 +22,13 @@ gives you two independent installations.
 ```bash
 helm install pglord ./charts/pglord \
   --namespace pglord --create-namespace \
-  --set image.repository=<registry>/pglord-server \
-  --set agentImage=ghcr.io/bigunmd/pglord-agent:17
+  --set image.repository=ghcr.io/bigunmd/pglord-server
 ```
 
-`agentImage` is tagged by PostgreSQL major (`16`, `17`, `18`, each also with a
-`-timescaledb` variant), not by pglord version; `<version>-pg<major>` tags are
-published per release. `image.tag` defaults to the chart's `appVersion`.
+That is enough to start: `agentImage` already points at a published PostgreSQL
+18 image, and `image.tag` defaults to the chart's `appVersion`. See
+[`agentImage`](#agentimage-chooses-your-postgresql-major) to choose a different
+major.
 
 Then reach the UI:
 
@@ -52,12 +52,21 @@ For per-namespace permissions rather than all-or-nothing admin, use
 `auth.kubernetes` or `auth.oidc.rbac`; both authorize every request against
 Kubernetes RBAC. See the user guide's Authentication section.
 
-## `agentImage` is not optional in practice
+## `agentImage` chooses your PostgreSQL major
 
-The built-in default, `pglord-agent:dev`, exists only on a development machine.
-Leave it in place on a real cluster and every cluster you create sits in
-`ImagePullBackOff`. Set `agentImage` to something your nodes can pull; it
-becomes the image used whenever a cluster is created without naming one.
+It is the image used whenever a cluster is created without naming one, and it
+defaults to `ghcr.io/bigunmd/pglord-agent:18`. Override it to run a different
+major, to use a `-timescaledb` variant, or to serve the image from a registry
+your nodes can reach:
+
+```bash
+--set agentImage=<registry>/pglord-agent:17
+```
+
+Pick the major deliberately — changing it afterwards means a major version
+upgrade, the most involved operation pglord performs. The tag is pinned to a
+major on purpose; there is no `latest` agent tag, because a moving major would
+change the version your existing data can be read by.
 
 ## Values
 
@@ -66,7 +75,7 @@ becomes the image used whenever a cluster is created without naming one.
 | `image.repository` | `pglord-server` | Server image |
 | `image.tag` | `""` | Defaults to the chart's `appVersion` |
 | `image.pullPolicy` | `IfNotPresent` | |
-| `agentImage` | `pglord-agent:dev` | Image for Postgres instances. **Set this.** |
+| `agentImage` | `ghcr.io/bigunmd/pglord-agent:18` | Image for Postgres instances; its tag is their PostgreSQL major |
 | `imagePullSecrets` | `[]` | Applied to the server pod |
 | `replicaCount` | `1` | See note below |
 | `serviceAccount.create` | `true` | |

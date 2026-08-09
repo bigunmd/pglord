@@ -144,10 +144,14 @@ const REPLICA_CHOICES = [1, 2, 3, 4, 5] as const;
           id="pg-cluster-image"
           [ngModel]="image()"
           (ngModelChange)="image.set($event)"
-          [placeholder]="'clusters.imageDefault' | transloco"
+          [placeholder]="defaultImage() || ('clusters.imageDefault' | transloco)"
         />
         <p class="text-muted-foreground text-xs leading-relaxed">
-          {{ 'clusters.imageHelp' | transloco }}
+          @if (defaultImage(); as fallback) {
+            {{ 'clusters.imageDefaultHelp' | transloco: { image: fallback } }}
+          } @else {
+            {{ 'clusters.imageHelp' | transloco }}
+          }
         </p>
       </div>
 
@@ -308,6 +312,7 @@ export class ClusterCreatePageComponent {
       // The route's namespace wins — it is what the user was looking at.
       this.namespace.set(this.ns() || v.namespace || '');
       this.namespaceFixed.set(!v.all_namespaces);
+      this.defaultImage.set(v.default_agent_image ?? '');
       if (v.all_namespaces) {
         // Namespaces that already hold clusters make useful suggestions; the
         // field stays free-form because a new one is perfectly valid.
@@ -334,6 +339,10 @@ export class ClusterCreatePageComponent {
   // Empty means "not specified": the request omits the field and the server
   // supplies the image this deployment was configured with.
   protected readonly image = signal('');
+  /** What the server will actually use when the field is left empty. Shown
+   * because it decides the cluster's PostgreSQL major, which is the one
+   * choice here that is genuinely painful to change later. */
+  protected readonly defaultImage = signal('');
 
   protected readonly advanced = signal(false);
   protected readonly credentialsSecret = signal('');

@@ -100,23 +100,23 @@ copy of the cluster, which costs double the disk and compute while it runs.
 
 ## Install
 
-You need a Kubernetes namespace, `kubectl`, and the two images reachable from the
-cluster. Prebuilt images are published to GHCR by CI for PostgreSQL 16, 17 and 18, with
-and without TimescaleDB; you can also build them locally.
+You need a Kubernetes namespace and `kubectl`. Images are published to GHCR by CI —
+`pglord-server` and `pglord-agent` for PostgreSQL 16, 17 and 18, with and without
+TimescaleDB — and the chart points at them by default, so nothing needs building first.
 
 ### With Helm (recommended)
 
 ```bash
 helm install pglord ./charts/pglord \
   --namespace pglord --create-namespace \
-  --set image.repository=<registry>/pglord-server \
-  --set agentImage=ghcr.io/bigunmd/pglord-agent:17
+  --set image.repository=ghcr.io/bigunmd/pglord-server
 ```
 
-**Set `agentImage`.** It is the image your Postgres instances run. The built-in default
-exists only for local development — leave it in place on a real cluster and every
-cluster you create sits in `ImagePullBackOff`. See `charts/pglord/README.md` for every
-value.
+**`agentImage` chooses your PostgreSQL major.** It defaults to
+`ghcr.io/bigunmd/pglord-agent:18`, so that install works as-is; set it to `:17`, `:16`
+or a `-timescaledb` variant to run something else, or point it at your own registry.
+Pick deliberately — changing it later is a major version upgrade. See
+`charts/pglord/README.md` for every value.
 
 ### With plain manifests
 

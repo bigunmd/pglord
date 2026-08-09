@@ -23,9 +23,12 @@ spec:
           ports: [{ containerPort: 8080, name: http }]
           env:
             - { name: PGLORD_LOG_LEVEL, value: "info" }
-            # Image for clusters created without one. On a real cluster this
-            # has to be something the nodes can pull; here it is the tag
-            # `minikube image load` puts in place.
+            # Image for clusters created without one. Deliberately NOT the
+            # built-in default (ghcr.io/bigunmd/pglord-agent:18) that the Helm
+            # chart uses: these manifests are the minikube dev stand, and the
+            # e2e suites exist to test the agent `make agent-image` just built,
+            # not one pulled from a registry. Every image here is a local :dev
+            # tag `minikube image load` puts in place.
             - { name: PGLORD_DEFAULT_AGENT_IMAGE, value: "pglord-agent:dev" }
             # Spec backend: "configmap" (standalone, default) or "crd"
             # (operator mode — install deploy/crds/ and uncomment the

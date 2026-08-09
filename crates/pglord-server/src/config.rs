@@ -101,8 +101,12 @@ fn default_oidc_scopes() -> String {
     "openid profile email offline_access".into()
 }
 
+/// Pinned to a PostgreSQL major, not to `latest`: the major decides what can
+/// read the data, so it must never move under an existing install. Override
+/// with PGLORD_DEFAULT_AGENT_IMAGE (chart: `agentImage`) to run a different
+/// one; the dev stand points this at the locally built `pglord-agent:dev`.
 fn default_agent_image() -> String {
-    "pglord-agent:dev".into()
+    "ghcr.io/bigunmd/pglord-agent:18".into()
 }
 
 fn default_http_addr() -> SocketAddr {
@@ -344,14 +348,15 @@ mod tests {
 
     #[test]
     fn the_default_agent_image_comes_from_the_environment() {
-        // This is what the Helm chart's `agentImage` sets. Without it every
-        // cluster created on a real deployment lands in ImagePullBackOff,
-        // because the compile-time default only exists on a dev machine.
+        // The built-in default is a published image so a fresh install can
+        // actually create a cluster; the chart's `agentImage` overrides it to
+        // choose a different PostgreSQL major or a private registry.
         figment::Jail::expect_with(|_jail| {
-            assert_eq!(
-                Config::load().expect("defaults").default_agent_image,
-                "pglord-agent:dev"
-            );
+            let image = Config::load().expect("defaults").default_agent_image;
+            assert_eq!(image, "ghcr.io/bigunmd/pglord-agent:18");
+            // Never `latest`: a moving major would rewrite what an existing
+            // cluster's data can be read by.
+            assert!(!image.ends_with(":latest"));
             Ok(())
         });
         figment::Jail::expect_with(|jail| {

@@ -180,6 +180,19 @@ async fn whoami_needs_a_credential_and_reports_none_when_auth_is_off() {
 }
 
 #[tokio::test]
+async fn version_reports_the_default_agent_image() {
+    // The create form leaves the image field empty for most users, so the UI
+    // has to be able to show which PostgreSQL major that will actually be —
+    // it is the one choice that is painful to reverse later.
+    let (status, body) = send(test_app(), "/api/v1/version", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["default_agent_image"],
+        pglord_server::config::Config::test_default().default_agent_image
+    );
+}
+
+#[tokio::test]
 async fn auth_config_is_in_the_openapi_contract() {
     let (_router, api) = pglord_server::app::build(
         pglord_server::health::Readiness::default(),

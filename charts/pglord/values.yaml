@@ -7,11 +7,12 @@ image:
   tag: "" # defaults to the chart's appVersion
   pullPolicy: IfNotPresent
 
-# Image used for Postgres instances when a cluster does not name one.
-# This must be reachable from the cluster: leaving the built-in default in place
-# on a real cluster gives every new cluster ImagePullBackOff, since
-# `pglord-agent:dev` only exists on a local development machine.
-agentImage: pglord-agent:dev
+# Image used for Postgres instances when a cluster does not name one — this is
+# what picks their PostgreSQL major. Change it to run a different major (16, 17,
+# 18, each also with a `-timescaledb` variant) or to serve the image from your
+# own registry. Pinned to a major deliberately: `latest` would move the version
+# your data can be read by. A cluster can still override it per-cluster.
+agentImage: ghcr.io/bigunmd/pglord-agent:18
 
 imagePullSecrets: []
 nameOverride: ""

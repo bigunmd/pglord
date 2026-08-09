@@ -362,6 +362,7 @@
     "hideAdvanced": "Hide secrets, environment and init scripts",
     "imageDefault": "Server default",
     "imageHelp": "Leave empty to use the image this pglord was configured with. Set one only to pin a specific agent image.",
+    "imageDefaultHelp": "Leave empty and this cluster runs {{image}}. The tag decides its PostgreSQL major, which cannot be changed without a major upgrade.",
     "hibernated": "Hibernated",
     "namespace": "Namespace",
     "allNamespaces": "All namespaces",

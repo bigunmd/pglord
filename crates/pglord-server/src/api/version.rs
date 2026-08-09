@@ -3,7 +3,7 @@ use axum::extract::State;
 use serde::Serialize;
 use utoipa::ToSchema;
 
-use crate::app::ClusterOps;
+use crate::app::AppState;
 
 #[derive(Serialize, ToSchema)]
 pub struct VersionResponse {
@@ -15,6 +15,10 @@ pub struct VersionResponse {
     /// The server watches every namespace, so `namespace` is only its own
     /// home and clusters may live anywhere.
     pub all_namespaces: bool,
+    /// The image a cluster gets when it names none — which is what decides
+    /// its PostgreSQL major. Reported so the UI can show it instead of
+    /// leaving the most consequential default invisible.
+    pub default_agent_image: String,
 }
 
 #[utoipa::path(
@@ -23,10 +27,14 @@ pub struct VersionResponse {
     tag = "system",
     responses((status = 200, description = "Server version", body = VersionResponse))
 )]
-pub async fn version(State(ops): State<Option<ClusterOps>>) -> Json<VersionResponse> {
+pub async fn version(State(state): State<AppState>) -> Json<VersionResponse> {
+    let ops = state.cluster_ops.as_ref();
     Json(VersionResponse {
         version: pglord_core::VERSION.into(),
-        namespace: ops.as_ref().map(|o| o.ns.clone()).unwrap_or_default(),
-        all_namespaces: ops.as_ref().is_some_and(|o| o.all_namespaces),
+        namespace: ops.map(|o| o.ns.clone()).unwrap_or_default(),
+        all_namespaces: ops.is_some_and(|o| o.all_namespaces),
+        // From config, not ClusterOps: it is the configured answer whether or
+        // not a Kubernetes environment exists.
+        default_agent_image: state.cfg.default_agent_image.clone(),
     })
 }
