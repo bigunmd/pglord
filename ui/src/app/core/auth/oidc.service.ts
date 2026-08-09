@@ -6,6 +6,7 @@ import { AuthService, StoredCredential } from './auth.service';
 interface OidcDiscovery {
   authorization_endpoint: string;
   token_endpoint: string;
+  end_session_endpoint?: string;
 }
 
 interface PendingLogin {
@@ -13,6 +14,7 @@ interface PendingLogin {
   state: string;
   tokenEndpoint: string;
   clientId: string;
+  endSessionEndpoint?: string;
 }
 
 interface TokenResponse {
@@ -34,8 +36,10 @@ export class OidcService {
   private readonly router = inject(Router);
   private refreshTimer?: ReturnType<typeof setTimeout>;
 
-  /** Redirect to the IdP's authorize endpoint. Never returns normally. */
-  async beginLogin(issuer: string, clientId: string): Promise<void> {
+  /** Redirect to the IdP's authorize endpoint. Never returns normally.
+   * `scopes` comes from the server: hardcoding them here is what left
+   * `offline_access` out and made the refresh timer dead code. */
+  async beginLogin(issuer: string, clientId: string, scopes: string): Promise<void> {
     const discovery = await this.fetchDiscovery(issuer);
     const verifier = randomUrlSafe(64);
     const state = randomUrlSafe(32);
@@ -44,18 +48,42 @@ export class OidcService {
       state,
       tokenEndpoint: discovery.token_endpoint,
       clientId,
+      endSessionEndpoint: discovery.end_session_endpoint,
     };
     sessionStorage.setItem(PENDING_KEY, JSON.stringify(pending));
     const params = new URLSearchParams({
       response_type: 'code',
       client_id: clientId,
       redirect_uri: redirectUri(),
-      scope: 'openid profile',
+      scope: scopes,
       state,
       code_challenge: await s256(verifier),
       code_challenge_method: 'S256',
     });
     location.assign(`${discovery.authorization_endpoint}?${params}`);
+  }
+
+  /** Clear the local credential, and end the IdP session too when the issuer
+   * published an end_session_endpoint — otherwise "sign out" only signs you
+   * out until the next silent redirect hands the session straight back. */
+  logout(): void {
+    const credential = this.auth.current();
+    const endpoint = credential?.endSessionEndpoint;
+    const clientId = credential?.clientId;
+    clearTimeout(this.refreshTimer);
+    this.refreshTimer = undefined;
+    this.auth.logout();
+    if (!endpoint) {
+      void this.router.navigate(['/login']);
+      return;
+    }
+    const params = new URLSearchParams({
+      post_logout_redirect_uri: `${location.origin}/login`,
+    });
+    if (clientId) {
+      params.set('client_id', clientId);
+    }
+    location.assign(`${endpoint}?${params}`);
   }
 
   /** Exchange the code on /login/callback; stores the credential. */
@@ -76,7 +104,7 @@ export class OidcService {
       client_id: pending.clientId,
       code_verifier: pending.verifier,
     });
-    this.storeTokens(tokens, pending.tokenEndpoint, pending.clientId);
+    this.storeTokens(tokens, pending.tokenEndpoint, pending.clientId, pending.endSessionEndpoint);
   }
 
   /** Re-arm the refresh timer from the stored credential (page reloads). */
@@ -87,13 +115,19 @@ export class OidcService {
     }
   }
 
-  private storeTokens(tokens: TokenResponse, tokenEndpoint: string, clientId: string): void {
+  private storeTokens(
+    tokens: TokenResponse,
+    tokenEndpoint: string,
+    clientId: string,
+    endSessionEndpoint?: string,
+  ): void {
     const credential: Omit<StoredCredential, 'kind'> = {
       accessToken: tokens.access_token,
       refreshToken: tokens.refresh_token,
       expiresAt: tokens.expires_in ? Date.now() + tokens.expires_in * 1000 : undefined,
       tokenEndpoint,
       clientId,
+      endSessionEndpoint,
     };
     this.auth.setOidc(credential);
     this.schedule({ kind: 'oidc', ...credential });
@@ -120,7 +154,12 @@ export class OidcService {
       });
       // Rotating refresh tokens: keep the new one when granted.
       tokens.refresh_token ??= credential.refreshToken;
-      this.storeTokens(tokens, credential.tokenEndpoint!, credential.clientId!);
+      this.storeTokens(
+        tokens,
+        credential.tokenEndpoint!,
+        credential.clientId!,
+        credential.endSessionEndpoint,
+      );
     } catch {
       this.auth.logout();
       void this.router.navigate(['/login']);

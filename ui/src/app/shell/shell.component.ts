@@ -1,12 +1,14 @@
-import { Component, inject } from '@angular/core';
-import { Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
+import { Component, inject, signal } from '@angular/core';
+import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { TranslocoModule } from '@jsverse/transloco';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { lucideCheck, lucideLogOut, lucideMonitor, lucideMoon, lucideSun } from '@ng-icons/lucide';
 import { HlmButtonImports } from '@spartan-ng/helm/button';
 import { HlmDropdownMenuImports } from '@spartan-ng/helm/dropdown-menu';
 
+import { WhoamiResponse } from '../api/models/whoami-response';
 import { AuthService } from '../core/auth/auth.service';
+import { OidcService } from '../core/auth/oidc.service';
 import { ThemeMode, ThemeService } from '../core/theme/theme.service';
 import { PglordLogoComponent } from './pglord-logo.component';
 
@@ -78,6 +80,15 @@ import { PglordLogoComponent } from './pglord-logo.component';
             </hlm-dropdown-menu>
           </ng-template>
           @if (auth.current()) {
+            @if (who(); as me) {
+              <span
+                class="text-muted-foreground mr-1 hidden text-xs sm:inline"
+                [title]="'auth.signedInAs' | transloco: { user: me.user || me.mode }"
+                data-testid="signed-in-as"
+              >
+                {{ me.display_name || me.user }}
+              </span>
+            }
             <button
               hlmBtn
               variant="ghost"
@@ -99,11 +110,25 @@ import { PglordLogoComponent } from './pglord-logo.component';
 export class ShellComponent {
   protected readonly theme = inject(ThemeService);
   protected readonly auth = inject(AuthService);
-  private readonly router = inject(Router);
+  private readonly oidc = inject(OidcService);
+
+  /** Who the server says we are. Blank until it answers; a failure here must
+   * not break the header, so it degrades to showing nothing. */
+  protected readonly who = signal<WhoamiResponse | null>(null);
+
+  constructor() {
+    if (this.auth.current()) {
+      this.auth
+        .whoami()
+        .then((me) => this.who.set(me.mode === 'none' ? null : me))
+        .catch(() => this.who.set(null));
+    }
+  }
 
   protected logout(): void {
-    this.auth.logout();
-    void this.router.navigate(['/login']);
+    // Goes through OidcService so an IdP session is ended too when the
+    // issuer supports it; it falls back to a local clear otherwise.
+    this.oidc.logout();
   }
 
   protected readonly themeModes: { mode: ThemeMode; icon: string; labelKey: string }[] = [

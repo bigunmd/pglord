@@ -16,6 +16,7 @@
     "completing": "Completing sign-in…",
     "backToLogin": "Back to sign-in",
     "logout": "Sign out",
+    "signedInAs": "Signed in as {{user}}",
     "kubernetesHint": "Kubernetes tokens work here: kubectl create token <serviceaccount>"
   },
   "nav": {

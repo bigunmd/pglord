@@ -67,7 +67,7 @@ import { PglordLogoComponent } from '../../shell/pglord-logo.component';
               variant="outline"
               class="w-full"
               [disabled]="busy()"
-              (click)="oidcLogin(oidc.issuer, oidc.client_id)"
+              (click)="oidcLogin(oidc.issuer, oidc.client_id, cfg.scopes)"
             >
               {{ 'auth.signInWith' | transloco: { host: issuerHost(oidc.issuer) } }}
             </button>
@@ -101,8 +101,9 @@ export class LoginComponent {
   private async load(): Promise<void> {
     try {
       const cfg = await this.auth.authConfig();
-      if (!cfg.static_tokens_enabled && !cfg.oidc) {
-        // Auth is off server-side: there is nothing to log in to.
+      if (!(await this.auth.enabled())) {
+        // Auth is off server-side: there is nothing to log in to. Note this
+        // has to agree with the guard, or the two bounce the user forever.
         void this.router.navigate(['/']);
         return;
       }
@@ -129,11 +130,11 @@ export class LoginComponent {
     }
   }
 
-  protected async oidcLogin(issuer: string, clientId: string): Promise<void> {
+  protected async oidcLogin(issuer: string, clientId: string, scopes: string): Promise<void> {
     this.busy.set(true);
     this.error.set(null);
     try {
-      await this.oidc.beginLogin(issuer, clientId);
+      await this.oidc.beginLogin(issuer, clientId, scopes);
     } catch {
       this.error.set('auth.oidcUnreachable');
       this.busy.set(false);
