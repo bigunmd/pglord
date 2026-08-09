@@ -22,13 +22,31 @@ pub mod kubernetes;
 /// before it has any credential.
 const PUBLIC_PATH: &str = "/api/v1/auth/config";
 
+/// How the credential on a request was accepted, and as whom. Inserted into
+/// request extensions by every accepting branch; `whoami` is its only reader
+/// today, and it is the seam any future audit logging needs.
+#[derive(Debug, Clone)]
+pub struct Identity {
+    /// "static" | "oidc" | "kubernetes".
+    pub mode: &'static str,
+    /// The subject authorization ran against; None for static tokens.
+    pub subject: Option<kubernetes::Subject>,
+    pub display_name: Option<String>,
+    /// True when this credential is authorized per-namespace by RBAC rather
+    /// than being a full admin.
+    pub rbac: bool,
+}
+
 pub struct AuthState {
     tokens: Vec<String>,
     pub oidc: Option<jwks::OidcValidator>,
-    /// Kubernetes TokenReview/SAR mode; None when the mode is off or no
-    /// Kubernetes environment exists (tokens then fall through to 401 —
-    /// never a 500).
-    pub kubernetes: Option<kubernetes::KubernetesAuthorizer>,
+    /// Claims -> Kubernetes subject mapping; Some when OIDC RBAC is on.
+    pub oidc_rbac: Option<kubernetes::SubjectMapping>,
+    /// Kubernetes bearer tokens are accepted (TokenReview).
+    pub k8s_tokens: bool,
+    /// The review engine, shared by both RBAC paths. None when no Kubernetes
+    /// environment exists — tokens then fall through to 401, never a 500.
+    pub reviews: Option<kubernetes::KubernetesAuthorizer>,
 }
 
 impl AuthState {
@@ -49,11 +67,14 @@ impl AuthState {
                 http,
             )
         });
-        let kubernetes = match (cfg.auth_kubernetes, kube) {
+        // One review engine serves both RBAC paths.
+        let wants_reviews = cfg.auth_kubernetes || cfg.auth_oidc_rbac;
+        let reviews = match (wants_reviews, kube) {
             (true, Some(client)) => Some(kubernetes::KubernetesAuthorizer::new(client)),
             (true, None) => {
                 tracing::warn!(
-                    "PGLORD_AUTH_KUBERNETES is on but no Kubernetes environment exists;                      kubernetes tokens will be rejected"
+                    "Kubernetes-backed authorization is on but no Kubernetes environment \
+                     exists; credentials that depend on it will be rejected"
                 );
                 None
             }
@@ -62,7 +83,11 @@ impl AuthState {
         Some(Arc::new(AuthState {
             tokens: cfg.auth_token_list(),
             oidc,
-            kubernetes,
+            oidc_rbac: cfg
+                .auth_oidc_rbac
+                .then(|| kubernetes::SubjectMapping::new(cfg)),
+            k8s_tokens: cfg.auth_kubernetes,
+            reviews,
         }))
     }
 
@@ -79,6 +104,12 @@ impl AuthState {
         }
         ok
     }
+}
+
+/// Tag the request with the identity that got it in, then let it through.
+async fn accept(mut req: Request, next: Next, identity: Identity) -> Response {
+    req.extensions_mut().insert(identity);
+    next.run(req).await
 }
 
 pub async fn middleware(
@@ -104,21 +135,83 @@ pub async fn middleware(
             .into_response();
     };
     if auth.matches_static(token) {
-        return next.run(req).await;
+        return accept(
+            req,
+            next,
+            Identity {
+                mode: "static",
+                subject: None,
+                display_name: None,
+                rbac: false,
+            },
+        )
+        .await;
     }
     if let Some(oidc) = &auth.oidc
-        && oidc.validate(token).await.is_some()
+        && let Some(claims) = oidc.validate(token).await
     {
-        return next.run(req).await;
+        let Some(mapping) = &auth.oidc_rbac else {
+            // RBAC off: a valid JWT is a full admin, as it has always been.
+            return accept(
+                req,
+                next,
+                Identity {
+                    mode: "oidc",
+                    subject: None,
+                    display_name: None,
+                    rbac: false,
+                },
+            )
+            .await;
+        };
+        let (Some(subject), Some(reviews)) = (mapping.subject(&claims), &auth.reviews) else {
+            return ApiError::unauthorized("auth_invalid")
+                .with_detail(
+                    "The token carries no usable identity, or Kubernetes authorization \
+                     is unavailable.",
+                )
+                .into_response();
+        };
+        let access = kubernetes::authz_target(req.method(), req.uri().path());
+        if reviews
+            .authorize(&kubernetes::token_key(token), &subject, &access)
+            .await
+        {
+            let display_name = mapping.display_name(&claims);
+            return accept(
+                req,
+                next,
+                Identity {
+                    mode: "oidc",
+                    subject: Some(subject),
+                    display_name,
+                    rbac: true,
+                },
+            )
+            .await;
+        }
+        return ApiError::new(axum::http::StatusCode::FORBIDDEN, "forbidden")
+            .with_detail(kubernetes::denial_detail(&subject.user, &access))
+            .into_response();
     }
-    if let Some(k8s) = &auth.kubernetes {
+    if let Some(k8s) = auth.reviews.as_ref().filter(|_| auth.k8s_tokens) {
         let access = kubernetes::authz_target(req.method(), req.uri().path());
         if let Some(subject) = k8s.authenticate(token).await {
             if k8s
                 .authorize(&kubernetes::token_key(token), &subject, &access)
                 .await
             {
-                return next.run(req).await;
+                return accept(
+                    req,
+                    next,
+                    Identity {
+                        mode: "kubernetes",
+                        subject: Some(subject),
+                        display_name: None,
+                        rbac: true,
+                    },
+                )
+                .await;
             }
             return ApiError::new(axum::http::StatusCode::FORBIDDEN, "forbidden")
                 .with_detail(kubernetes::denial_detail(&subject.user, &access))
@@ -217,5 +310,68 @@ mod tests {
     async fn disabled_auth_passes_everything() {
         let (status, _) = get_with(app(None), "/api/v1/ping", None).await;
         assert_eq!(status, StatusCode::OK);
+    }
+
+    fn oidc_cfg(rbac: bool) -> Config {
+        Config {
+            auth_oidc_issuer: "https://idp.example.com".into(),
+            auth_oidc_client_id: "pglord".into(),
+            auth_oidc_rbac: rbac,
+            ..Config::test_default()
+        }
+    }
+
+    #[tokio::test]
+    async fn oidc_rbac_without_kube_env_is_401_not_500() {
+        // The stage-C constraint, now on the OIDC path: an unreachable review
+        // API means "not authenticated", never a server error.
+        let auth = AuthState::from_config(&oidc_cfg(true), reqwest::Client::new(), None);
+        let state = auth.as_ref().expect("auth enabled");
+        assert!(state.oidc_rbac.is_some());
+        assert!(state.reviews.is_none(), "no kube env, no review engine");
+        let (status, body) = get_with(app(auth), "/api/v1/ping", Some("Bearer a.b.c")).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(body["code"], "auth_invalid");
+    }
+
+    #[tokio::test]
+    async fn oidc_rbac_off_keeps_full_admin() {
+        // Asserts CURRENT behavior, not desired behavior: with RBAC off a
+        // valid JWT is still a full admin. Delete this the day the default
+        // flips. The 401 here is only because the mock issuer is unreachable;
+        // what matters is that the branch never reaches an authorization
+        // check at all.
+        let auth = AuthState::from_config(&oidc_cfg(false), reqwest::Client::new(), None);
+        let state = auth.as_ref().expect("auth enabled");
+        assert!(state.oidc.is_some());
+        assert!(state.oidc_rbac.is_none(), "no mapping, so no SAR");
+        assert!(!state.k8s_tokens, "OIDC alone must not accept SA tokens");
+    }
+
+    #[tokio::test]
+    async fn static_token_carries_a_static_identity() {
+        let auth = state("tok-a").expect("auth enabled");
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let sink = captured.clone();
+        let app = Router::new()
+            .route(
+                "/api/v1/ping",
+                get(move |req: HttpRequest<Body>| {
+                    let sink = sink.clone();
+                    async move {
+                        if let Ok(mut s) = sink.lock() {
+                            *s = req.extensions().get::<Identity>().cloned();
+                        }
+                        "ok"
+                    }
+                }),
+            )
+            .layer(axum::middleware::from_fn_with_state(Some(auth), middleware));
+        let (status, _) = get_with(app, "/api/v1/ping", Some("Bearer tok-a")).await;
+        assert_eq!(status, StatusCode::OK);
+        let identity = captured.lock().expect("lock").clone().expect("identity");
+        assert_eq!(identity.mode, "static");
+        assert!(!identity.rbac);
+        assert!(identity.subject.is_none());
     }
 }
