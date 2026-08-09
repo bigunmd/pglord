@@ -70,9 +70,9 @@ your own registry:
 Agent images are tagged by **PostgreSQL major**, not by pglord version, because
 the major is what decides whether your data can be read: `16`, `17`, `18`, each
 also with a `-timescaledb` variant. Release-pinned tags exist alongside them as
-`<pglord-version>-pg<major>`, e.g. `0.2.0-pg17`. Nothing is tagged `latest` on
+`<pglord-version>-pg<major>`, e.g. `0.2.1-pg17`. Nothing is tagged `latest` on
 the agent side on purpose — a moving major would change the version your data
-can be read by. The server image *is* tagged with the pglord version (`0.2.0`,
+can be read by. The server image *is* tagged with the pglord version (`0.2.1`,
 or `latest`), and the chart defaults `image.tag` to its own `appVersion`, so you
 normally set only `image.repository`.
 
