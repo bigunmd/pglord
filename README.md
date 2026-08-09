@@ -56,8 +56,11 @@ rules, declarative roles, databases and extensions, one-time init scripts, custo
 environment, placement/resources/anti-affinity, volume expansion.
 
 **Access** — TLS from a `kubernetes.io/tls` Secret (cert-manager friendly), managed
-PgBouncer, credential rotation, and API authentication via static tokens, OIDC, or
-Kubernetes TokenReview + SubjectAccessReview.
+PgBouncer, credential rotation, and API authentication via static tokens, OIDC or
+Kubernetes tokens. OIDC and Kubernetes credentials can be authorized *per namespace*
+by Kubernetes RBAC — pglord runs a SubjectAccessReview on every request, so whoever
+may `kubectl patch` a cluster may do the same in the UI, and nobody needs a second
+user database.
 
 **Observability** — Prometheus metrics for clusters, instance readiness, failovers,
 backup runs, rotations and synchronous degradation; an RBAC preflight page that asks the
@@ -70,7 +73,7 @@ The table is here to help you pick the right one, not to argue pglord wins.
 
 | | CRDs required | Built-in web UI | HA mechanism | Backups | Major upgrades | License |
 |---|---|---|---|---|---|---|
-| **pglord** 0.1 | **No** (operator mode optional) | Yes, embedded in the server | Own controller | pgBackRest → S3 | Blue-green (online) **or** in-place `pg_upgrade` (downtime) | AGPL-3.0 |
+| **pglord** 0.2 | **No** (operator mode optional) | Yes, embedded in the server | Own controller | pgBackRest → S3 | Blue-green (online) **or** in-place `pg_upgrade` (downtime) | AGPL-3.0 |
 | **CloudNativePG** 1.30 | Yes | None documented in the OSS project | Own controller | Barman (deprecating), plugins, volume snapshots | In-place `pg_upgrade` (downtime, since 1.26); logical-replication path also documented (online) | Apache-2.0, CNCF Sandbox |
 | **Zalando** 2.0 | Yes | Yes, official and open source | Patroni (Spilo) | WAL-G | In-place `pg_upgrade` (downtime) | MIT operator, Apache-2.0 Spilo image |
 | **Crunchy PGO** 6.0 | Yes | No — `kubectl pgo` CLI | Patroni | pgBackRest | `PGUpgrade` CR, `pg_upgrade` (full downtime) | Apache-2.0 code; **images restricted** — free production use only under 50 employees |
@@ -107,7 +110,7 @@ and without TimescaleDB; you can also build them locally.
 helm install pglord ./charts/pglord \
   --namespace pglord --create-namespace \
   --set image.repository=<registry>/pglord-server \
-  --set agentImage=<registry>/pglord-agent:17
+  --set agentImage=ghcr.io/bigunmd/pglord-agent:17
 ```
 
 **Set `agentImage`.** It is the image your Postgres instances run. The built-in default
@@ -124,8 +127,9 @@ kubectl -n pglord port-forward svc/pglord-server 8080:80   # http://localhost:80
 ```
 
 For shared access, expose the Service through your ingress rather than port-forwarding,
-and turn on authentication — pglord has none by default, and anyone who can reach it can
-delete a cluster and its volumes.
+and turn on [authentication](docs/user-guide.md#11-authentication) — it is off until you
+configure it, and until then anyone who can reach pglord can delete a cluster and its
+volumes.
 
 ### Building the images yourself
 

@@ -9,6 +9,40 @@ Everything lives in a single namespace. You do not need cluster-admin.
 
 ---
 
+## Contents
+
+1. [Install](#1-install) — [Helm](#with-helm-recommended) · [plain manifests](#with-plain-manifests) · [uninstalling](#uninstalling)
+2. [Check permissions](#2-check-permissions)
+3. [Create a cluster](#3-create-a-cluster)
+4. [Connect an application](#4-connect-an-application)
+5. [What failover looks like](#5-what-failover-looks-like)
+6. [Synchronous replication](#6-synchronous-replication)
+7. [Day-2 operations](#7-day-2-operations)
+8. [Delete a cluster](#8-delete-a-cluster)
+9. [Troubleshooting](#9-troubleshooting)
+10. [Monitoring](#10-monitoring)
+11. [Authentication](#11-authentication)
+
+[Current limitations](#current-limitations)
+
+**Day-2 operations** in detail:
+
+| Availability | Data | Configuration |
+|---|---|---|
+| [Switch the primary](#switch-the-primary-on-purpose) | [Back up to object storage](#back-up-to-object-storage) | [Tune PostgreSQL settings](#tune-postgresql-settings) |
+| [Add or remove instances](#add-or-remove-instances) | [Restore a backup](#restore-a-backup) | [Client access rules (pg_hba)](#client-access-rules-pg_hba) |
+| [Minor version upgrades](#minor-version-upgrades) | [Grow storage](#grow-storage) | [Roles and databases](#roles-and-databases) |
+| [Major version upgrades](#major-version-upgrades) | [Rotating credentials](#rotating-credentials) | [Extensions](#extensions) |
+| [Hibernate a cluster](#hibernate-a-cluster) | [Secrets, env and init](#secrets-environment-and-initialisation) | [Placement and resources](#placement-and-resources) |
+| [Fence an instance](#fence-an-instance) | [TLS for clients](#tls-for-client-connections) | [Connection pooling (PgBouncer)](#connection-pooling-pgbouncer) |
+| [Operator mode (CRD)](#operator-mode-postgrescluster-crd) | [Cluster-wide operation](#cluster-wide-operation-all-namespaces) | |
+
+**Authentication** in detail: [static tokens](#static-api-tokens) ·
+[OIDC](#oidc-single-sign-on) · [OIDC with Kubernetes RBAC](#oidc-with-kubernetes-rbac) ·
+[Kubernetes-native](#kubernetes-native-authentication)
+
+---
+
 ## 1. Install
 
 You need: access to a Kubernetes namespace, and the two pglord images
@@ -21,13 +55,20 @@ or built locally with `make image agent-image` for local clusters like minikube.
 helm install pglord ./charts/pglord \
   --namespace pglord --create-namespace \
   --set image.repository=<registry>/pglord-server \
-  --set agentImage=<registry>/pglord-agent:0.1.0
+  --set agentImage=ghcr.io/bigunmd/pglord-agent:17
 ```
 
 **Set `agentImage`.** It is the image your Postgres instances run, used whenever
 a cluster is created without naming one. The built-in default,
 `pglord-agent:dev`, exists only on a development machine — leave it in place on
 a real cluster and every cluster you create sits in `ImagePullBackOff`.
+
+Agent images are tagged by **PostgreSQL major**, not by pglord version, because
+the major is what decides whether your data can be read: `17`, `18`,
+`17-timescaledb`. Release-pinned tags exist alongside them as
+`<pglord-version>-pg<major>`, e.g. `0.2.0-pg17`. The server image is tagged with
+the pglord version (`0.2.0`, or `latest`), and the chart defaults `image.tag` to
+its own `appVersion`, so you normally set only `image.repository`.
 
 Installing into a different namespace needs nothing more than `--namespace`:
 pglord is namespaced throughout, so two installations in two namespaces are

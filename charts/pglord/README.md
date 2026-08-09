@@ -23,8 +23,12 @@ gives you two independent installations.
 helm install pglord ./charts/pglord \
   --namespace pglord --create-namespace \
   --set image.repository=<registry>/pglord-server \
-  --set agentImage=<registry>/pglord-agent:0.1.0
+  --set agentImage=ghcr.io/bigunmd/pglord-agent:17
 ```
+
+`agentImage` is tagged by PostgreSQL major (`16`, `17`, `18`, each also with a
+`-timescaledb` variant), not by pglord version; `<version>-pg<major>` tags are
+published per release. `image.tag` defaults to the chart's `appVersion`.
 
 Then reach the UI:
 
