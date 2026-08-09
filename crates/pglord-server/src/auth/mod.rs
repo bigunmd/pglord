@@ -113,12 +113,15 @@ pub async fn middleware(
     }
     if let Some(k8s) = &auth.kubernetes {
         let access = kubernetes::authz_target(req.method(), req.uri().path());
-        if let Some(user) = k8s.authenticate(token).await {
-            if k8s.authorize(token, &user, &access).await {
+        if let Some(subject) = k8s.authenticate(token).await {
+            if k8s
+                .authorize(&kubernetes::token_key(token), &subject, &access)
+                .await
+            {
                 return next.run(req).await;
             }
             return ApiError::new(axum::http::StatusCode::FORBIDDEN, "forbidden")
-                .with_detail(kubernetes::denial_detail(&user, &access))
+                .with_detail(kubernetes::denial_detail(&subject.user, &access))
                 .into_response();
         }
     }

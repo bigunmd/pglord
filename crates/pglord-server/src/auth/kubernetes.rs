@@ -150,8 +150,7 @@ pub fn denial_detail(user: &str, access: &Access) -> String {
 }
 
 struct AuthEntry {
-    user: String,
-    groups: Vec<String>,
+    subject: Subject,
     expires: Instant,
 }
 
@@ -166,7 +165,8 @@ pub struct KubernetesAuthorizer {
     grants: Mutex<HashMap<GrantKey, Instant>>,
 }
 
-fn token_key(token: &str) -> String {
+/// Raw tokens never sit in a map key.
+pub fn token_key(token: &str) -> String {
     let mut h = Sha256::new();
     h.update(token.as_bytes());
     format!("{:x}", h.finalize())
@@ -181,14 +181,14 @@ impl KubernetesAuthorizer {
         }
     }
 
-    /// None = rejected. Some(username) = authenticated (cached ~60s).
-    pub async fn authenticate(&self, token: &str) -> Option<String> {
+    /// None = rejected. Some(subject) = authenticated (cached ~60s).
+    pub async fn authenticate(&self, token: &str) -> Option<Subject> {
         let key = token_key(token);
         if let Ok(cache) = self.tokens.lock()
             && let Some(entry) = cache.get(&key)
             && entry.expires > Instant::now()
         {
-            return Some(entry.user.clone());
+            return Some(entry.subject.clone());
         }
         let api: Api<TokenReview> = Api::all(self.client.clone());
         let review = TokenReview {
@@ -211,43 +211,45 @@ impl KubernetesAuthorizer {
         if user.is_empty() {
             return None;
         }
+        let subject = Subject {
+            user,
+            groups: user_info.groups.unwrap_or_default(),
+        };
         if let Ok(mut cache) = self.tokens.lock() {
             cache.retain(|_, e| e.expires > Instant::now());
             cache.insert(
                 key,
                 AuthEntry {
-                    user: user.clone(),
-                    groups: user_info.groups.unwrap_or_default(),
+                    subject: subject.clone(),
                     expires: Instant::now() + TOKEN_TTL,
                 },
             );
         }
-        Some(user)
+        Some(subject)
     }
 
-    /// SAR the mapped target for an already-authenticated token.
-    pub async fn authorize(&self, token: &str, user: &str, access: &Access) -> bool {
+    /// SAR the mapped target for an already-authenticated subject. The
+    /// subject is passed in rather than looked up, so the OIDC path — which
+    /// has no TokenReview entry — uses the identical code, and so an expired
+    /// cache entry can no longer silently strip the groups from the review.
+    /// `cache_key` scopes the grant cache to one credential.
+    pub async fn authorize(&self, cache_key: &str, subject: &Subject, access: &Access) -> bool {
         let (verb, ns) = match access {
             Access::Authenticated => return true,
             Access::Cluster { verb, ns } => (*verb, ns.clone()),
         };
-        let key = (token_key(token), verb, ns.clone());
+        let key = (cache_key.to_string(), verb, ns.clone());
         if let Ok(cache) = self.grants.lock()
             && let Some(until) = cache.get(&key)
             && *until > Instant::now()
         {
             return true;
         }
-        let groups = self
-            .tokens
-            .lock()
-            .ok()
-            .and_then(|c| c.get(&key.0).map(|e| e.groups.clone()))
-            .unwrap_or_default();
+        let groups = subject.groups.clone();
         let api: Api<SubjectAccessReview> = Api::all(self.client.clone());
         let review = SubjectAccessReview {
             spec: SubjectAccessReviewSpec {
-                user: Some(user.to_string()),
+                user: Some(subject.user.clone()),
                 groups: (!groups.is_empty()).then_some(groups),
                 resource_attributes: Some(ResourceAttributes {
                     group: Some("pglord.dev".to_string()),
@@ -279,6 +281,7 @@ impl KubernetesAuthorizer {
 mod tests {
     use super::*;
     use axum::http::Method;
+    use std::sync::Arc;
 
     fn cluster(verb: &'static str, ns: &str) -> Access {
         Access::Cluster {
@@ -452,6 +455,119 @@ mod tests {
         let only_email = serde_json::json!({"email": "a@b.c"});
         assert_eq!(m.display_name(&only_email).as_deref(), Some("a@b.c"));
         assert_eq!(m.display_name(&serde_json::json!({"sub": "x"})), None);
+    }
+
+    /// A stand-in apiserver that records the SubjectAccessReviews it is sent
+    /// and allows only members of `oidc:admins`.
+    async fn spawn_apiserver() -> (kube::Client, Arc<Mutex<Vec<SubjectAccessReviewSpec>>>) {
+        use axum::extract::State;
+        use axum::routing::post;
+
+        let seen: Arc<Mutex<Vec<SubjectAccessReviewSpec>>> = Arc::new(Mutex::new(Vec::new()));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let app = axum::Router::new()
+            .route(
+                "/apis/authorization.k8s.io/v1/subjectaccessreviews",
+                post(
+                    |State(seen): State<Arc<Mutex<Vec<SubjectAccessReviewSpec>>>>,
+                     axum::Json(mut review): axum::Json<SubjectAccessReview>| async move {
+                        let spec = std::mem::take(&mut review.spec);
+                        let allowed = spec
+                            .groups
+                            .as_ref()
+                            .is_some_and(|g| g.iter().any(|g| g == "oidc:admins"));
+                        if let Ok(mut s) = seen.lock() {
+                            s.push(spec);
+                        }
+                        review.status = Some(
+                            k8s_openapi::api::authorization::v1::SubjectAccessReviewStatus {
+                                allowed,
+                                ..Default::default()
+                            },
+                        );
+                        axum::Json(review)
+                    },
+                ),
+            )
+            .with_state(seen.clone());
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve");
+        });
+        let cfg = kube::Config::new(
+            format!("http://{addr}")
+                .parse::<axum::http::Uri>()
+                .expect("uri"),
+        );
+        (kube::Client::try_from(cfg).expect("client"), seen)
+    }
+
+    #[tokio::test]
+    async fn authorize_sends_the_subject_it_is_given() {
+        // Groups used to be read back out of the TokenReview cache, which the
+        // OIDC path never populates — and which silently emptied the SAR if
+        // the 60s entry expired mid-request. They now travel with the call.
+        let (client, seen) = spawn_apiserver().await;
+        let authorizer = KubernetesAuthorizer::new(client);
+        let subject = Subject {
+            user: "oidc:alice@corp.com".into(),
+            groups: vec!["oidc:admins".into()],
+        };
+        let access = cluster("patch", "team-a");
+        assert!(authorizer.authorize("key-1", &subject, &access).await);
+
+        let sent = seen.lock().expect("lock");
+        let spec = sent.first().expect("one review");
+        assert_eq!(spec.user.as_deref(), Some("oidc:alice@corp.com"));
+        assert_eq!(
+            spec.groups.as_deref(),
+            Some(["oidc:admins".to_string()].as_slice())
+        );
+        let attrs = spec.resource_attributes.as_ref().expect("attributes");
+        assert_eq!(attrs.group.as_deref(), Some("pglord.dev"));
+        assert_eq!(attrs.resource.as_deref(), Some("postgresclusters"));
+        assert_eq!(attrs.verb.as_deref(), Some("patch"));
+        assert_eq!(attrs.namespace.as_deref(), Some("team-a"));
+    }
+
+    #[tokio::test]
+    async fn a_denied_subject_is_not_cached_but_a_granted_one_is() {
+        let (client, seen) = spawn_apiserver().await;
+        let authorizer = KubernetesAuthorizer::new(client);
+        let outsider = Subject {
+            user: "oidc:bob".into(),
+            groups: vec!["oidc:devs".into()],
+        };
+        let access = cluster("delete", "team-a");
+        assert!(!authorizer.authorize("key-b", &outsider, &access).await);
+        assert!(!authorizer.authorize("key-b", &outsider, &access).await);
+        assert_eq!(seen.lock().expect("lock").len(), 2, "denials re-checked");
+
+        let admin = Subject {
+            user: "oidc:alice".into(),
+            groups: vec!["oidc:admins".into()],
+        };
+        assert!(authorizer.authorize("key-a", &admin, &access).await);
+        assert!(authorizer.authorize("key-a", &admin, &access).await);
+        assert_eq!(seen.lock().expect("lock").len(), 3, "grant cached");
+    }
+
+    #[tokio::test]
+    async fn authenticated_only_access_needs_no_review() {
+        let (client, seen) = spawn_apiserver().await;
+        let authorizer = KubernetesAuthorizer::new(client);
+        let anyone = Subject {
+            user: "oidc:nobody".into(),
+            groups: Vec::new(),
+        };
+        assert!(
+            authorizer
+                .authorize("key-x", &anyone, &Access::Authenticated)
+                .await
+        );
+        assert!(seen.lock().expect("lock").is_empty());
     }
 
     #[test]
