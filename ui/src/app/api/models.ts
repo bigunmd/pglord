@@ -50,4 +50,5 @@ export type { UpgradePhase } from './models/upgrade-phase';
 export type { UpgradeRequest } from './models/upgrade-request';
 export type { UpgradeStatusDto } from './models/upgrade-status-dto';
 export type { VersionResponse } from './models/version-response';
+export type { WhoamiResponse } from './models/whoami-response';
 export type { WorkloadSpec } from './models/workload-spec';

@@ -111,6 +111,7 @@ pub fn build(
 ) -> (Router, utoipa::openapi::OpenApi) {
     let api = OpenApiRouter::new()
         .routes(routes!(crate::api::auth::auth_config))
+        .routes(routes!(crate::api::auth::whoami))
         .routes(routes!(crate::api::ping::ping))
         .routes(routes!(crate::api::version::version))
         .routes(routes!(

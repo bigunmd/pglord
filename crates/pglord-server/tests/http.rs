@@ -130,6 +130,56 @@ async fn auth_config_reports_oidc_when_configured() {
 }
 
 #[tokio::test]
+async fn auth_config_reports_configured_scopes() {
+    // The SPA must not hardcode scopes: without offline_access most IdPs
+    // issue no refresh token and the refresh timer is dead code.
+    let (status, body) = send(test_app(), "/api/v1/auth/config", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["scopes"], "openid profile email offline_access");
+
+    let cfg = pglord_server::config::Config {
+        auth_oidc_issuer: "https://idp.example.com".into(),
+        auth_oidc_client_id: "pglord".into(),
+        auth_oidc_scopes: "openid email".into(),
+        ..pglord_server::config::Config::test_default()
+    };
+    let (_, body) = send(test_app_with(cfg), "/api/v1/auth/config", None).await;
+    assert_eq!(body["scopes"], "openid email");
+}
+
+#[tokio::test]
+async fn whoami_reports_the_effective_identity() {
+    let cfg = pglord_server::config::Config {
+        auth_tokens: "s3cret".into(),
+        ..pglord_server::config::Config::test_default()
+    };
+    let (status, body) = send(test_app_with(cfg), "/api/v1/auth/whoami", Some("s3cret")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["mode"], "static");
+    assert_eq!(body["rbac"], false);
+    assert_eq!(body["user"], "");
+    assert!(body["groups"].as_array().expect("groups").is_empty());
+}
+
+#[tokio::test]
+async fn whoami_needs_a_credential_and_reports_none_when_auth_is_off() {
+    let cfg = pglord_server::config::Config {
+        auth_tokens: "s3cret".into(),
+        ..pglord_server::config::Config::test_default()
+    };
+    let (status, _) = send(test_app_with(cfg), "/api/v1/auth/whoami", None).await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "whoami reports an identity, so it is not public"
+    );
+
+    let (status, body) = send(test_app(), "/api/v1/auth/whoami", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["mode"], "none");
+}
+
+#[tokio::test]
 async fn auth_config_is_in_the_openapi_contract() {
     let (_router, api) = pglord_server::app::build(
         pglord_server::health::Readiness::default(),
@@ -138,6 +188,7 @@ async fn auth_config_is_in_the_openapi_contract() {
         Default::default(),
     );
     assert!(api.paths.paths.contains_key("/api/v1/auth/config"));
+    assert!(api.paths.paths.contains_key("/api/v1/auth/whoami"));
 }
 
 #[tokio::test]

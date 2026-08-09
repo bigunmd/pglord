@@ -25,6 +25,24 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AuthConfigResponse'
+  /api/v1/auth/whoami:
+    get:
+      tags:
+      - system
+      summary: |-
+        Who the presented credential resolved to. Authenticated, unlike
+        `/auth/config` — it reports an identity. When a namespace 403s
+        unexpectedly this is what shows whether the mapped username matches the
+        RoleBinding: `oidc:alice@corp.com` and `alice@corp.com` are different
+        subjects, and RBAC matching is byte-exact.
+      operationId: whoami
+      responses:
+        '200':
+          description: The identity of the caller
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WhoamiResponse'
   /api/v1/clusters:
     get:
       tags:
@@ -902,6 +920,7 @@ components:
       required:
       - static_tokens_enabled
       - kubernetes_enabled
+      - scopes
       properties:
         kubernetes_enabled:
           type: boolean
@@ -911,6 +930,11 @@ components:
           - type: 'null'
           - $ref: '#/components/schemas/OidcPublicConfig'
             description: Present when OIDC login is available; null otherwise.
+        scopes:
+          type: string
+          description: |-
+            Space-separated scopes the SPA must request. Server-side so an IdP
+            that needs a different set does not require a UI rebuild.
         static_tokens_enabled:
           type: boolean
           description: True when the operator configured at least one static bearer token.
@@ -2162,6 +2186,38 @@ components:
             must target this one rather than guessing "default".
         version:
           type: string
+    WhoamiResponse:
+      type: object
+      description: The identity a credential resolved to, as pglord sees it.
+      required:
+      - mode
+      - user
+      - groups
+      - rbac
+      properties:
+        display_name:
+          type:
+          - string
+          - 'null'
+          description: Human-readable name from the IdP, when it supplied one.
+        groups:
+          type: array
+          items:
+            type: string
+          description: Groups authorization ran against.
+        mode:
+          type: string
+          description: |-
+            How the credential was accepted: "static", "oidc", "kubernetes", or
+            "none" when the API runs unauthenticated.
+        rbac:
+          type: boolean
+          description: |-
+            True when this credential is scoped by Kubernetes RBAC rather than
+            being a full admin.
+        user:
+          type: string
+          description: Username authorization ran against; empty for static tokens.
     WorkloadSpec:
       type: object
       properties:

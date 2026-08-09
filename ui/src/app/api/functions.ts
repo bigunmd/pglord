@@ -3,6 +3,8 @@
 
 export type { AuthConfig$Params as AuthConfig$Params } from './fn/system/auth-config';
 export { authConfig as authConfig } from './fn/system/auth-config';
+export type { Whoami$Params as Whoami$Params } from './fn/system/whoami';
+export { whoami as whoami } from './fn/system/whoami';
 export type { ListGucs$Params as ListGucs$Params } from './fn/system/list-gucs';
 export { listGucs as listGucs } from './fn/system/list-gucs';
 export type { Ping$Params as Ping$Params } from './fn/system/ping';

@@ -11,6 +11,12 @@ export interface AuthConfigResponse {
   oidc?: (null | OidcPublicConfig);
 
   /**
+   * Space-separated scopes the SPA must request. Server-side so an IdP
+   * that needs a different set does not require a UI rebuild.
+   */
+  scopes: string;
+
+  /**
    * True when the operator configured at least one static bearer token.
    */
   static_tokens_enabled: boolean;
