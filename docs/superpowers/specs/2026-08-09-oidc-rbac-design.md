@@ -242,6 +242,30 @@ No new e2e. The in-process mock IdP in `auth/jwks.rs` already covers the JWT
 half, and standing up an IdP on the dev stand would buy coverage of Keycloak
 rather than of pglord.
 
+## Implementation notes (deviations found while building)
+
+- **Preflight reports only the SAR check for OIDC RBAC.** The design said this
+  mode needs "the same binding" as the Kubernetes mode, which is true of the
+  ClusterRole but not of the checks: OIDC validates its own tokens and never
+  calls TokenReview. `required()` now takes both flags and emits `tokenreviews`
+  only for `auth_kubernetes`, with `subjectaccessreviews` emitted once when
+  either is on — a duplicate would have tripped the existing no-duplicates test.
+- **`k8s_tokens` had to gate the Kubernetes branch explicitly.** Because the
+  review engine is now shared, keying that branch on `reviews.is_some()` would
+  have made `PGLORD_AUTH_OIDC_RBAC=true` silently start accepting ServiceAccount
+  tokens. It is gated on the mode flag instead.
+- **`authorize()` gained real test coverage.** The plan expected a cache-surface
+  test, since stage C had left the I/O path untested. A mock apiserver in the
+  style of the existing mock IdP turned out to be cheap, and it asserts the
+  thing the whole feature rests on: that the subject's groups reach the
+  SubjectAccessReview body. It also pins the "denials are never cached" rule.
+- **Contract regeneration landed in the same commit as its code**, not a
+  separate `chore(contract)` one, per CLAUDE.md's rule that regenerated
+  artifacts are committed together with the code that changed them.
+- **`NOTES.txt` now warns conditionally** instead of dropping its warning: the
+  claim was not merely stale, it was correct for an install that configures no
+  auth. It is emitted only when every mode is off.
+
 ## Out of scope (deliberate)
 
 Impersonation for the *write* path — pglord still acts as its own ServiceAccount ·
