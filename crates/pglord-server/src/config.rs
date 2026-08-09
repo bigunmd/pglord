@@ -47,6 +47,30 @@ pub struct Config {
     /// ServiceAccount.
     #[serde(default)]
     pub auth_kubernetes: bool,
+    /// Authorize OIDC credentials through a SubjectAccessReview on
+    /// pglord.dev/postgresclusters instead of granting them full admin. A
+    /// SAR evaluates RBAC against whatever subject strings it is handed, so
+    /// the apiserver does not have to know the IdP — operators just bind
+    /// Roles to the mapped identities. Needs the auth-delegator binding.
+    #[serde(default)]
+    pub auth_oidc_rbac: bool,
+    /// Claim carrying the username; commonly `email` or `preferred_username`.
+    #[serde(default = "default_username_claim")]
+    pub auth_oidc_username_claim: String,
+    /// Prepended to the mapped username. Mirror the apiserver's
+    /// --oidc-username-prefix to match kubectl exactly. Empty = no prefix.
+    #[serde(default = "default_oidc_prefix")]
+    pub auth_oidc_username_prefix: String,
+    /// Claim carrying group membership.
+    #[serde(default = "default_groups_claim")]
+    pub auth_oidc_groups_claim: String,
+    /// Prepended to every mapped group. Empty = no prefix.
+    #[serde(default = "default_oidc_prefix")]
+    pub auth_oidc_groups_prefix: String,
+    /// Scopes the SPA requests. `offline_access` is what makes most IdPs
+    /// issue a refresh token; drop it if yours rejects unknown scopes.
+    #[serde(default = "default_oidc_scopes")]
+    pub auth_oidc_scopes: String,
     /// Where cluster specs live: "configmap" (standalone, default) or "crd"
     /// (operator mode: PostgresCluster resources are the truth).
     #[serde(default = "default_spec_backend")]
@@ -60,6 +84,21 @@ pub struct Config {
 
 fn default_spec_backend() -> String {
     "configmap".into()
+}
+
+fn default_username_claim() -> String {
+    "sub".into()
+}
+fn default_groups_claim() -> String {
+    "groups".into()
+}
+/// Matches Kubernetes' own convention for externally-authenticated subjects,
+/// and keeps IdP identities from colliding with ServiceAccount names.
+fn default_oidc_prefix() -> String {
+    "oidc:".into()
+}
+fn default_oidc_scopes() -> String {
+    "openid profile email offline_access".into()
 }
 
 fn default_agent_image() -> String {
@@ -89,6 +128,11 @@ impl Config {
         // leaves the UI unable to run the OIDC flow at all.
         if !cfg.auth_oidc_issuer.is_empty() && cfg.auth_oidc_client_id.is_empty() {
             anyhow::bail!("PGLORD_AUTH_OIDC_ISSUER is set but PGLORD_AUTH_OIDC_CLIENT_ID is empty");
+        }
+        // Authorizing a credential kind that cannot be issued is a
+        // misconfiguration, not a mode.
+        if cfg.auth_oidc_rbac && cfg.auth_oidc_issuer.is_empty() {
+            anyhow::bail!("PGLORD_AUTH_OIDC_RBAC is set but PGLORD_AUTH_OIDC_ISSUER is empty");
         }
         Ok(cfg)
     }
@@ -147,6 +191,12 @@ impl Config {
             auth_oidc_client_id: String::new(),
             auth_oidc_audience: String::new(),
             auth_kubernetes: false,
+            auth_oidc_rbac: false,
+            auth_oidc_username_claim: default_username_claim(),
+            auth_oidc_username_prefix: default_oidc_prefix(),
+            auth_oidc_groups_claim: default_groups_claim(),
+            auth_oidc_groups_prefix: default_oidc_prefix(),
+            auth_oidc_scopes: default_oidc_scopes(),
             spec_backend: default_spec_backend(),
             all_namespaces: false,
         }
@@ -244,6 +294,50 @@ mod tests {
             let cfg = Config::load().expect("load");
             assert_eq!(cfg.oidc_audience(), "pglord");
             assert!(cfg.auth_enabled());
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn oidc_rbac_defaults_off_with_documented_claim_defaults() {
+        figment::Jail::expect_with(|_jail| {
+            let cfg = Config::load().expect("defaults");
+            assert!(!cfg.auth_oidc_rbac);
+            assert_eq!(cfg.auth_oidc_username_claim, "sub");
+            assert_eq!(cfg.auth_oidc_username_prefix, "oidc:");
+            assert_eq!(cfg.auth_oidc_groups_claim, "groups");
+            assert_eq!(cfg.auth_oidc_groups_prefix, "oidc:");
+            assert_eq!(cfg.auth_oidc_scopes, "openid profile email offline_access");
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn oidc_rbac_without_issuer_fails_at_startup() {
+        // RBAC with nothing to authorize is a misconfiguration, not a mode.
+        figment::Jail::expect_with(|jail| {
+            jail.set_env("PGLORD_AUTH_OIDC_RBAC", "true");
+            assert!(Config::load().is_err());
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn oidc_prefixes_may_be_emptied() {
+        // An operator mirroring an apiserver that sets no prefix must be able
+        // to ask for none, which has to be distinguishable from "unset".
+        figment::Jail::expect_with(|jail| {
+            jail.set_env("PGLORD_AUTH_OIDC_ISSUER", "https://idp.example.com");
+            jail.set_env("PGLORD_AUTH_OIDC_CLIENT_ID", "pglord");
+            jail.set_env("PGLORD_AUTH_OIDC_RBAC", "true");
+            jail.set_env("PGLORD_AUTH_OIDC_USERNAME_PREFIX", "");
+            jail.set_env("PGLORD_AUTH_OIDC_GROUPS_PREFIX", "");
+            jail.set_env("PGLORD_AUTH_OIDC_USERNAME_CLAIM", "email");
+            let cfg = Config::load().expect("load");
+            assert!(cfg.auth_oidc_rbac);
+            assert_eq!(cfg.auth_oidc_username_prefix, "");
+            assert_eq!(cfg.auth_oidc_groups_prefix, "");
+            assert_eq!(cfg.auth_oidc_username_claim, "email");
             Ok(())
         });
     }

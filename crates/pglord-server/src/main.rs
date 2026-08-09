@@ -51,6 +51,15 @@ async fn main() -> anyhow::Result<()> {
              control. Set PGLORD_AUTH_TOKENS or PGLORD_AUTH_OIDC_ISSUER to enable it."
         );
     }
+    // Authenticated but unauthorized OIDC is tolerable in one namespace and
+    // alarming across all of them: the blast radius of a single valid token
+    // is every cluster in the cluster.
+    if !cfg.auth_oidc_issuer.is_empty() && !cfg.auth_oidc_rbac && cfg.all_namespaces {
+        tracing::warn!(
+            "OIDC credentials have full admin across every namespace — set \
+             PGLORD_AUTH_OIDC_RBAC=true and bind Roles to the mapped identities."
+        );
+    }
 
     let readiness = Readiness::default();
     let metrics = pglord_server::metrics::Metrics::new();
