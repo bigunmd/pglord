@@ -60,9 +60,12 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "pglord.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
-{{- if .Values.auth.kubernetes }}
+{{- if or .Values.auth.kubernetes .Values.auth.oidc.rbac }}
 ---
-# Kubernetes-native API auth: TokenReview + SubjectAccessReview delegation.
+# Kubernetes-backed API authorization: TokenReview + SubjectAccessReview
+# delegation. Needed by auth.kubernetes (both reviews) and by auth.oidc.rbac
+# (the SAR half); system:auth-delegator is the standard grant for exactly
+# these two verbs.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:

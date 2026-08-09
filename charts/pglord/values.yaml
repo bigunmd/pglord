@@ -81,6 +81,25 @@ auth:
     clientId: ""
     # Expected `aud` claim; defaults to clientId when empty.
     audience: ""
+    # Authorize OIDC users through Kubernetes RBAC instead of granting every
+    # valid token full admin. pglord maps the claims below to a subject and
+    # runs a SubjectAccessReview on pglord.dev/postgresclusters, so you bind
+    # ordinary Roles to e.g. `oidc:alice@corp.com` or group `oidc:platform`.
+    # The apiserver does NOT need to know your IdP. Renders the same
+    # system:auth-delegator ClusterRoleBinding as auth.kubernetes.
+    # Leave false and OIDC credentials stay full admins.
+    rbac: false
+    # Claim to use as the username; often `email` or `preferred_username`.
+    usernameClaim: sub
+    # Prefixes prepended to the mapped identity. Match your apiserver's
+    # --oidc-username-prefix / --oidc-groups-prefix to make pglord's
+    # authorization identical to kubectl's. Set to "" for no prefix.
+    usernamePrefix: "oidc:"
+    groupsClaim: groups
+    groupsPrefix: "oidc:"
+    # Scopes the UI requests. offline_access is what makes most IdPs issue a
+    # refresh token; drop it if yours rejects unknown scopes.
+    scopes: "openid profile email offline_access"
   # Kubernetes-native auth: accept kubectl-created tokens, authenticated via
   # TokenReview and authorized via RBAC on pglord.dev/postgresclusters.
   # Renders a system:auth-delegator ClusterRoleBinding for the server SA.

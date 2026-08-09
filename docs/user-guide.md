@@ -53,10 +53,10 @@ kubectl -n pglord port-forward svc/pglord-server 8080:80   # plain manifests
 ```
 
 For shared access, expose the Service through your Ingress controller instead of
-port-forwarding (`--set ingress.enabled=true` with the chart). pglord has no
-built-in authentication yet: anyone who can reach it can create and delete
-clusters, and deleting a cluster removes its data volumes. Put it behind your
-ingress auth, and do not expose it publicly.
+port-forwarding (`--set ingress.enabled=true` with the chart). Authentication is
+off until you configure it — see [Authentication](#11-authentication) — so until
+then anyone who can reach pglord can create and delete clusters, and deleting a
+cluster removes its data volumes.
 
 ### Uninstalling
 
@@ -1052,10 +1052,16 @@ default because they require the monitoring.coreos.com CRDs; the raw
 ## 11. Authentication
 
 Out of the box the API and UI are **open**: anyone who can reach the server
-has full control, and the server says so loudly in its startup log. Two
-authentication modes can be enabled, separately or together; both arrive as
+has full control, and the server says so loudly in its startup log. Three
+authentication modes can be enabled, separately or together; all three arrive as
 `Authorization: Bearer <credential>` headers, so `curl` and CI work the same
 way the UI does. `/healthz`, `/readyz` and `/metrics` always stay open.
+
+Authentication answers *who you are*; authorization answers *what you may
+touch*. Static tokens are always full admin. OIDC is full admin too unless you
+turn on [OIDC with Kubernetes RBAC](#oidc-with-kubernetes-rbac), and Kubernetes
+tokens are always scoped by RBAC. `GET /api/v1/auth/whoami` reports which mode
+accepted your credential and the identity it resolved to.
 
 ### Static API tokens
 
@@ -1104,12 +1110,78 @@ helm upgrade pglord charts/pglord --reuse-values \
 `auth.oidc.audience` defaults to the client ID; set it when your IdP puts a
 different `aud` claim into access tokens. Tokens are accepted when their
 signature matches the issuer's JWKS and `exp`, `iss` and `aud` check out.
-Any valid **static or OIDC** credential has full admin access; per-user
-authorization comes from the Kubernetes mode below.
+On its own this authenticates but does not authorize: any valid token is a
+full admin. Add [OIDC with Kubernetes RBAC](#oidc-with-kubernetes-rbac) below to
+scope each user to the namespaces their Roles allow.
 
 For non-interactive API access with OIDC, either configure a static token
 alongside it, or use your IdP's client-credentials grant and send the
 resulting access token as the bearer.
+
+The UI requests the scopes named by `PGLORD_AUTH_OIDC_SCOPES` (default
+`openid profile email offline_access`). `offline_access` is what makes most
+IdPs issue a refresh token; drop it if yours rejects unknown scopes, and
+sessions will simply end when the access token expires.
+
+### OIDC with Kubernetes RBAC
+
+By default any valid OIDC token is a full admin. In operator mode across all
+namespaces that means every cluster in the cluster, so pglord logs a warning at
+startup when that combination is configured.
+
+Set `PGLORD_AUTH_OIDC_RBAC=true` (Helm: `auth.oidc.rbac: true`) and pglord
+instead maps the token's claims to a Kubernetes identity and authorizes every
+request with a SubjectAccessReview — the same check the Kubernetes mode uses,
+against the same verbs:
+
+```bash
+helm upgrade pglord charts/pglord --reuse-values \
+  --set auth.oidc.rbac=true \
+  --set auth.oidc.usernameClaim=email
+```
+
+**Your apiserver does not need to know your IdP.** A SubjectAccessReview
+evaluates RBAC against whatever subject strings it is given, so pglord
+validates the JWT itself and asks the apiserver "may *this* user do *that*".
+You grant permissions with ordinary Roles and RoleBindings:
+
+```bash
+kubectl -n team-a create role pgc-editor \
+  --verb=get,list,patch --resource=postgresclusters.pglord.dev
+kubectl -n team-a create rolebinding platform-pgc-editor \
+  --role=pgc-editor --group='oidc:platform-team'
+```
+
+The mapping is controlled by four settings:
+
+| Setting | Default | Notes |
+|---|---|---|
+| `PGLORD_AUTH_OIDC_USERNAME_CLAIM` | `sub` | Often `email` or `preferred_username`. |
+| `PGLORD_AUTH_OIDC_USERNAME_PREFIX` | `oidc:` | Set to `""` for none. |
+| `PGLORD_AUTH_OIDC_GROUPS_CLAIM` | `groups` | Accepts a list or a single string. |
+| `PGLORD_AUTH_OIDC_GROUPS_PREFIX` | `oidc:` | Set to `""` for none. |
+
+If your apiserver *is* configured with `--oidc-issuer-url`, set these to match
+its `--oidc-username-prefix` and `--oidc-groups-prefix` and pglord's decisions
+become identical to `kubectl`'s for the same user.
+
+This mode needs the same `system:auth-delegator` binding as the Kubernetes
+mode; the chart renders it for either, and it is already in
+`deploy/k8s/operator/rbac.yaml`. The Permissions page reports the
+`subjectaccessreviews` check once it is on.
+
+When a request is denied unexpectedly, check the identity pglord actually
+computed:
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/v1/auth/whoami
+# {"mode":"oidc","user":"oidc:alice@corp.com","groups":["oidc:platform-team"],...}
+```
+
+RBAC subject matching is byte-exact, so `oidc:alice@corp.com` and
+`alice@corp.com` are different users — a prefix or claim mismatch is the usual
+cause of a surprising 403. The UI shows the same identity next to the sign-out
+button.
 
 ### Kubernetes-native authentication
 
@@ -1149,12 +1221,16 @@ Notes:
   the per-namespace views.
 - A missing or invalid token answers 401; a valid token without permission
   answers 403 with the verb and namespace in the message.
-- Static tokens and OIDC continue to work unchanged and retain full access.
+- Static tokens continue to work unchanged and retain full access; OIDC does
+  too unless `PGLORD_AUTH_OIDC_RBAC` is on, in which case it is scoped exactly
+  like a Kubernetes token.
 
 ## Current limitations
 
-- Authentication is all-or-nothing: any valid credential is a full admin.
-  There are no viewer/operator roles yet.
+- Static bearer tokens are all-or-nothing: any valid one is a full admin. Use
+  Kubernetes tokens or OIDC with `PGLORD_AUTH_OIDC_RBAC` for per-namespace
+  permissions. There are still no pglord-native viewer/operator roles —
+  authorization is delegated to Kubernetes RBAC or it is unrestricted.
 - A restore always creates a new cluster; restoring in place is not supported,
   and the restored cluster starts with backups switched off.
 - Custom images must be built on the pglord agent image; stock `postgres:NN`

@@ -42,6 +42,9 @@ pub struct ClusterOps {
     pub all_namespaces: bool,
     /// Kubernetes-native auth is on (preflight reports the review verbs).
     pub auth_kubernetes: bool,
+    /// OIDC credentials are authorized by SubjectAccessReview (preflight
+    /// reports the review verb for this path too).
+    pub auth_oidc_rbac: bool,
     pub metrics: crate::metrics::Metrics,
 }
 

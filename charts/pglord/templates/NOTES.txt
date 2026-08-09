@@ -27,9 +27,12 @@ ImagePullBackOff. Set it to an image your cluster can pull:
     --set agentImage=<registry>/pglord-agent:{{ .Chart.AppVersion }}
 {{- end }}
 
-pglord has no authentication in front of it. Anyone who can reach the Service
-can create and delete clusters, and deleting a cluster removes its data
-volumes. Keep it behind your ingress authentication, or reach it only by
-port-forward, until that changes.
+{{- if not (or .Values.auth.tokens.existingSecret .Values.auth.tokens.value .Values.auth.oidc.issuer .Values.auth.kubernetes) }}
+
+WARNING: this release has no API authentication. Anyone who can reach the
+Service can create and delete clusters, and deleting a cluster removes its data
+volumes. Set one of auth.tokens, auth.oidc.issuer or auth.kubernetes before
+exposing it, or reach it only by port-forward.
+{{- end }}
 
 Docs: https://github.com/bigunmd/pglord/blob/main/docs/user-guide.md

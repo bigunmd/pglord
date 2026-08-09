@@ -48,9 +48,11 @@ subjects:
     name: pglord-server
     namespace: pglord
 ---
-# Kubernetes-native API auth (PGLORD_AUTH_KUBERNETES=true): the server
-# validates user tokens with TokenReview and authorizes with
-# SubjectAccessReview. system:auth-delegator grants exactly those two verbs.
+# Kubernetes-backed API authorization. PGLORD_AUTH_KUBERNETES=true validates
+# user tokens with TokenReview and authorizes with SubjectAccessReview;
+# PGLORD_AUTH_OIDC_RBAC=true validates the JWT itself and uses only the
+# SubjectAccessReview. system:auth-delegator grants exactly those two verbs,
+# so this one binding covers both modes.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:

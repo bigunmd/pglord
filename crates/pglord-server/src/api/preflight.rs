@@ -52,6 +52,7 @@ pub async fn get_preflight(
         &ops.spec_backend,
         ops.all_namespaces,
         ops.auth_kubernetes,
+        ops.auth_oidc_rbac,
     )
     .await;
     let (ok, missing) = preflight::summarize(&results);

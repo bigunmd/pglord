@@ -27,7 +27,11 @@ pub struct CheckResult {
 }
 
 /// Everything pglord needs in its own namespace to manage clusters.
-pub fn required(spec_backend: &str, auth_kubernetes: bool) -> Vec<PermissionCheck> {
+pub fn required(
+    spec_backend: &str,
+    auth_kubernetes: bool,
+    auth_oidc_rbac: bool,
+) -> Vec<PermissionCheck> {
     const WRITE: [&str; 5] = ["get", "list", "create", "patch", "delete"];
     let mut out = Vec::new();
     for resource in ["configmaps", "secrets", "services", "serviceaccounts"] {
@@ -89,13 +93,17 @@ pub fn required(spec_backend: &str, auth_kubernetes: bool) -> Vec<PermissionChec
     }
     // Kubernetes-native auth delegates token validation and authorization to
     // the apiserver; both are cluster-scoped create-only verbs
-    // (system:auth-delegator grants exactly these).
+    // (system:auth-delegator grants exactly these). OIDC RBAC needs only the
+    // review half — it validates its own tokens — but the standard ClusterRole
+    // grants both, so only the checks differ.
     if auth_kubernetes {
         out.push(PermissionCheck {
             group: "authentication.k8s.io",
             resource: "tokenreviews",
             verb: "create",
         });
+    }
+    if auth_kubernetes || auth_oidc_rbac {
         out.push(PermissionCheck {
             group: "authorization.k8s.io",
             resource: "subjectaccessreviews",
@@ -123,10 +131,11 @@ pub async fn run(
     spec_backend: &str,
     all_namespaces: bool,
     auth_kubernetes: bool,
+    auth_oidc_rbac: bool,
 ) -> Vec<CheckResult> {
     let api: Api<SelfSubjectAccessReview> = Api::all(client.clone());
     let mut results = Vec::new();
-    for check in required(spec_backend, auth_kubernetes) {
+    for check in required(spec_backend, auth_kubernetes, auth_oidc_rbac) {
         let review = SelfSubjectAccessReview {
             spec: SelfSubjectAccessReviewSpec {
                 resource_attributes: Some(ResourceAttributes {
@@ -189,7 +198,7 @@ mod tests {
 
     #[test]
     fn required_checks_cover_managed_resources_without_duplicates() {
-        let checks = required("configmap", false);
+        let checks = required("configmap", false, false);
         assert!(!checks.is_empty());
         for resource in [
             "configmaps",
@@ -232,16 +241,34 @@ mod tests {
 
     #[test]
     fn kubernetes_auth_adds_review_checks() {
-        let on = required("configmap", true);
+        let on = required("configmap", true, false);
         assert!(on.iter().any(|c| c.resource == "tokenreviews"));
         assert!(on.iter().any(|c| c.resource == "subjectaccessreviews"));
-        let off = required("configmap", false);
+        let off = required("configmap", false, false);
         assert!(off.iter().all(|c| !c.resource.ends_with("reviews")));
     }
 
     #[test]
+    fn oidc_rbac_adds_review_checks() {
+        // OIDC RBAC reaches the apiserver through the same delegation, so the
+        // Permissions page has to report it or an install looks healthy right
+        // up until the first 403.
+        let on = required("configmap", false, true);
+        assert!(on.iter().any(|c| c.resource == "subjectaccessreviews"));
+
+        // Both modes at once must not double up: the page would show the same
+        // row twice and the dedup test would fail.
+        let both = required("configmap", true, true);
+        let reviews = both
+            .iter()
+            .filter(|c| c.resource == "subjectaccessreviews")
+            .count();
+        assert_eq!(reviews, 1);
+    }
+
+    #[test]
     fn crd_backend_adds_postgrescluster_checks_and_configmap_mode_omits_them() {
-        let crd = required("crd", false);
+        let crd = required("crd", false, false);
         assert!(
             crd.iter()
                 .any(|c| c.group == "pglord.dev" && c.resource == "postgresclusters")
@@ -250,7 +277,7 @@ mod tests {
             crd.iter()
                 .any(|c| c.resource == "postgresclusters/status" && c.verb == "patch")
         );
-        let standalone = required("configmap", false);
+        let standalone = required("configmap", false, false);
         assert!(standalone.iter().all(|c| c.group != "pglord.dev"));
     }
 

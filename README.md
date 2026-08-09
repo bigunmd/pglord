@@ -169,6 +169,7 @@ Layered: serde defaults ← `config.toml` ← `PGLORD_*` environment variables.
 | `PGLORD_CORS_ALLOWED_ORIGINS` | *(empty)* | comma-separated exact origins; empty disables CORS |
 | `PGLORD_AUTH_TOKENS` | *(empty)* | comma-separated static API tokens |
 | `PGLORD_AUTH_OIDC_ISSUER` / `_CLIENT_ID` | *(empty)* | OIDC single sign-on |
+| `PGLORD_AUTH_OIDC_RBAC` | `false` | authorize OIDC users through Kubernetes RBAC instead of full admin |
 | `PGLORD_AUTH_KUBERNETES` | `false` | authenticate with Kubernetes tokens (TokenReview + SAR) |
 
 Authentication is off unless one of the auth variables is set. See

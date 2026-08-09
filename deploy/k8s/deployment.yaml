@@ -45,6 +45,16 @@ spec:
             # - { name: PGLORD_AUTH_OIDC_ISSUER, value: "https://idp.example.com/realms/x" }
             # - { name: PGLORD_AUTH_OIDC_CLIENT_ID, value: "pglord" }
             # - { name: PGLORD_AUTH_OIDC_AUDIENCE, value: "pglord" } # defaults to client id
+            # Authorize OIDC users through Kubernetes RBAC instead of giving
+            # every valid token full admin. Claims below become the SAR
+            # subject, so you bind ordinary Roles to oidc:<user> / oidc:<group>
+            # — the apiserver does not need to know the IdP. Needs the same
+            # auth-delegator binding from deploy/k8s/operator/rbac.yaml.
+            # - { name: PGLORD_AUTH_OIDC_RBAC, value: "true" }
+            # - { name: PGLORD_AUTH_OIDC_USERNAME_CLAIM, value: "email" }
+            # - { name: PGLORD_AUTH_OIDC_USERNAME_PREFIX, value: "oidc:" }
+            # - { name: PGLORD_AUTH_OIDC_GROUPS_CLAIM, value: "groups" }
+            # - { name: PGLORD_AUTH_OIDC_GROUPS_PREFIX, value: "oidc:" }
           livenessProbe:
             httpGet: { path: /healthz, port: http }
           readinessProbe:

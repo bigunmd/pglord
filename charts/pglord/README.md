@@ -38,10 +38,15 @@ as a denied row instead of as a cluster that never starts.
 
 ## Before you expose this
 
-**pglord has no authentication.** Anyone who can reach the Service can create
-and delete clusters, and deleting a cluster removes its data volumes. Put it
-behind ingress authentication, or reach it only by port-forward, until that
-changes. `ingress.enabled=true` publishes it as-is.
+**Authentication is off by default.** Until you configure it, anyone who can
+reach the Service can create and delete clusters, and deleting a cluster
+removes its data volumes. `ingress.enabled=true` publishes it as-is.
+
+Turn one of the `auth.*` modes on before exposing it — static tokens
+(`auth.tokens`), OIDC (`auth.oidc`), or Kubernetes tokens (`auth.kubernetes`).
+For per-namespace permissions rather than all-or-nothing admin, use
+`auth.kubernetes` or `auth.oidc.rbac`; both authorize every request against
+Kubernetes RBAC. See the user guide's Authentication section.
 
 ## `agentImage` is not optional in practice
 

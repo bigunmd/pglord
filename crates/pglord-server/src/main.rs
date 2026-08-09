@@ -96,6 +96,7 @@ async fn main() -> anyhow::Result<()> {
             let preflight_backend = cfg.spec_backend.clone();
             let preflight_all_ns = cfg.all_namespaces;
             let preflight_auth_k8s = cfg.auth_kubernetes;
+            let preflight_oidc_rbac = cfg.auth_oidc_rbac;
             tokio::spawn(async move {
                 let results = pglord_server::preflight::run(
                     &preflight_client,
@@ -103,6 +104,7 @@ async fn main() -> anyhow::Result<()> {
                     &preflight_backend,
                     preflight_all_ns,
                     preflight_auth_k8s,
+                    preflight_oidc_rbac,
                 )
                 .await;
                 let (ok, missing) = pglord_server::preflight::summarize(&results);
@@ -143,6 +145,7 @@ async fn main() -> anyhow::Result<()> {
                 spec_backend: cfg.spec_backend.clone(),
                 all_namespaces: cfg.all_namespaces,
                 auth_kubernetes: cfg.auth_kubernetes,
+                auth_oidc_rbac: cfg.auth_oidc_rbac,
                 metrics: metrics.clone(),
             };
             tokio::spawn(pglord_server::backup_scheduler::run(ops.clone()));

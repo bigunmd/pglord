@@ -81,6 +81,20 @@ spec:
             - name: PGLORD_AUTH_OIDC_AUDIENCE
               value: {{ . | quote }}
             {{- end }}
+            - name: PGLORD_AUTH_OIDC_SCOPES
+              value: {{ .Values.auth.oidc.scopes | quote }}
+            {{- if .Values.auth.oidc.rbac }}
+            - name: PGLORD_AUTH_OIDC_RBAC
+              value: "true"
+            - name: PGLORD_AUTH_OIDC_USERNAME_CLAIM
+              value: {{ .Values.auth.oidc.usernameClaim | quote }}
+            - name: PGLORD_AUTH_OIDC_USERNAME_PREFIX
+              value: {{ .Values.auth.oidc.usernamePrefix | quote }}
+            - name: PGLORD_AUTH_OIDC_GROUPS_CLAIM
+              value: {{ .Values.auth.oidc.groupsClaim | quote }}
+            - name: PGLORD_AUTH_OIDC_GROUPS_PREFIX
+              value: {{ .Values.auth.oidc.groupsPrefix | quote }}
+            {{- end }}
             {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
