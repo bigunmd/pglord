@@ -35,6 +35,13 @@ jobs:
         id: meta
         with:
           images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/pglord-agent
+          # latest=false is load-bearing. The default (latest=auto) adds a
+          # `latest` tag on every semver build, and all six matrix variants
+          # push to this one image name — so they race, and `latest` ends up
+          # an arbitrary PostgreSQL major with arbitrary TimescaleDB. The tag
+          # a cluster runs decides what its data can be read by, so the agent
+          # deliberately has no floating tag at all.
+          flavor: latest=false
           tags: |
             type=raw,value=${{ matrix.pg }}${{ steps.suffix.outputs.s }},enable={{is_default_branch}}
             type=semver,pattern={{version}}-pg${{ matrix.pg }}${{ steps.suffix.outputs.s }}
@@ -69,6 +76,9 @@ jobs:
         id: meta
         with:
           images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/pglord-server
+          # The server is a single build, so `latest` is unambiguous here and
+          # tracking the newest release is what people expect of it.
+          flavor: latest=auto
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=semver,pattern={{version}}
