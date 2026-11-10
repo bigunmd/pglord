@@ -54,6 +54,18 @@ ng e2e
 
 Angular CLI does not come with an end-to-end testing framework by default. You can choose one that suits your needs.
 
+## Dependency security
+
+Use `npm ci` to reproduce the committed lockfile and `npm audit` to check current
+advisories. The unused Spartan CLI scaffolding dependency is intentionally omitted;
+the application still uses Spartan runtime primitives and vendored Helm components.
+
+Targeted overrides pin `minimatch` to 11.0.5 for ESLint, its config-array helper and
+TypeScript ESLint's parser. Their upstream ranges still select vulnerable version 10
+([GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249)). This is a
+transitive major-version override: recheck lint, build and tests when updating it,
+and remove it once those upstream dependencies select patched versions themselves.
+
 ## Additional Resources
 
 For more information on using the Angular CLI, including detailed command references, visit the [Angular CLI Overview and Command Reference](https://angular.dev/tools/cli) page.

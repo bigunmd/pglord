@@ -173,8 +173,8 @@ spec:
                 default: []
                 description: |-
                   Instances (pod names) held down: the agent stops postgres and keeps
-                  it stopped while listed. Standbys only — the fence endpoint refuses
-                  the recorded primary. Flipped only by the fence/unfence endpoints.
+                  it stopped while listed. Fencing the primary interrupts cluster writes.
+                  Flipped only by the fence/unfence endpoints.
                 items:
                   type: string
                 type: array
@@ -220,6 +220,12 @@ spec:
                   Empty is invalid through the API; in operator mode the CR sync fills
                   it from metadata.name, so kubectl users write the name once.
                 type: string
+              parallel_pod_management:
+                default: false
+                description: |-
+                  Permanently enable independent pod creation after controlled in-place
+                  upgrade migration. Existing clusters retain OrderedReady by default.
+                type: boolean
               parameters:
                 additionalProperties:
                   type: string

@@ -311,6 +311,6 @@ async fn run_rotation(
     }
 
     let order = crate::api::clusters::roll_order(&spec.sts_name(), spec.replicas, primary);
-    crate::api::clusters::roll_pods(ops, ns, spec, order).await;
+    crate::api::clusters::roll_pods(ops, ns, spec, order).await?;
     Ok(())
 }

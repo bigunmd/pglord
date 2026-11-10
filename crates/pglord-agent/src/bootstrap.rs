@@ -14,7 +14,7 @@ use crate::config::{Config, Role};
 /// appears early in a restore, so it cannot tell a finished restore from one
 /// that died half way; without this marker an interrupted restore would look
 /// bootstrapped and crashloop forever on a partial data directory.
-const RESTORE_MARKER: &str = "pglord.restore-complete";
+pub(crate) const RESTORE_MARKER: &str = "pglord.restore-complete";
 
 /// Extra postgresql.conf lines appended after initdb.
 /// wal_log_hints is required for pg_rewind (old-primary rejoin after failover).
@@ -152,6 +152,13 @@ pub async fn ensure_bootstrapped(
     restore: Option<&RestoreSpec>,
     hba_rules: &[pglord_core::hba::HbaRule],
 ) -> anyhow::Result<()> {
+    // New-image standbys stay stopped until the primary has converted. Never
+    // clone old-major data, including after a restart with empty PGDATA.
+    if cfg.role == Role::Standby && cfg.in_place_major().is_some() {
+        wait_for_converted_primary(cfg).await?;
+    }
+    // Check before restore/initdb too: missing PGDATA can be an interrupted handoff.
+    crate::pgupgrade::recover_handoff(&cfg.pgdata)?;
     // Only the primary restores. Standbys of a restored cluster stream from it
     // with an ordinary basebackup, exactly like any other cluster's standbys.
     if cfg.role == Role::Primary && restore_pending(&cfg.pgdata, restore) {
@@ -401,6 +408,61 @@ async fn bootstrap_primary(
     Ok(())
 }
 
+fn converted_primary_matches(version: &str, binary: &str, old_major: u32) -> bool {
+    let binary_major = binary
+        .split_whitespace()
+        .find_map(|part| part.split('.').next()?.parse::<u32>().ok());
+    version
+        .trim()
+        .parse::<u32>()
+        .is_ok_and(|v| v / 10_000 > old_major && Some(v / 10_000) == binary_major)
+}
+
+async fn wait_for_converted_primary(cfg: &Config) -> anyhow::Result<()> {
+    let old_major = cfg
+        .in_place_major()
+        .context("missing upgrade source major")?;
+    let binary = Command::new("postgres").arg("--version").output().await?;
+    if !binary.status.success() {
+        bail!("cannot identify target PostgreSQL binary");
+    }
+    let binary = String::from_utf8(binary.stdout)?;
+    loop {
+        let result = tokio::time::timeout(
+            Duration::from_secs(10),
+            Command::new("psql")
+                .args([
+                    "-X",
+                    "-A",
+                    "-t",
+                    "-h",
+                    &cfg.primary_host,
+                    "-p",
+                    &cfg.primary_port.to_string(),
+                    "-U",
+                    &cfg.superuser,
+                    "-d",
+                    "postgres",
+                    "-c",
+                    "SHOW server_version_num",
+                ])
+                .env("PGPASSWORD", &cfg.superuser_password)
+                .env("PGCONNECT_TIMEOUT", "5")
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await;
+        if let Ok(Ok(out)) = result
+            && out.status.success()
+            && converted_primary_matches(&String::from_utf8_lossy(&out.stdout), &binary, old_major)
+        {
+            return Ok(());
+        }
+        tracing::info!(primary = %cfg.primary_host, "in-place standby waiting for converted primary");
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+}
+
 async fn bootstrap_standby(cfg: &Config) -> anyhow::Result<()> {
     if cfg.primary_host.is_empty() {
         bail!("standby role requires PGLORD_AGENT_PRIMARY_HOST");
@@ -461,6 +523,25 @@ pub(crate) fn append(path: &Path, content: &str) -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn upgrade_standby_waits_for_exact_target_major() {
+        assert!(!super::converted_primary_matches(
+            "160005",
+            "postgres (PostgreSQL) 17.2",
+            16
+        ));
+        assert!(super::converted_primary_matches(
+            "170002\n",
+            "postgres (PostgreSQL) 17.2",
+            16
+        ));
+        assert!(!super::converted_primary_matches(
+            "180001",
+            "postgres (PostgreSQL) 17.2",
+            16
+        ));
+        assert!(!super::converted_primary_matches("170002", "invalid", 16));
+    }
     use super::*;
 
     #[test]

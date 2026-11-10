@@ -573,6 +573,190 @@ async fn apply_provisioning(
     Ok(())
 }
 
+/// A fresh observation is a fail-closed stale-work check, not a transaction
+/// with child writes: source and child resourceVersions are independent.
+struct ApplySource<'a> {
+    client: &'a kube::Client,
+    ns: &'a str,
+    spec: &'a ClusterSpec,
+    owner: &'a OwnerRef,
+    upgrade: Option<&'a pglord_core::upgrade::UpgradeState>,
+}
+
+impl ApplySource<'_> {
+    async fn validate(&self) -> anyhow::Result<()> {
+        use pglord_core::spec::PostgresCluster;
+        let cms: Api<ConfigMap> = Api::namespaced(self.client.clone(), self.ns);
+        let cm = cms
+            .get(&crate::spec_store::spec_cm_name(&self.spec.name))
+            .await?;
+        let (current, mirror_owner) = configmap_to_spec(&cm)?;
+        anyhow::ensure!(
+            cm.metadata.deletion_timestamp.is_none(),
+            "spec mirror is deleting"
+        );
+        anyhow::ensure!(current == *self.spec, "refusing stale desired spec");
+        // Unlike upgrade_from_cm, corrupt state must not look like no upgrade.
+        let upgrade: Option<pglord_core::upgrade::UpgradeState> = cm
+            .metadata
+            .annotations
+            .as_ref()
+            .and_then(|a| a.get(pglord_core::upgrade::UPGRADE_ANNOTATION))
+            .map(|raw| serde_json::from_str(raw))
+            .transpose()?;
+        anyhow::ensure!(
+            upgrade.as_ref() == self.upgrade,
+            "refusing stale desired upgrade state"
+        );
+        let cr_owner = cm.metadata.owner_references.as_ref().and_then(|owners| {
+            owners
+                .iter()
+                .find(|o| o.controller == Some(true) && o.kind == "PostgresCluster")
+        });
+        if self.owner.kind == "ConfigMap" {
+            anyhow::ensure!(
+                self.owner.uid == mirror_owner.uid && self.owner.name == mirror_owner.name,
+                "spec mirror identity changed"
+            );
+        } else {
+            let owner = cr_owner.ok_or_else(|| anyhow::anyhow!("CR spec mirror has no owner"))?;
+            anyhow::ensure!(
+                self.owner.kind == owner.kind
+                    && self.owner.api_version == owner.api_version
+                    && self.owner.name == owner.name
+                    && self.owner.uid == owner.uid,
+                "CR spec mirror identity changed"
+            );
+        }
+        if let Some(owner) = cr_owner {
+            // A matching mirror can itself lag the authoritative CR.
+            let crs: Api<PostgresCluster> = Api::namespaced(self.client.clone(), self.ns);
+            let cr = crs.get(&owner.name).await?;
+            anyhow::ensure!(
+                cr.metadata.deletion_timestamp.is_none()
+                    && cr.metadata.uid.as_deref() == Some(owner.uid.as_str())
+                    && crate::crd_store::effective_spec(&cr) == *self.spec,
+                "spec mirror does not match current CR authority"
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Apply mutable fields with an object-version precondition; immutable changes
+/// orphan the old controller, never its pods or volumes. A competing creator is
+/// re-read, not overwritten, and a completed Parallel migration is one-way.
+async fn apply_statefulset<F, Fut>(
+    api: &Api<StatefulSet>,
+    desired: &StatefulSet,
+    validate_source: F,
+) -> anyhow::Result<()>
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<()>>,
+{
+    use anyhow::Context;
+    use kube::api::{DeleteParams, Preconditions, PropagationPolicy};
+    let name = desired
+        .metadata
+        .name
+        .as_deref()
+        .context("StatefulSet has no name")?;
+    for _ in 0..50 {
+        let live = api.get_opt(name).await?;
+        validate_source().await?;
+        let Some(live) = live else {
+            match api.create(&PostParams::default(), desired).await {
+                Ok(_) => return Ok(()),
+                Err(kube::Error::Api(e)) if e.code == 409 => continue,
+                Err(err) => return Err(err.into()),
+            }
+        };
+        if live.metadata.deletion_timestamp.is_some() {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            continue;
+        }
+        if live.metadata.owner_references != desired.metadata.owner_references {
+            anyhow::bail!("refusing to replace StatefulSet owned by a different cluster");
+        }
+        let uid = live
+            .metadata
+            .uid
+            .clone()
+            .context("StatefulSet has no UID")?;
+        let rv = live
+            .metadata
+            .resource_version
+            .clone()
+            .context("StatefulSet has no version")?;
+        let policy = |s: &StatefulSet| {
+            s.spec
+                .as_ref()
+                .and_then(|s| s.pod_management_policy.clone())
+                .unwrap_or_else(|| "OrderedReady".into())
+        };
+        if policy(&live) == "Parallel" && policy(desired) != "Parallel" {
+            anyhow::bail!("refusing stale desired state that reverses Parallel migration");
+        }
+        let storage_changed = sts_storage_request(desired)
+            .is_some_and(|size| needs_recreate(sts_storage_request(&live).as_deref(), &size));
+        if storage_changed || policy(&live) != policy(desired) {
+            // Retain is durable before deletion; interruption can only leave
+            // extra volumes, never request their garbage collection.
+            let retain = serde_json::json!({
+                "metadata": {"uid": uid, "resourceVersion": rv},
+                "spec": {"persistentVolumeClaimRetentionPolicy": {
+                    "whenDeleted": "Retain", "whenScaled": "Retain"
+                }}
+            });
+            let retained = match api
+                .patch(name, &PatchParams::default(), &Patch::Merge(&retain))
+                .await
+            {
+                Ok(sts) => sts,
+                Err(kube::Error::Api(e)) if e.code == 404 || e.code == 409 => continue,
+                Err(err) => return Err(err.into()),
+            };
+            let params = DeleteParams {
+                propagation_policy: Some(PropagationPolicy::Orphan),
+                preconditions: Some(Preconditions {
+                    uid: Some(uid),
+                    resource_version: Some(
+                        retained
+                            .metadata
+                            .resource_version
+                            .context("retention update has no version")?,
+                    ),
+                }),
+                ..Default::default()
+            };
+            validate_source().await?;
+            match api.delete(name, &params).await {
+                Ok(_) => {}
+                Err(kube::Error::Api(e)) if e.code == 404 || e.code == 409 => {}
+                Err(err) => return Err(err.into()),
+            }
+            continue;
+        }
+        let mut update = desired.clone();
+        update.metadata.uid = Some(uid);
+        update.metadata.resource_version = Some(rv);
+        match api
+            .patch(
+                name,
+                &PatchParams::apply(FIELD_MANAGER).force(),
+                &Patch::Apply(&update),
+            )
+            .await
+        {
+            Ok(_) => return Ok(()),
+            Err(kube::Error::Api(e)) if e.code == 404 || e.code == 409 => continue,
+            Err(err) => return Err(err.into()),
+        }
+    }
+    anyhow::bail!("StatefulSet migration did not converge; retry without replacing pods")
+}
+
 pub async fn apply_cluster(
     client: &kube::Client,
     http: &reqwest::Client,
@@ -582,6 +766,14 @@ pub async fn apply_cluster(
     primary_pod: &str,
     upgrade: Option<&pglord_core::upgrade::UpgradeState>,
 ) -> anyhow::Result<()> {
+    let source = ApplySource {
+        client,
+        ns,
+        spec,
+        owner,
+        upgrade,
+    };
+    source.validate().await?;
     ensure_credentials(client, ns, spec, owner).await?;
     let (sa, role, binding) = render_instance_rbac(spec, ns, owner);
     let pp = PatchParams::apply(FIELD_MANAGER).force();
@@ -596,40 +788,7 @@ pub async fn apply_cluster(
     let (sts, headless, rw) = desired_objects(spec, ns, owner, primary_pod, upgrade);
 
     let sts_api: Api<StatefulSet> = Api::namespaced(client.clone(), ns);
-    let sts_name = spec.sts_name();
-    let live = sts_api.get_opt(&sts_name).await?;
-    if let Some(live) = &live
-        && needs_recreate(sts_storage_request(live).as_deref(), &spec.storage_size)
-    {
-        // Orphan deletion: the apiserver strips ownerReferences from the pods
-        // and claims before removing the StatefulSet, so nothing restarts and
-        // no data volume is collected. The recreated StatefulSet adopts them
-        // back by selector. Without this, the cluster is stuck the moment its
-        // storage grows.
-        tracing::warn!(
-            cluster = %spec.name,
-            from = sts_storage_request(live).unwrap_or_default(),
-            to = %spec.storage_size,
-            "claim template changed; recreating StatefulSet (pods and volumes are kept)"
-        );
-        sts_api
-            .delete(
-                &sts_name,
-                &kube::api::DeleteParams {
-                    propagation_policy: Some(kube::api::PropagationPolicy::Orphan),
-                    ..Default::default()
-                },
-            )
-            .await?;
-        // Recreating before the delete completes fails with AlreadyExists.
-        for _ in 0..50u32 {
-            if sts_api.get_opt(&sts_name).await?.is_none() {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(200)).await;
-        }
-    }
-    sts_api.patch(&sts_name, &pp, &Patch::Apply(&sts)).await?;
+    apply_statefulset(&sts_api, &sts, || source.validate()).await?;
 
     // A major upgrade in flight renders a second instance set from the same
     // spec, on the target image and one generation up. It hangs off the same
@@ -645,18 +804,18 @@ pub async fn apply_cluster(
             && u.next_generation != spec.generation
     }) {
         let green = pglord_core::render::render_green_statefulset(spec, ns, owner, upgrade);
-        let green_name = green.metadata.name.clone().unwrap_or_default();
-        sts_api
-            .patch(&green_name, &pp, &Patch::Apply(&green))
-            .await?;
+        apply_statefulset(&sts_api, &green, || source.validate()).await?;
     }
 
     let svc_api: Api<Service> = Api::namespaced(client.clone(), ns);
     for svc in [headless, rw] {
         let name = svc.metadata.name.clone().unwrap_or_default();
+        source.validate().await?;
         svc_api.patch(&name, &pp, &Patch::Apply(&svc)).await?;
     }
+    source.validate().await?;
     apply_pooler(client, http, ns, spec, owner, primary_pod).await?;
+    source.validate().await?;
     apply_provisioning(client, http, ns, spec, primary_pod).await?;
     Ok(())
 }
@@ -738,5 +897,306 @@ mod tests {
             sts.spec.expect("spec").service_name.as_deref(),
             Some("demo-pods")
         );
+    }
+}
+
+#[cfg(test)]
+mod migration_tests {
+    use super::*;
+    use axum::{
+        body::Body,
+        http::{Method, Request, Response},
+    };
+    use http_body_util::BodyExt;
+    use std::sync::{Arc, Mutex};
+
+    #[tokio::test]
+    async fn source_validation_rejects_stale_spec_upgrade_and_cr_mirror() {
+        let spec: ClusterSpec =
+            serde_json::from_value(serde_json::json!({"name":"demo"})).expect("spec");
+        for case in [
+            "current",
+            "spec",
+            "upgrade",
+            "corrupt",
+            "cr",
+            "cr_current",
+            "recreated",
+        ] {
+            let mut cm = crate::spec_store::spec_to_configmap(&spec, "ns").expect("mirror");
+            cm.metadata.uid = Some("mirror".into());
+            if case == "spec" {
+                let mut changed = spec.clone();
+                changed.replicas += 1;
+                cm = crate::spec_store::spec_to_configmap(&changed, "ns").expect("mirror");
+                cm.metadata.uid = Some("mirror".into());
+            }
+            if case == "upgrade" || case == "corrupt" {
+                cm.metadata.annotations = Some(
+                    [(
+                        pglord_core::upgrade::UPGRADE_ANNOTATION.into(),
+                        if case == "corrupt" {
+                            "{".into()
+                        } else {
+                            serde_json::json!({"phase":"upgrading", "mode":"in_place",
+                                "target_image":"postgres:18", "next_generation":"g1", "from_major":17}).to_string()
+                        },
+                    )]
+                    .into(),
+                );
+            }
+            if case == "recreated" {
+                cm.metadata.uid = Some("other".into());
+            }
+            if case == "cr" || case == "cr_current" {
+                cm.metadata.owner_references = Some(vec![OwnerReference {
+                    api_version: "pglord.dev/v1alpha1".into(),
+                    kind: "PostgresCluster".into(),
+                    name: "demo".into(),
+                    uid: "cr".into(),
+                    controller: Some(true),
+                    ..Default::default()
+                }]);
+            }
+            let mut cr = pglord_core::spec::PostgresCluster::new("demo", spec.clone());
+            cr.metadata.uid = Some("cr".into());
+            if case != "cr_current" {
+                cr.spec.replicas += 1;
+            }
+            let service = tower::service_fn(move |req: Request<kube::client::Body>| {
+                assert_eq!(req.method(), Method::GET, "validation must never write");
+                let value = if req.uri().path().contains("configmaps") {
+                    serde_json::to_value(&cm).expect("cm")
+                } else {
+                    serde_json::to_value(&cr).expect("cr")
+                };
+                async move {
+                    Ok::<_, std::convert::Infallible>(
+                        Response::builder()
+                            .status(200)
+                            .header("content-type", "application/json")
+                            .body(Body::from(value.to_string()))
+                            .expect("response"),
+                    )
+                }
+            });
+            let client = kube::Client::new(service, "ns");
+            let owner = OwnerRef {
+                api_version: "v1".into(),
+                kind: "ConfigMap".into(),
+                name: "demo-spec".into(),
+                uid: "mirror".into(),
+            };
+            let source = ApplySource {
+                client: &client,
+                ns: "ns",
+                spec: &spec,
+                owner: &owner,
+                upgrade: None,
+            };
+            assert_eq!(
+                source.validate().await.is_ok(),
+                matches!(case, "current" | "cr_current"),
+                "{case}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn stale_same_parallel_source_is_rechecked_after_conflict_before_mutation() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let desired: StatefulSet = serde_json::from_value(serde_json::json!({
+            "metadata":{"name":"demo","namespace":"ns"},
+            "spec":{"selector":{"matchLabels":{"app":"demo"}},"serviceName":"demo",
+                "template":{"metadata":{"labels":{"app":"demo"}}},"podManagementPolicy":"Parallel"}
+        }))
+        .expect("desired");
+        let mut live = desired.clone();
+        live.metadata.uid = Some("uid".into());
+        live.metadata.resource_version = Some("fresh-sts-version".into());
+        let writes = Arc::new(AtomicUsize::new(0));
+        let count = writes.clone();
+        let service = tower::service_fn(move |req: Request<kube::client::Body>| {
+            let (code, value) = if req.method() == Method::GET {
+                (200, serde_json::to_value(&live).expect("live"))
+            } else {
+                assert_eq!(req.method(), Method::PATCH);
+                count.fetch_add(1, Ordering::SeqCst);
+                (
+                    409,
+                    serde_json::json!({"apiVersion":"v1","kind":"Status","status":"Failure",
+                    "reason":"Conflict","message":"new target won","code":409}),
+                )
+            };
+            async move {
+                Ok::<_, std::convert::Infallible>(
+                    Response::builder()
+                        .status(code)
+                        .header("content-type", "application/json")
+                        .body(Body::from(value.to_string()))
+                        .expect("response"),
+                )
+            }
+        });
+        let api = Api::namespaced(kube::Client::new(service, "ns"), "ns");
+        let checks = AtomicUsize::new(0);
+        let result = apply_statefulset(&api, &desired, || async {
+            anyhow::ensure!(
+                checks.fetch_add(1, Ordering::SeqCst) == 0,
+                "stale upgrade snapshot"
+            );
+            Ok(())
+        })
+        .await;
+        assert!(
+            result
+                .expect_err("must stop")
+                .to_string()
+                .contains("stale upgrade snapshot")
+        );
+        assert_eq!(checks.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            writes.load(Ordering::SeqCst),
+            1,
+            "never retry with old desired and new STS version"
+        );
+    }
+
+    async fn migration(interrupt: bool, concurrent: bool) {
+        let desired: StatefulSet = serde_json::from_value(serde_json::json!({
+            "metadata":{"name":"demo","namespace":"ns"},
+            "spec":{"selector":{"matchLabels":{"app":"demo"}},"serviceName":"demo",
+                "template":{"metadata":{"labels":{"app":"demo"}}},
+                "podManagementPolicy":"Parallel",
+                "persistentVolumeClaimRetentionPolicy":{"whenDeleted":"Delete","whenScaled":"Retain"}}
+        })).expect("desired");
+        let mut initial = serde_json::to_value(&desired).expect("json");
+        initial["metadata"]["uid"] = "old".into();
+        initial["metadata"]["resourceVersion"] = "1".into();
+        initial["spec"]["podManagementPolicy"] = "OrderedReady".into();
+        // (live object, deleted controller count, injected failure, competing create)
+        let state = Arc::new(Mutex::new((Some(initial), 0, false, false)));
+        let shared = state.clone();
+        let service = tower::service_fn(move |req: Request<kube::client::Body>| {
+            let shared = shared.clone();
+            async move {
+                let method = req.method().clone();
+                let bytes = req.into_body().collect().await.expect("body").to_bytes();
+                let input: serde_json::Value = if bytes.is_empty() {
+                    serde_json::Value::Null
+                } else {
+                    serde_json::from_slice(&bytes).expect("json")
+                };
+                let mut state = shared.lock().expect("state");
+                let error = |code| {
+                    serde_json::json!({"apiVersion":"v1","kind":"Status",
+                    "status":"Failure","reason":match code { 404 => "NotFound", 409 => "Conflict", _ => "InternalError" },"message":"injected","code":code})
+                };
+                let (code, value) = if method == Method::GET {
+                    match &state.0 {
+                        Some(v) => (200, v.clone()),
+                        None => (404, error(404)),
+                    }
+                } else if method == Method::PATCH {
+                    let live = state.0.as_mut().expect("live");
+                    assert_eq!(input["metadata"]["uid"], live["metadata"]["uid"]);
+                    assert_eq!(
+                        input["metadata"]["resourceVersion"],
+                        live["metadata"]["resourceVersion"]
+                    );
+                    if input["spec"]["podManagementPolicy"].is_null() {
+                        live["spec"]["persistentVolumeClaimRetentionPolicy"] =
+                            input["spec"]["persistentVolumeClaimRetentionPolicy"].clone();
+                    } else {
+                        live["spec"] = input["spec"].clone();
+                    }
+                    live["metadata"]["resourceVersion"] = "2".into();
+                    (200, live.clone())
+                } else if method == Method::DELETE {
+                    let live = state.0.as_ref().expect("live");
+                    assert_eq!(input["propagationPolicy"], "Orphan");
+                    assert_eq!(input["preconditions"]["uid"], live["metadata"]["uid"]);
+                    assert_eq!(
+                        input["preconditions"]["resourceVersion"],
+                        live["metadata"]["resourceVersion"]
+                    );
+                    assert_eq!(
+                        live["spec"]["persistentVolumeClaimRetentionPolicy"]["whenDeleted"],
+                        "Retain"
+                    );
+                    let deleted = live.clone();
+                    state.0 = None;
+                    state.1 += 1;
+                    (200, deleted)
+                } else if interrupt && !state.2 {
+                    state.2 = true;
+                    (500, error(500))
+                } else if concurrent && !state.3 {
+                    // A stale writer wins creation in the orphan-deletion gap.
+                    let mut winner = input;
+                    winner["metadata"]["uid"] = "competitor".into();
+                    winner["metadata"]["resourceVersion"] = "1".into();
+                    winner["spec"]["podManagementPolicy"] = "OrderedReady".into();
+                    state.0 = Some(winner);
+                    state.3 = true;
+                    (409, error(409))
+                } else {
+                    assert!(
+                        state.0.is_none(),
+                        "creation must not overwrite a competing object"
+                    );
+                    let mut created = input;
+                    created["metadata"]["uid"] = "new".into();
+                    created["metadata"]["resourceVersion"] = "1".into();
+                    state.0 = Some(created.clone());
+                    (201, created)
+                };
+                Ok::<_, std::convert::Infallible>(
+                    Response::builder()
+                        .status(code)
+                        .header("content-type", "application/json")
+                        .body(Body::from(value.to_string()))
+                        .expect("response"),
+                )
+            }
+        });
+        let api = Api::namespaced(kube::Client::new(service, "ns"), "ns");
+        let first = apply_statefulset(&api, &desired, || async { Ok(()) }).await;
+        if interrupt {
+            assert!(first.is_err());
+            assert!(state.lock().expect("state").0.is_none());
+            apply_statefulset(&api, &desired, || async { Ok(()) })
+                .await
+                .expect("resume orphaned migration");
+        } else {
+            first.expect("migrate");
+        }
+        apply_statefulset(&api, &desired, || async { Ok(()) })
+            .await
+            .expect("idempotent retry");
+        let mut stale = desired.clone();
+        stale.spec.as_mut().expect("spec").pod_management_policy = None;
+        assert!(
+            apply_statefulset(&api, &stale, || async { Ok(()) })
+                .await
+                .is_err(),
+            "stale writer must not undo migration"
+        );
+        let state = state.lock().expect("state");
+        assert_eq!(
+            state.0.as_ref().expect("live")["spec"]["podManagementPolicy"],
+            "Parallel"
+        );
+        assert_eq!(state.1, if concurrent { 2 } else { 1 });
+    }
+
+    #[tokio::test]
+    async fn resumes_after_interruption_between_orphan_delete_and_create() {
+        migration(true, false).await;
+    }
+
+    #[tokio::test]
+    async fn converges_after_stale_concurrent_creator_without_reversing_parallel() {
+        migration(false, true).await;
     }
 }

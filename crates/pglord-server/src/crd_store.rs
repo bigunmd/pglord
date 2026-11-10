@@ -2,12 +2,12 @@
 //! record stays on the mirror ConfigMap (engine state, written by the CR
 //! sync loop), so the failover CAS path is byte-identical in both modes.
 
-use kube::api::{Api, Patch, PatchParams};
+use kube::api::Api;
 use pglord_core::crd::PostgresCluster;
 use pglord_core::render::OwnerRef;
 use pglord_core::spec::ClusterSpec;
 
-use crate::spec_store::{ConfigMapSpecStore, FIELD_MANAGER, SpecStore};
+use crate::spec_store::{ConfigMapSpecStore, SpecStore};
 
 pub struct CrdSpecStore {
     client: kube::Client,
@@ -79,23 +79,44 @@ impl SpecStore for CrdSpecStore {
             .collect())
     }
 
-    async fn get(&self, ns: &str, name: &str) -> anyhow::Result<Option<(ClusterSpec, OwnerRef)>> {
-        Ok(self
-            .api(ns)
+    async fn get_versioned(
+        &self,
+        ns: &str,
+        name: &str,
+    ) -> anyhow::Result<Option<(ClusterSpec, OwnerRef, String)>> {
+        self.api(ns)
             .get_opt(name)
             .await?
-            .map(|cr| (effective_spec(&cr), cr_owner_ref(&cr))))
+            .map(|cr| {
+                let spec = effective_spec(&cr);
+                let owner = cr_owner_ref(&cr);
+                let revision = cr
+                    .metadata
+                    .resource_version
+                    .ok_or_else(|| anyhow::anyhow!("missing spec revision"))?;
+                Ok((spec, owner, revision))
+            })
+            .transpose()
     }
 
-    async fn put(&self, ns: &str, spec: &ClusterSpec) -> anyhow::Result<()> {
-        let cr = PostgresCluster::new(&spec.name, spec.clone());
+    async fn create(&self, ns: &str, spec: &ClusterSpec) -> anyhow::Result<()> {
         self.api(ns)
-            .patch(
-                &spec.name,
-                &PatchParams::apply(FIELD_MANAGER).force(),
-                &Patch::Apply(&cr),
+            .create(
+                &Default::default(),
+                &PostgresCluster::new(&spec.name, spec.clone()),
             )
             .await?;
+        Ok(())
+    }
+
+    async fn update(&self, ns: &str, spec: &ClusterSpec, revision: &str) -> anyhow::Result<()> {
+        anyhow::ensure!(!revision.is_empty(), "spec update requires a revision");
+        let api = self.api(ns);
+        let mut cr = api.get(&spec.name).await?;
+        // Replace the whole spec (including removed optional fields), preserving metadata/status.
+        cr.metadata.resource_version = Some(revision.to_string());
+        cr.spec = spec.clone();
+        api.replace(&spec.name, &Default::default(), &cr).await?;
         Ok(())
     }
 
@@ -132,9 +153,10 @@ impl SpecStore for CrdSpecStore {
         name: &str,
         state: Option<&pglord_core::upgrade::UpgradeState>,
         set_primary_to: Option<&str>,
+        expected_state: Option<&pglord_core::upgrade::UpgradeState>,
     ) -> anyhow::Result<bool> {
         self.mirror
-            .set_upgrade(ns, name, state, set_primary_to)
+            .set_upgrade(ns, name, state, set_primary_to, expected_state)
             .await
     }
 }

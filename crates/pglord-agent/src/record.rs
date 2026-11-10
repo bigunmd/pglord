@@ -115,21 +115,24 @@ pub async fn apply_record_to_config(
     cfg: &mut Config,
     reader: &RecordReader,
     me: &str,
-) -> Option<Role> {
-    let recorded = reader.recorded_primary().await?;
+) -> anyhow::Result<Option<Role>> {
+    let recorded = reader
+        .recorded_primary()
+        .await
+        .ok_or_else(|| anyhow::anyhow!("primary record unavailable"))?;
     if !same_instance_set(&recorded, me) {
         tracing::info!(
             %recorded,
             "primary record names another instance set; resolving role by ordinal"
         );
-        return None;
+        return Ok(None);
     }
     let role = role_from_record(&recorded, me);
     if role == Role::Standby {
         cfg.primary_host = pod_fqdn(&recorded, &cfg.cluster, &cfg.namespace);
     }
     tracing::info!(%recorded, ?role, "role resolved from primary record");
-    Some(role)
+    Ok(Some(role))
 }
 
 /// Follow the record forever. Never returns except by process exit (fence).

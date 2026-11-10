@@ -1,11 +1,15 @@
 //! The primary record: which pod is allowed to accept writes. Stored as an
 //! annotation on the spec ConfigMap and only ever changed via CAS on
-//! resourceVersion — this record IS the cluster's single-writer consensus.
+//! resourceVersion. CAS orders decisions; positive old-primary fencing is also
+//! required before handing write authority to a different instance.
 
 use k8s_openapi::api::core::v1::ConfigMap;
 use kube::api::{Api, Patch, PatchParams};
 
 pub use pglord_core::PRIMARY_ANNOTATION;
+
+/// Durable one-way claim: rollback must not race deletion during finalization.
+pub const FINALIZING_ANNOTATION: &str = "pglord.dev/finalizing";
 
 /// The recorded primary pod name; absent annotation = `default_pod`, which
 /// callers derive from the spec (`ClusterSpec::instance_name(0)`) so a

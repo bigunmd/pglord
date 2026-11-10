@@ -107,8 +107,8 @@ pub struct ClusterSpec {
     #[serde(default)]
     pub hibernated: bool,
     /// Instances (pod names) held down: the agent stops postgres and keeps
-    /// it stopped while listed. Standbys only — the fence endpoint refuses
-    /// the recorded primary. Flipped only by the fence/unfence endpoints.
+    /// it stopped while listed. Fencing the primary interrupts cluster writes.
+    /// Flipped only by the fence/unfence endpoints.
     #[serde(default)]
     pub fenced: Vec<String>,
     /// Instance-set generation. "g1" renders today's unsuffixed object names;
@@ -118,6 +118,10 @@ pub struct ClusterSpec {
     /// Flipped only by the upgrade flow, never by PATCH.
     #[serde(default = "default_generation")]
     pub generation: String,
+    /// Permanently enable independent pod creation after controlled in-place
+    /// upgrade migration. Existing clusters retain OrderedReady by default.
+    #[serde(default)]
+    pub parallel_pod_management: bool,
 }
 
 fn default_image() -> String {

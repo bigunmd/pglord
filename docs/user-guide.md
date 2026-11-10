@@ -2,8 +2,8 @@
 
 pglord runs highly-available PostgreSQL clusters in your Kubernetes namespace.
 You create a cluster from a web UI; pglord provisions the instances, keeps one
-primary and one or more streaming standbys, and promotes a standby automatically
-if the primary fails.
+primary and one or more streaming standbys, and permits promotion only after the
+former primary's durable stopped-state fence is acknowledged.
 
 Everything lives in a single namespace. You do not need cluster-admin.
 
@@ -139,7 +139,7 @@ on `persistentvolumeclaims`.
 | Field | Meaning |
 |---|---|
 | Name | Becomes the prefix of every object: pods `<name>-0`, `<name>-1`, services `<name>-rw`, `<name>-pods`. Lowercase letters, digits, hyphens; max 40 characters. |
-| Instances | Total instances: 1 primary plus streaming standbys. Two or more gives you automatic failover; one is a single instance with no redundancy. |
+| Instances | Total instances: 1 primary plus streaming standbys. Two or more allows failover after acknowledged primary fencing; one has no redundancy. |
 | Storage per instance | Size of the persistent volume for each instance, e.g. `1Gi`. |
 | Image | The pglord agent image. Leave the default unless you build your own. |
 
@@ -211,14 +211,18 @@ CREATE DATABASE orders OWNER app;
 
 ## 5. What failover looks like
 
-When the primary becomes unreachable, pglord promotes the most up-to-date
-standby (typically within a minute) and repoints `<name>-rw` at it. The cluster
-detail page shows the primary marker move to the new instance. When the old
-primary comes back, it rejoins automatically as a standby.
+An unreachable primary does **not** trigger an unproven promotion. pglord fails
+closed: it requires the former primary in the durable fence list and its agent
+acknowledgement that PostgreSQL is held stopped. Without that proof, writes can
+remain unavailable indefinitely; restoring reachability and fencing is an operator
+action. A deleted pod alone is not proof that a partitioned old process stopped.
+Once fenced, the most up-to-date eligible standby can be promoted and `<name>-rw`
+repointed. The cluster detail page shows the new primary. Unfence the former primary
+after switching so it can rejoin as a standby.
 
 From your application's side, a failover looks like a dropped connection.
 Applications should retry on connection errors and use a connection pool that
-reconnects — that is all that is needed to ride through a failover.
+reconnects. Retries cannot restore availability while fencing proof is unavailable.
 
 Uncommitted transactions on the old primary are lost. On an asynchronous
 cluster (the default), a small window of recently-committed writes can also be
@@ -266,9 +270,12 @@ Open a cluster from the Clusters list to reach these.
 ### Switch the primary on purpose
 
 Before draining a node, upgrading it, or moving load off an instance, hand the
-primary role to a specific standby: **Make primary** on that instance's row,
-then confirm. The old primary steps down, the chosen instance takes over, and
-`<name>-rw` follows within seconds.
+primary role to a specific standby: first **Fence** the current primary and wait
+for the agent's stopped-state acknowledgement (writes stop). The UI badge shows
+declared fence intent, not proof of completion; the switchover API checks the actual
+acknowledgement. Then choose **Make primary** on
+a ready standby and confirm. The chosen instance takes over and `<name>-rw`
+follows. Finally **Unfence** the former primary so it can rejoin.
 
 Only ready standbys offer the button. Promoting an instance that is not
 streaming would lose whatever WAL it never received, so pglord refuses.
@@ -411,6 +418,18 @@ details.
 
 What to know:
 
+- **Use target images containing the matching pglord agent upgrade protocol.**
+  Replacement standbys must wait for the primary's target major before touching
+  their data. Older agent images without that hold are not safe targets.
+- Before replacing pods, pglord permanently selects Parallel pod management and
+  recreates the StatefulSet controller with orphan propagation, retaining existing
+  pods and PVCs. The choice survives upgrade completion; ordinary rolls still use
+  explicit readiness ordering. Standbys are replaced into a paused state first,
+  then the primary converts; standbys clone only once its target major is available.
+  Progress resumes from persisted state after server restart without an open UI.
+  With CRD storage, a saved change can temporarily fail immediate application while
+  the ConfigMap mirror catches up; inspect persisted upgrade status before retrying
+  a start request. Reconciliation retries the saved intent.
 - **A backup is required.** pglord refuses to start without backups enabled
   and a completed backup, because restoring one is the only way back. Take it
   from the **Backups** section first.
@@ -474,10 +493,14 @@ back rather than one for every window it missed.
 
 **Two lists, deliberately.** *Recent runs* shows what happened, including
 backups still running and ones that failed with the reason. *In the repository*
-shows what actually exists and could be restored. A failed run leaves nothing in
-the repository, which is exactly why both are shown. Only one backup of a
-cluster runs at a time; asking for another while one is in flight is refused
-rather than queued.
+shows what actually exists and could be restored. A lost response does not prove
+that the backup failed: the agent may still be running or may have completed it.
+Only one backup of a cluster is admitted at a time across API and scheduled requests;
+asking for another while one is in flight is refused rather than queued. An
+**Unknown** result also blocks admission. Inspect the agent and repository and
+reconcile the persisted run outcome before retrying; there is no automatic timeout
+that safely proves completion and no force-clear API. History read failures likewise
+block new dispatch instead of treating history as empty.
 
 ### Restore a backup
 
@@ -800,11 +823,22 @@ ones that need loading at server start:
   but never drops it; the preload list, being configuration rather than
   data, does shrink after the next restart.
 
+### Scale-down volume retention
+
+Reducing replicas retains the removed instances' PVCs. This prevents a concurrent
+scale-up from racing automatic volume deletion. Unused volumes continue consuming
+storage until an operator explicitly removes them after checking current desired
+replicas and running workloads. Deleting the cluster or finalizing a blue-green
+upgrade remains destructive for the removed StatefulSet's volumes.
+
 ### Grow storage
 
 **Edit → Storage per instance.** Storage can only grow — Kubernetes cannot
 shrink a volume — and your StorageClass must have `allowVolumeExpansion: true`.
-If it does not, the change is rejected and nothing is modified. Check with:
+The desired size is saved before volume expansion. If Kubernetes rejects expansion,
+the API returns `422 storage_expansion_failed`; the desired size remains saved.
+Correct the StorageClass or permissions, then explicitly submit the same storage size
+to retry. Other spec edits do not retry expansion. Check the StorageClass with:
 
 ```bash
 kubectl get storageclass -o custom-columns=NAME:.metadata.name,EXPANSION:.allowVolumeExpansion
@@ -936,10 +970,13 @@ shows a *Fenced* badge, drops out of the read Service, and is never considered
 for promotion. **Unfence** restarts it; it rewinds if needed and rejoins as a
 streaming standby.
 
-The recorded primary cannot be fenced (`409 cannot_fence_primary`): fencing it
-would stop writes for the whole cluster behind an innocuous-looking button.
-To take the primary down, **Make primary** on another instance first, then
-fence the ex-primary once it has stepped down.
+The primary row and API also permit explicitly fencing the recorded primary. **This stops cluster
+writes.** Planned switchover now requires that durable fence and the old primary's
+agent acknowledgement (`role: fenced`) before another instance can be promoted.
+An unreachable or missing primary is not sufficient: switchover returns
+`409 primary_not_fenced` until the hold is confirmed. Do not force-delete a
+partitioned pod as a substitute for fencing its running PostgreSQL process.
+After switching, unfence the former primary to let it rejoin as a standby.
 
 Fenced state survives pod restarts and even hibernation: a fenced instance
 wakes up still fenced, postgres held down, until it is unfenced.
@@ -1082,7 +1119,7 @@ and reports `pglord_pg_up 0`, which is exactly when you want the data point.
 | `pglord_clusters` | Number of cluster specs. |
 | `pglord_reconcile_total{cluster, outcome}` | Reconcile passes; a growing `outcome="error"` rate means a cluster cannot be applied. |
 | `pglord_failover_total{cluster, trigger}` | Primary record changes — `auto` for orchestrator failovers, `manual` for switchovers. |
-| `pglord_backup_runs_total{cluster, kind, outcome}` | Finished backup runs; alert on `outcome="failed"`. |
+| `pglord_backup_runs_total{cluster, kind, outcome}` | Backup request outcomes; alert on `outcome="failed"` and `outcome="unknown"`. |
 | `pglord_cluster_instances_ready{cluster}` / `pglord_cluster_instances{cluster}` | Ready instances versus how many the spec asks for. |
 
 Instance identity is deliberately not baked into the metrics: the pod,

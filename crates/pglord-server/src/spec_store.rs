@@ -107,12 +107,49 @@ pub fn configmap_to_spec(cm: &ConfigMap) -> anyhow::Result<(ClusterSpec, OwnerRe
     Ok((spec, owner))
 }
 
+/// Patch only the spec; preserve control annotations and CR status.
+pub(crate) fn spec_update_patch(
+    spec: &ClusterSpec,
+    revision: &str,
+) -> anyhow::Result<serde_json::Value> {
+    anyhow::ensure!(!revision.is_empty(), "spec update requires a revision");
+    Ok(serde_json::json!({
+        "metadata": {"resourceVersion": revision},
+        "data": {"spec": serde_json::to_string(spec)?}
+    }))
+}
+
+/// Preserve a conflict response instead of collapsing concurrent writes to 500.
+pub(crate) fn mutation_error(err: anyhow::Error) -> crate::error::ApiError {
+    if matches!(err.downcast_ref::<kube::Error>(), Some(kube::Error::Api(status)) if status.code == 409)
+    {
+        crate::error::ApiError::conflict("spec_conflict").with_detail(
+            "Cluster changed concurrently or already exists; read it again before retrying.",
+        )
+    } else {
+        crate::error::ApiError::from_kube(err)
+    }
+}
+
+// async_trait emits redundant must_use on boxed futures with newer Clippy.
+#[allow(clippy::double_must_use)]
 #[async_trait::async_trait]
 pub trait SpecStore: Send + Sync {
     /// Every cluster this store manages, with the namespace it lives in.
     async fn list_all(&self) -> anyhow::Result<Vec<(String, ClusterSpec)>>;
-    async fn get(&self, ns: &str, name: &str) -> anyhow::Result<Option<(ClusterSpec, OwnerRef)>>;
-    async fn put(&self, ns: &str, spec: &ClusterSpec) -> anyhow::Result<()>;
+    async fn get(&self, ns: &str, name: &str) -> anyhow::Result<Option<(ClusterSpec, OwnerRef)>> {
+        Ok(self
+            .get_versioned(ns, name)
+            .await?
+            .map(|(spec, owner, _)| (spec, owner)))
+    }
+    async fn get_versioned(
+        &self,
+        ns: &str,
+        name: &str,
+    ) -> anyhow::Result<Option<(ClusterSpec, OwnerRef, String)>>;
+    async fn create(&self, ns: &str, spec: &ClusterSpec) -> anyhow::Result<()>;
+    async fn update(&self, ns: &str, spec: &ClusterSpec, revision: &str) -> anyhow::Result<()>;
     async fn delete(&self, ns: &str, name: &str) -> anyhow::Result<bool>;
     /// The recorded primary pod for the cluster, if the spec exists
     /// (annotation on the spec object; caller applies the `<name>-0` default).
@@ -135,6 +172,7 @@ pub trait SpecStore: Send + Sync {
         name: &str,
         state: Option<&pglord_core::upgrade::UpgradeState>,
         set_primary_to: Option<&str>,
+        expected_state: Option<&pglord_core::upgrade::UpgradeState>,
     ) -> anyhow::Result<bool>;
 }
 
@@ -173,20 +211,37 @@ impl SpecStore for ConfigMapSpecStore {
             .collect())
     }
 
-    async fn get(&self, ns: &str, name: &str) -> anyhow::Result<Option<(ClusterSpec, OwnerRef)>> {
+    async fn get_versioned(
+        &self,
+        ns: &str,
+        name: &str,
+    ) -> anyhow::Result<Option<(ClusterSpec, OwnerRef, String)>> {
         match self.api(ns).get_opt(&spec_cm_name(name)).await? {
-            Some(cm) => Ok(Some(configmap_to_spec(&cm)?)),
+            Some(cm) => {
+                let (spec, owner) = configmap_to_spec(&cm)?;
+                let revision = cm
+                    .metadata
+                    .resource_version
+                    .ok_or_else(|| anyhow::anyhow!("missing spec revision"))?;
+                Ok(Some((spec, owner, revision)))
+            }
             None => Ok(None),
         }
     }
 
-    async fn put(&self, ns: &str, spec: &ClusterSpec) -> anyhow::Result<()> {
-        let cm = spec_to_configmap(spec, ns)?;
+    async fn create(&self, ns: &str, spec: &ClusterSpec) -> anyhow::Result<()> {
+        self.api(ns)
+            .create(&Default::default(), &spec_to_configmap(spec, ns)?)
+            .await?;
+        Ok(())
+    }
+
+    async fn update(&self, ns: &str, spec: &ClusterSpec, revision: &str) -> anyhow::Result<()> {
         self.api(ns)
             .patch(
                 &spec_cm_name(&spec.name),
-                &PatchParams::apply(FIELD_MANAGER).force(),
-                &Patch::Apply(&cm),
+                &PatchParams::default(),
+                &Patch::Merge(spec_update_patch(spec, revision)?),
             )
             .await?;
         Ok(())
@@ -233,14 +288,35 @@ impl SpecStore for ConfigMapSpecStore {
         name: &str,
         state: Option<&pglord_core::upgrade::UpgradeState>,
         set_primary_to: Option<&str>,
+        expected_state: Option<&pglord_core::upgrade::UpgradeState>,
     ) -> anyhow::Result<bool> {
         let api = self.api(ns);
         let cm_name = spec_cm_name(name);
         let Some(cm) = api.get_opt(&cm_name).await? else {
             return Ok(false);
         };
+        if upgrade_from_cm(&cm).as_ref() != expected_state {
+            return Ok(false);
+        }
+        // Finalization is irreversible once source cleanup starts. A rollback
+        // that read Soaking before the claim must not revive the source.
+        if set_primary_to.is_some()
+            && cm
+                .metadata
+                .annotations
+                .as_ref()
+                .is_some_and(|a| a.contains_key(crate::primary_record::FINALIZING_ANNOTATION))
+        {
+            return Ok(false);
+        }
         let rv = cm.metadata.resource_version.unwrap_or_default();
         let mut annotations = serde_json::Map::new();
+        if state.is_none() {
+            annotations.insert(
+                crate::primary_record::FINALIZING_ANNOTATION.into(),
+                serde_json::Value::Null,
+            );
+        }
         annotations.insert(
             pglord_core::upgrade::UPGRADE_ANNOTATION.to_string(),
             match state {
@@ -326,5 +402,215 @@ mod tests {
             let (k, v) = pair.split_once('=').expect("k=v");
             assert_eq!(labels.get(k).map(String::as_str), Some(v));
         }
+    }
+}
+
+#[cfg(test)]
+mod revision_tests {
+    use super::*;
+    #[test]
+    fn update_requires_nonempty_revision_and_preserves_metadata() {
+        let spec: ClusterSpec =
+            serde_json::from_value(serde_json::json!({"name":"demo"})).expect("spec");
+        assert!(spec_update_patch(&spec, "").is_err());
+        let patch = spec_update_patch(&spec, "42").expect("patch");
+        assert_eq!(patch["metadata"]["resourceVersion"], "42");
+        assert!(patch["metadata"].get("annotations").is_none());
+        assert!(patch["data"]["spec"].is_string());
+        assert!(patch.get("status").is_none());
+    }
+}
+
+#[cfg(test)]
+mod mutation_contract_tests {
+    use super::*;
+    use axum::{
+        body::Body,
+        http::{Request, Response, StatusCode},
+    };
+    use http_body_util::BodyExt;
+    use std::sync::{Arc, Mutex};
+
+    // Emulate Kubernetes resourceVersion/create conflicts without a live cluster.
+    async fn exercise(configmap: bool) {
+        let stored = Arc::new(Mutex::new(None::<serde_json::Value>));
+        let state = stored.clone();
+        let service = tower::service_fn(move |request: Request<kube::client::Body>| {
+            let state = state.clone();
+            async move {
+                let method = request.method().clone();
+                let bytes = request
+                    .into_body()
+                    .collect()
+                    .await
+                    .expect("body")
+                    .to_bytes();
+                let incoming: serde_json::Value = if bytes.is_empty() {
+                    serde_json::Value::Null
+                } else {
+                    serde_json::from_slice(&bytes).expect("json")
+                };
+                let mut stored = state.lock().expect("lock");
+                let (status, output) = if method == axum::http::Method::GET {
+                    (StatusCode::OK, stored.clone().expect("created"))
+                } else if method == axum::http::Method::POST && stored.is_none() {
+                    let mut value = incoming;
+                    value["metadata"]["resourceVersion"] = "1".into();
+                    value["metadata"]["uid"] = "cluster-uid".into();
+                    *stored = Some(value.clone());
+                    (StatusCode::CREATED, value)
+                } else if method != axum::http::Method::POST
+                    && stored.as_ref().is_some_and(|s| {
+                        s["metadata"]["resourceVersion"] == incoming["metadata"]["resourceVersion"]
+                    })
+                {
+                    let mut value = stored.clone().expect("created");
+                    let key = if configmap { "data" } else { "spec" };
+                    value[key] = incoming[key].clone();
+                    value["metadata"]["resourceVersion"] = "2".into();
+                    *stored = Some(value.clone());
+                    (StatusCode::OK, value)
+                } else {
+                    (
+                        StatusCode::CONFLICT,
+                        serde_json::json!({"apiVersion":"v1","kind":"Status","status":"Failure","message":"conflict","reason":"Conflict","code":409}),
+                    )
+                };
+                Ok::<_, std::convert::Infallible>(
+                    Response::builder()
+                        .status(status)
+                        .header("content-type", "application/json")
+                        .body(Body::from(output.to_string()))
+                        .expect("response"),
+                )
+            }
+        });
+        let client = kube::Client::new(service, "ns");
+        let store: Box<dyn SpecStore> = if configmap {
+            Box::new(ConfigMapSpecStore::new(client, "ns"))
+        } else {
+            Box::new(crate::crd_store::CrdSpecStore::new(client, "ns", false))
+        };
+        let initial: ClusterSpec =
+            serde_json::from_value(serde_json::json!({"name":"demo"})).expect("spec");
+        store.create("ns", &initial).await.expect("first create");
+        assert!(
+            store.create("ns", &initial).await.is_err(),
+            "second creator must conflict"
+        );
+        let (mut first, _, revision) = store
+            .get_versioned("ns", "demo")
+            .await
+            .expect("get")
+            .expect("exists");
+        let (mut second, _, stale) = store
+            .get_versioned("ns", "demo")
+            .await
+            .expect("get")
+            .expect("exists");
+        first.hibernated = true;
+        second.fenced.push("demo-1".into());
+        store.update("ns", &first, &revision).await.expect("winner");
+        let err = store
+            .update("ns", &second, &stale)
+            .await
+            .expect_err("stale writer must conflict");
+        assert_eq!(mutation_error(err).code(), "spec_conflict");
+        let (actual, _) = store.get("ns", "demo").await.expect("get").expect("exists");
+        assert!(actual.hibernated);
+        assert!(actual.fenced.is_empty());
+    }
+
+    async fn assert_delayed_rollback_rejected(finalizing: bool) {
+        use pglord_core::upgrade::{UPGRADE_ANNOTATION, UpgradeState};
+
+        let soaking: UpgradeState = serde_json::from_value(serde_json::json!({
+            "target_image": "agent:18",
+            "next_generation": "g2",
+            "phase": "soaking",
+            "previous_primary": "demo-0"
+        }))
+        .expect("soaking state");
+        let mut annotations = BTreeMap::from([(
+            pglord_core::PRIMARY_ANNOTATION.to_string(),
+            "demo-g2-0".to_string(),
+        )]);
+        if finalizing {
+            annotations.insert(
+                UPGRADE_ANNOTATION.to_string(),
+                serde_json::to_string(&soaking).expect("upgrade annotation"),
+            );
+            annotations.insert(
+                crate::primary_record::FINALIZING_ANNOTATION.to_string(),
+                "demo".to_string(),
+            );
+        }
+        let cm = ConfigMap {
+            metadata: ObjectMeta {
+                name: Some("demo-spec".into()),
+                namespace: Some("ns".into()),
+                resource_version: Some("42".into()),
+                annotations: Some(annotations),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        // Without the expected-state check, a fresh resourceVersion would let
+        // this stale rollback restore the primary whose data was finalized away.
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let observed = requests.clone();
+        let service = tower::service_fn(move |request: Request<kube::client::Body>| {
+            let observed = observed.clone();
+            let cm = cm.clone();
+            async move {
+                observed
+                    .lock()
+                    .expect("requests")
+                    .push((request.method().clone(), request.uri().path().to_string()));
+                Ok::<_, std::convert::Infallible>(
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .header("content-type", "application/json")
+                        .body(Body::from(serde_json::to_vec(&cm).expect("configmap")))
+                        .expect("response"),
+                )
+            }
+        });
+        let store = ConfigMapSpecStore::new(kube::Client::new(service, "ns"), "ns");
+        let accepted = store
+            .set_upgrade("ns", "demo", None, Some("demo-0"), Some(&soaking))
+            .await
+            .expect("rollback admission");
+        assert!(
+            !accepted,
+            "stale rollback must not restore the source primary"
+        );
+        assert_eq!(
+            *requests.lock().expect("requests"),
+            vec![(
+                axum::http::Method::GET,
+                "/api/v1/namespaces/ns/configmaps/demo-spec".to_string()
+            )],
+            "rejected rollback must not issue a PATCH"
+        );
+    }
+
+    #[tokio::test]
+    async fn delayed_rollback_rejected_after_finalization_clears_upgrade_state() {
+        assert_delayed_rollback_rejected(false).await;
+    }
+
+    #[tokio::test]
+    async fn rollback_rejected_while_finalization_claims_matching_upgrade_state() {
+        assert_delayed_rollback_rejected(true).await;
+    }
+
+    #[tokio::test]
+    async fn configmap_create_and_stale_update_conflict() {
+        exercise(true).await;
+    }
+    #[tokio::test]
+    async fn crd_create_and_stale_update_conflict() {
+        exercise(false).await;
     }
 }

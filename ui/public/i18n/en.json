@@ -405,7 +405,7 @@
     "hibernatedBanner": "Cluster is hibernated — {{count}} instances stopped, volumes retained.",
     "fence": "Fence",
     "fenceTitle": "Fence {{pod}}?",
-    "fenceWarning": "PostgreSQL stops on this instance and stays down until it is unfenced. The pod keeps running so the disk can be inspected. The rest of the cluster continues to serve.",
+    "fenceWarning": "PostgreSQL stops on this instance and stays down until it is unfenced. The pod keeps running so the disk can be inspected. Fencing the primary stops cluster writes until a fenced-hold acknowledgement permits switchover or the primary is unfenced.",
     "unfence": "Unfence",
     "namespace": "Namespace"
   },

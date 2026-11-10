@@ -9,10 +9,10 @@ use std::collections::BTreeMap;
 
 use k8s_openapi::api::core::v1::ConfigMap;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, OwnerReference};
-use kube::api::{Api, Patch, PatchParams};
+use kube::api::{Api, PostParams};
 use serde::{Deserialize, Serialize};
 
-use crate::spec_store::{FIELD_MANAGER, MANAGED_BY_LABEL};
+use crate::spec_store::MANAGED_BY_LABEL;
 
 /// Runs kept per cluster. Enough to see a pattern, bounded so the ConfigMap
 /// cannot grow without limit.
@@ -72,96 +72,123 @@ pub fn update_run(
     runs
 }
 
-/// Runs stuck in `running` past the timeout are reported as unknown: the
-/// process that owned them is gone, so we cannot claim they are still going.
+/// Old running records have an unknown outcome; age does not prove the job stopped.
 pub fn stale_running_to_unknown(mut runs: Vec<BackupRun>, now: i64) -> Vec<BackupRun> {
     for run in runs.iter_mut() {
         if run.state == RunState::Running && now - run.started > RUNNING_TIMEOUT_SECONDS {
             run.state = RunState::Unknown;
-            run.error = Some("the server tracking this backup restarted".to_string());
+            run.error = Some(
+                "backup outcome is unknown; admission remains blocked until reconciled".to_string(),
+            );
         }
     }
     runs
 }
 
 pub fn has_run_in_flight(runs: &[BackupRun]) -> bool {
-    runs.iter().any(|r| r.state == RunState::Running)
+    runs.iter()
+        .any(|r| matches!(r.state, RunState::Running | RunState::Unknown))
 }
 
-pub async fn list(client: &kube::Client, ns: &str, cluster: &str) -> Vec<BackupRun> {
-    let api: Api<ConfigMap> = Api::namespaced(client.clone(), ns);
-    let Ok(Some(cm)) = api.get_opt(&runs_cm_name(cluster)).await else {
-        return Vec::new();
-    };
-    cm.data
+fn decode(cm: &ConfigMap) -> anyhow::Result<Vec<BackupRun>> {
+    let raw = cm
+        .data
         .as_ref()
         .and_then(|d| d.get(RUNS_KEY))
-        .and_then(|raw| serde_json::from_str::<Vec<BackupRun>>(raw).ok())
-        .unwrap_or_default()
+        .ok_or_else(|| anyhow::anyhow!("backup history has no runs field"))?;
+    Ok(serde_json::from_str(raw)?)
 }
 
-async fn save(
+pub async fn list(
     client: &kube::Client,
     ns: &str,
     cluster: &str,
-    runs: &[BackupRun],
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Vec<BackupRun>> {
     let api: Api<ConfigMap> = Api::namespaced(client.clone(), ns);
-    let name = runs_cm_name(cluster);
-    // Own the history from the spec ConfigMap so deleting a cluster takes its
-    // run history with it; otherwise a cluster recreated with the same name
-    // inherits a stranger's history.
-    let owner = api
-        .get_opt(&crate::spec_store::spec_cm_name(cluster))
-        .await
-        .ok()
-        .flatten()
-        .and_then(|spec_cm| spec_cm.metadata.uid)
-        .map(|uid| OwnerReference {
-            api_version: "v1".to_string(),
-            kind: "ConfigMap".to_string(),
-            name: crate::spec_store::spec_cm_name(cluster),
-            uid,
-            controller: Some(true),
-            block_owner_deletion: Some(true),
-        });
-    let cm = ConfigMap {
-        metadata: ObjectMeta {
-            name: Some(name.clone()),
-            namespace: Some(ns.to_string()),
-            labels: Some(BTreeMap::from([
-                (MANAGED_BY_LABEL.to_string(), "pglord".to_string()),
-                (
-                    "app.kubernetes.io/instance".to_string(),
-                    cluster.to_string(),
-                ),
-            ])),
-            owner_references: owner.map(|o| vec![o]),
-            ..Default::default()
-        },
-        data: Some(BTreeMap::from([(
-            RUNS_KEY.to_string(),
-            serde_json::to_string(runs)?,
-        )])),
-        ..Default::default()
-    };
-    api.patch(
-        &name,
-        &PatchParams::apply(FIELD_MANAGER).force(),
-        &Patch::Apply(&cm),
-    )
-    .await?;
-    Ok(())
+    match api.get_opt(&runs_cm_name(cluster)).await? {
+        Some(cm) => decode(&cm),
+        None => Ok(Vec::new()),
+    }
 }
 
+#[derive(Debug)]
+pub struct BackupInProgress;
+impl std::fmt::Display for BackupInProgress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "a backup is already running")
+    }
+}
+impl std::error::Error for BackupInProgress {}
+
+fn conflict(err: &kube::Error) -> bool {
+    matches!(err, kube::Error::Api(response) if response.code == 409)
+}
+
+/// The create/replace is the admission point shared by manual and scheduled runs.
 pub async fn record_start(
     client: &kube::Client,
     ns: &str,
     cluster: &str,
     run: BackupRun,
 ) -> anyhow::Result<()> {
-    let runs = push_run(list(client, ns, cluster).await, run);
-    save(client, ns, cluster, &runs).await
+    let api: Api<ConfigMap> = Api::namespaced(client.clone(), ns);
+    let name = runs_cm_name(cluster);
+    for _ in 0..8 {
+        let previous = api.get_opt(&name).await?;
+        let runs = match &previous {
+            Some(cm) => decode(cm)?,
+            None => Vec::new(),
+        };
+        // Age alone cannot prove the old backup stopped. Fail closed until its outcome is known.
+        if has_run_in_flight(&runs) {
+            return Err(BackupInProgress.into());
+        }
+        let existing = previous.is_some();
+        let mut cm = if let Some(cm) = previous {
+            cm
+        } else {
+            let owner = api.get(&crate::spec_store::spec_cm_name(cluster)).await?;
+            let uid = owner
+                .metadata
+                .uid
+                .ok_or_else(|| anyhow::anyhow!("spec has no UID"))?;
+            ConfigMap {
+                metadata: ObjectMeta {
+                    name: Some(name.clone()),
+                    namespace: Some(ns.into()),
+                    labels: Some(BTreeMap::from([
+                        (MANAGED_BY_LABEL.into(), "pglord".into()),
+                        ("app.kubernetes.io/instance".into(), cluster.into()),
+                    ])),
+                    owner_references: Some(vec![OwnerReference {
+                        api_version: "v1".into(),
+                        kind: "ConfigMap".into(),
+                        name: crate::spec_store::spec_cm_name(cluster),
+                        uid,
+                        controller: Some(true),
+                        block_owner_deletion: Some(true),
+                    }]),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+        };
+        cm.data.get_or_insert_with(BTreeMap::new).insert(
+            RUNS_KEY.into(),
+            serde_json::to_string(&push_run(runs, run.clone()))?,
+        );
+        let result = if existing {
+            api.replace(&name, &PostParams::default(), &cm).await
+        } else {
+            api.create(&PostParams::default(), &cm).await
+        };
+        match result {
+            Ok(_) => return Ok(()),
+            Err(err) if conflict(&err) => continue,
+            Err(err) => return Err(err.into()),
+        }
+    }
+    anyhow::bail!("backup admission conflicted repeatedly")
 }
 
 pub async fn record_finish(
@@ -173,12 +200,27 @@ pub async fn record_finish(
     finished: i64,
     error: Option<String>,
 ) -> anyhow::Result<()> {
-    let runs = update_run(list(client, ns, cluster).await, id, |run| {
-        run.state = state;
-        run.finished = Some(finished);
-        run.error.clone_from(&error);
-    });
-    save(client, ns, cluster, &runs).await
+    let api: Api<ConfigMap> = Api::namespaced(client.clone(), ns);
+    let name = runs_cm_name(cluster);
+    for _ in 0..8 {
+        let mut cm = api.get(&name).await?;
+        let runs = decode(&cm)?;
+        anyhow::ensure!(runs.iter().any(|r| r.id == id), "backup run {id} not found");
+        let runs = update_run(runs, id, |run| {
+            run.state = state;
+            run.finished = Some(finished);
+            run.error.clone_from(&error);
+        });
+        cm.data
+            .get_or_insert_with(BTreeMap::new)
+            .insert(RUNS_KEY.into(), serde_json::to_string(&runs)?);
+        match api.replace(&name, &PostParams::default(), &cm).await {
+            Ok(_) => return Ok(()),
+            Err(err) if conflict(&err) => continue,
+            Err(err) => return Err(err.into()),
+        }
+    }
+    anyhow::bail!("backup completion conflicted repeatedly")
 }
 
 #[cfg(test)]
@@ -195,6 +237,178 @@ mod tests {
             finished: None,
             error: None,
         }
+    }
+
+    #[derive(Clone, Default)]
+    struct MockHistory {
+        cm: std::sync::Arc<tokio::sync::Mutex<Option<ConfigMap>>>,
+        fail_reads: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        writes: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    fn status(code: u16) -> (axum::http::StatusCode, axum::Json<serde_json::Value>) {
+        (
+            axum::http::StatusCode::from_u16(code).expect("status"),
+            axum::Json(serde_json::json!({
+                "apiVersion":"v1", "kind":"Status", "status":"Failure",
+                "message":"mock error", "reason":match code { 404 => "NotFound", 409 => "Conflict", _ => "InternalError" }, "code":code
+            })),
+        )
+    }
+
+    async fn mock_history() -> (kube::Client, MockHistory) {
+        use axum::{
+            Json,
+            extract::{Path, State},
+            routing::{get, post},
+        };
+        use std::sync::atomic::Ordering;
+        let state = MockHistory::default();
+        let app = axum::Router::new()
+            .route(
+                "/api/v1/namespaces/ns/configmaps/{name}",
+                get(
+                    |State(s): State<MockHistory>, Path(name): Path<String>| async move {
+                        if s.fail_reads.load(Ordering::SeqCst) {
+                            return Err(status(500));
+                        }
+                        if name == "db-spec" {
+                            return Ok(Json(
+                                serde_json::json!({"apiVersion":"v1", "kind":"ConfigMap",
+                            "metadata":{"name":name,"uid":"spec-uid"}}),
+                            ));
+                        }
+                        let cm = s.cm.lock().await;
+                        cm.as_ref()
+                            .map(|cm| Json(serde_json::to_value(cm).expect("json")))
+                            .ok_or_else(|| status(404))
+                    },
+                )
+                .put(
+                    |State(s): State<MockHistory>, Json(mut incoming): Json<ConfigMap>| async move {
+                        let mut stored = s.cm.lock().await;
+                        let Some(old) = stored.as_ref() else {
+                            return Err(status(404));
+                        };
+                        if incoming.metadata.resource_version != old.metadata.resource_version {
+                            return Err(status(409));
+                        }
+                        let rev = old
+                            .metadata
+                            .resource_version
+                            .as_ref()
+                            .expect("revision")
+                            .parse::<u64>()
+                            .expect("number")
+                            + 1;
+                        incoming.metadata.resource_version = Some(rev.to_string());
+                        *stored = Some(incoming.clone());
+                        s.writes.fetch_add(1, Ordering::SeqCst);
+                        Ok(Json(incoming))
+                    },
+                ),
+            )
+            .route(
+                "/api/v1/namespaces/ns/configmaps",
+                post(
+                    |State(s): State<MockHistory>, Json(mut incoming): Json<ConfigMap>| async move {
+                        let mut stored = s.cm.lock().await;
+                        if stored.is_some() {
+                            return Err(status(409));
+                        }
+                        incoming.metadata.resource_version = Some("1".into());
+                        *stored = Some(incoming.clone());
+                        s.writes.fetch_add(1, Ordering::SeqCst);
+                        Ok(Json(incoming))
+                    },
+                ),
+            )
+            .with_state(state.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("address");
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve");
+        });
+        let cfg = kube::Config::new(format!("http://{addr}").parse().expect("URI"));
+        (kube::Client::try_from(cfg).expect("client"), state)
+    }
+
+    #[tokio::test]
+    async fn concurrent_admission_has_one_winner_and_preserves_history() {
+        let (client, _) = mock_history().await;
+        let (a, b) = tokio::join!(
+            record_start(&client, "ns", "db", run("a", RunState::Running, 1)),
+            record_start(&client, "ns", "db", run("b", RunState::Running, 1))
+        );
+        assert_ne!(a.is_ok(), b.is_ok());
+        let loser = if let Err(e) = a {
+            e
+        } else {
+            b.expect_err("loser")
+        };
+        assert!(loser.is::<BackupInProgress>());
+        let runs = list(&client, "ns", "db").await.expect("list");
+        assert_eq!(runs.len(), 1);
+        record_finish(
+            &client,
+            "ns",
+            "db",
+            &runs[0].id,
+            RunState::Succeeded,
+            2,
+            None,
+        )
+        .await
+        .expect("finish");
+        record_start(&client, "ns", "db", run("next", RunState::Running, 3))
+            .await
+            .expect("next");
+        // A late duplicate completion must not erase the later admitted run.
+        record_finish(
+            &client,
+            "ns",
+            "db",
+            &runs[0].id,
+            RunState::Succeeded,
+            2,
+            None,
+        )
+        .await
+        .expect("late finish");
+        let runs = list(&client, "ns", "db").await.expect("list");
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].id, "next");
+        assert_eq!(runs[0].state, RunState::Running);
+    }
+
+    #[tokio::test]
+    async fn history_read_failure_never_writes_and_missing_is_distinct() {
+        use std::sync::atomic::Ordering;
+        let (client, state) = mock_history().await;
+        assert!(list(&client, "ns", "db").await.expect("missing").is_empty());
+        state.fail_reads.store(true, Ordering::SeqCst);
+        assert!(list(&client, "ns", "db").await.is_err());
+        assert!(
+            record_start(&client, "ns", "db", run("a", RunState::Running, 1))
+                .await
+                .is_err()
+        );
+        assert!(
+            record_finish(&client, "ns", "db", "a", RunState::Succeeded, 2, None)
+                .await
+                .is_err()
+        );
+        assert_eq!(state.writes.load(Ordering::SeqCst), 0);
+        assert!(decode(&ConfigMap::default()).is_err());
+        assert!(
+            decode(&ConfigMap {
+                data: Some(BTreeMap::from([(RUNS_KEY.into(), "invalid".into())])),
+                ..Default::default()
+            })
+            .is_err()
+        );
     }
 
     #[test]
@@ -255,6 +469,11 @@ mod tests {
     #[test]
     fn in_flight_detection_guards_concurrent_backups() {
         assert!(!has_run_in_flight(&[run("a", RunState::Succeeded, 1)]));
+        assert!(has_run_in_flight(&[run(
+            "lost-response",
+            RunState::Unknown,
+            1
+        )]));
         assert!(has_run_in_flight(&[
             run("a", RunState::Succeeded, 1),
             run("b", RunState::Running, 2)

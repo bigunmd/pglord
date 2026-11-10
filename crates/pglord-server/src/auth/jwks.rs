@@ -13,6 +13,7 @@ use tokio::sync::Mutex;
 /// Floor between JWKS refetches on unknown-`kid` tokens, so a stream of junk
 /// tokens cannot hammer the IdP.
 const REFETCH_MIN_INTERVAL: Duration = Duration::from_secs(60);
+const KEY_MAX_AGE: Duration = Duration::from_secs(300);
 
 #[derive(Deserialize)]
 struct DiscoveryDoc {
@@ -32,6 +33,7 @@ pub struct OidcValidator {
 struct KeyCache {
     jwks: Option<JwkSet>,
     last_fetch: Option<Instant>,
+    last_success: Option<Instant>,
 }
 
 impl OidcValidator {
@@ -102,11 +104,15 @@ impl OidcValidator {
         Ok(decode::<serde_json::Value>(token, &key, &validation)?.claims)
     }
 
-    /// Cached key lookup; on a miss, refetch the JWKS (rate-limited) so
-    /// IdP-side key rotation is picked up without a restart.
+    /// Refresh expired keys even on hits; failed refreshes never extend their trust.
+    /// Misses and refresh failures share the fetch rate limit.
     async fn key_for(&self, kid: &str) -> anyhow::Result<Option<Jwk>> {
         let mut cache = self.cache.lock().await;
-        if let Some(found) = cache.jwks.as_ref().and_then(|j| j.find(kid)) {
+        if cache
+            .last_success
+            .is_some_and(|at| at.elapsed() < KEY_MAX_AGE)
+            && let Some(found) = cache.jwks.as_ref().and_then(|j| j.find(kid))
+        {
             return Ok(Some(found.clone()));
         }
         let due = cache
@@ -137,6 +143,7 @@ impl OidcValidator {
             .json()
             .await?;
         cache.jwks = Some(jwks);
+        cache.last_success = Some(Instant::now());
         Ok(cache.jwks.as_ref().and_then(|j| j.find(kid)).cloned())
     }
 }
@@ -191,6 +198,8 @@ aHCSV9HUW+HVYQd4vniU6qpC
         base: String,
         jwks_fetches: Arc<AtomicUsize>,
         serve_second_key: Arc<std::sync::atomic::AtomicBool>,
+        remove_first_key: Arc<std::sync::atomic::AtomicBool>,
+        fail_fetch: Arc<std::sync::atomic::AtomicBool>,
     }
 
     fn jwk_json(kid: &str) -> serde_json::Value {
@@ -211,6 +220,8 @@ aHCSV9HUW+HVYQd4vniU6qpC
             base: base.clone(),
             jwks_fetches: fetches.clone(),
             serve_second_key: second.clone(),
+            remove_first_key: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            fail_fetch: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
         let state = idp.clone();
         let app = Router::new()
@@ -224,11 +235,18 @@ aHCSV9HUW+HVYQd4vniU6qpC
                 "/jwks",
                 get(|State(s): State<MockIdp>| async move {
                     s.jwks_fetches.fetch_add(1, Ordering::SeqCst);
-                    let mut keys = vec![jwk_json("test-key")];
+                    if s.fail_fetch.load(Ordering::SeqCst) {
+                        return Err(axum::http::StatusCode::SERVICE_UNAVAILABLE);
+                    }
+                    let mut keys = if s.remove_first_key.load(Ordering::SeqCst) {
+                        vec![]
+                    } else {
+                        vec![jwk_json("test-key")]
+                    };
                     if s.serve_second_key.load(Ordering::SeqCst) {
                         keys.push(jwk_json("rotated-key"));
                     }
-                    axum::Json(serde_json::json!({"keys": keys}))
+                    Ok(axum::Json(serde_json::json!({"keys": keys})))
                 }),
             )
             .with_state(state);
@@ -270,6 +288,39 @@ aHCSV9HUW+HVYQd4vniU6qpC
         assert!(v.validate(&token).await.is_some());
         assert!(v.validate(&token).await.is_some());
         assert_eq!(idp.jwks_fetches.load(Ordering::SeqCst), 1, "cache hit");
+    }
+
+    #[tokio::test]
+    async fn removed_key_expires_without_an_unknown_kid_request() {
+        let idp = spawn_idp().await;
+        let v = validator(&idp);
+        let token = mint(Some("test-key"), &idp.base, "pglord", now() + 3600);
+        assert!(v.validate(&token).await.is_some());
+        idp.remove_first_key.store(true, Ordering::SeqCst);
+        {
+            let mut cache = v.cache.lock().await;
+            cache.last_fetch = Some(Instant::now() - Duration::from_secs(3600));
+            cache.last_success = cache.last_fetch;
+        }
+        assert!(v.validate(&token).await.is_none());
+        assert_eq!(idp.jwks_fetches.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn expired_cache_rejects_after_failed_refresh_and_rate_limits_retries() {
+        let idp = spawn_idp().await;
+        let v = validator(&idp);
+        let token = mint(Some("test-key"), &idp.base, "pglord", now() + 3600);
+        assert!(v.validate(&token).await.is_some());
+        {
+            let mut cache = v.cache.lock().await;
+            cache.last_fetch = Some(Instant::now() - Duration::from_secs(3600));
+            cache.last_success = cache.last_fetch;
+        }
+        idp.fail_fetch.store(true, Ordering::SeqCst);
+        assert!(v.validate(&token).await.is_none());
+        assert!(v.validate(&token).await.is_none());
+        assert_eq!(idp.jwks_fetches.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]

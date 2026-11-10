@@ -553,7 +553,7 @@ export class ImageDialogComponent {
                         <ng-icon name="lucidePlay" size="14" />
                         {{ 'clusterDetail.unfence' | transloco }}
                       </button>
-                    } @else if (i.pod !== d.primary) {
+                    } @else {
                       <button
                         hlmBtn
                         variant="ghost"

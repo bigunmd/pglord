@@ -117,7 +117,9 @@ pub async fn list_backups(
         }
     };
     let runs = crate::backup_runs::stale_running_to_unknown(
-        crate::backup_runs::list(&ops.kube, &ns, &name).await,
+        crate::backup_runs::list(&ops.kube, &ns, &name)
+            .await
+            .map_err(ApiError::from_kube)?,
         now_seconds(),
     );
     Ok(Json(BackupList {
@@ -188,18 +190,16 @@ pub async fn create_backup(
              finalize or roll back the upgrade before taking a backup.",
         ));
     }
-    let runs = crate::backup_runs::stale_running_to_unknown(
-        crate::backup_runs::list(&ops.kube, &ns, &name).await,
-        now_seconds(),
-    );
-    if crate::backup_runs::has_run_in_flight(&runs) {
-        return Err(ApiError::conflict("backup_in_progress")
-            .with_detail("A backup of this cluster is already running."));
-    }
     let kind = body.and_then(|Json(b)| b.kind).unwrap_or_default();
     start_backup(ops, &ns, &spec, kind, "manual")
         .await
-        .map_err(ApiError::from_kube)?;
+        .map_err(|err| {
+            if err.is::<crate::backup_runs::BackupInProgress>() {
+                ApiError::conflict("backup_in_progress")
+            } else {
+                ApiError::from_kube(err)
+            }
+        })?;
     Ok(StatusCode::ACCEPTED)
 }
 
@@ -219,7 +219,11 @@ pub async fn start_backup(
         .await?
         .unwrap_or_else(|| spec.instance_name(0));
     let started = now_seconds();
-    let id = format!("{started}-{}", kind.as_str());
+    let id = format!(
+        "{started}-{}-{:032x}",
+        kind.as_str(),
+        rand::random::<u128>()
+    );
 
     crate::backup_runs::record_start(
         &ops.kube,
@@ -273,11 +277,12 @@ pub async fn start_backup(
             }
             Err(err) => {
                 tracing::warn!(cluster = %name, %err, "backup request failed");
-                (crate::backup_runs::RunState::Failed, Some(err.to_string()))
+                (crate::backup_runs::RunState::Unknown, Some(err.to_string()))
             }
         };
         let outcome = match state {
             crate::backup_runs::RunState::Succeeded => "succeeded",
+            crate::backup_runs::RunState::Unknown => "unknown",
             _ => "failed",
         };
         metrics

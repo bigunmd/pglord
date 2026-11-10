@@ -360,7 +360,7 @@ paths:
     post:
       tags:
       - clusters
-      summary: Stop postgres on one standby; the pod stays up for inspection.
+      summary: Stop postgres on one instance; fencing the primary interrupts cluster writes.
       operationId: fence_instance
       parameters:
       - name: ns
@@ -391,7 +391,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
         '409':
-          description: Primary, already fenced, or cluster hibernated
+          description: Already fenced or cluster hibernated
           content:
             application/problem+json:
               schema:
@@ -1280,8 +1280,8 @@ components:
             type: string
           description: |-
             Instances (pod names) held down: the agent stops postgres and keeps
-            it stopped while listed. Standbys only — the fence endpoint refuses
-            the recorded primary. Flipped only by the fence/unfence endpoints.
+            it stopped while listed. Fencing the primary interrupts cluster writes.
+            Flipped only by the fence/unfence endpoints.
         generation:
           type: string
           description: |-
@@ -1308,6 +1308,11 @@ components:
             RFC1123 label; used as the prefix of every derived object name.
             Empty is invalid through the API; in operator mode the CR sync fills
             it from metadata.name, so kubectl users write the name once.
+        parallel_pod_management:
+          type: boolean
+          description: |-
+            Permanently enable independent pod creation after controlled in-place
+            upgrade migration. Existing clusters retain OrderedReady by default.
         parameters:
           type: object
           description: |-

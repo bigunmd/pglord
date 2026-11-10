@@ -36,6 +36,39 @@ pub fn failover_enabled(upgrade: Option<&pglord_core::upgrade::UpgradeState>) ->
     )
 }
 
+/// A failed probe or a deleted Pod is not evidence that the old database stopped.
+pub fn fencing_confirmed(durably_fenced: bool, role: Option<&str>) -> bool {
+    durably_fenced && role == Some("fenced")
+}
+
+/// Require the boot-time hold, not an SQL read-only flag that existing sessions can bypass.
+pub async fn primary_fencing_confirmed(
+    http: &reqwest::Client,
+    spec: &pglord_core::spec::ClusterSpec,
+    ns: &str,
+    primary: &str,
+) -> bool {
+    if !spec.fenced.iter().any(|pod| pod == primary) {
+        return false;
+    }
+    #[derive(serde::Deserialize)]
+    struct FenceStatus {
+        role: String,
+    }
+    let url = format!(
+        "http://{}:{}/status",
+        pod_fqdn(primary, &spec.name, ns),
+        AGENT_HTTP_PORT
+    );
+    let role = match http.get(url).timeout(STATUS_TIMEOUT).send().await {
+        Ok(response) if response.status().is_success() => {
+            response.json::<FenceStatus>().await.ok().map(|s| s.role)
+        }
+        _ => None,
+    };
+    fencing_confirmed(true, role.as_deref())
+}
+
 /// Pure election rule: among ready in-recovery standbys, pick the highest LSN.
 pub fn elect_candidate(
     observations: &[(String, bool, Option<bool>, Option<String>)],
@@ -48,12 +81,11 @@ pub fn elect_candidate(
         .map(|(pod, _)| pod)
 }
 
-pub async fn run(
-    client: kube::Client,
-    ns: String,
-    all_namespaces: bool,
-    metrics: crate::metrics::Metrics,
-) {
+pub async fn run(ops: crate::app::ClusterOps) {
+    let client = ops.kube.clone();
+    let ns = ops.ns.clone();
+    let all_namespaces = ops.all_namespaces;
+    let metrics = ops.metrics.clone();
     let http = match reqwest::Client::builder().timeout(STATUS_TIMEOUT).build() {
         Ok(c) => c,
         Err(err) => {
@@ -89,6 +121,19 @@ pub async fn run(
             // probe, CAS and apply targets the item's own.
             let item_ns = cm.metadata.namespace.clone().unwrap_or_else(|| ns.clone());
             let upgrade = crate::spec_store::upgrade_from_cm(cm);
+            if upgrade
+                .as_ref()
+                .is_some_and(|state| state.phase == pglord_core::upgrade::UpgradePhase::Upgrading)
+            {
+                failures.insert((item_ns.clone(), spec.name.clone()), 0);
+                if let Err(err) =
+                    crate::api::upgrade::drive_in_place(&ops, &item_ns, &spec.name).await
+                {
+                    tracing::warn!(cluster = %spec.name, namespace = %item_ns, %err,
+                        "in-place recovery pass paused; next poll will retry");
+                }
+                continue;
+            }
             let primary = recorded_primary(cm, &spec.instance_name(0));
             let observations = observe_cluster(&http, &spec, &item_ns).await;
             metrics
@@ -156,6 +201,12 @@ pub async fn run(
                 continue;
             };
 
+            if !primary_fencing_confirmed(&http, &spec, &item_ns, &primary).await {
+                tracing::error!(cluster = %spec.name, %primary,
+                    "failover blocked: old primary must be fenced in the spec and acknowledge its boot-time hold");
+                continue;
+            }
+
             let rv = cm.metadata.resource_version.clone().unwrap_or_default();
             let cm_name = cm.metadata.name.clone().unwrap_or_default();
             // CAS through a namespaced Api: patch-by-name on Api::all has no
@@ -207,6 +258,15 @@ pub async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn promotion_requires_a_durable_fence_and_positive_acknowledgement() {
+        assert!(!fencing_confirmed(false, Some("fenced")));
+        assert!(!fencing_confirmed(true, None));
+        assert!(!fencing_confirmed(true, Some("primary")));
+        assert!(!fencing_confirmed(true, Some("unknown")));
+        assert!(fencing_confirmed(true, Some("fenced")));
+    }
 
     #[test]
     fn no_failover_during_an_upgrade_soak() {

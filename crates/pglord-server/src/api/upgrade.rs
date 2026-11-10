@@ -10,6 +10,8 @@
 
 use std::time::Duration;
 
+use anyhow::Context;
+
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use k8s_openapi::api::apps::v1::StatefulSet;
@@ -250,8 +252,21 @@ async fn require_phase(
     ns: &str,
     name: &str,
     allowed: UpgradePhase,
-) -> Result<(ClusterSpec, pglord_core::render::OwnerRef, UpgradeState), ApiError> {
-    let Some((spec, owner)) = ops.store.get(ns, name).await.map_err(ApiError::from_kube)? else {
+) -> Result<
+    (
+        ClusterSpec,
+        pglord_core::render::OwnerRef,
+        UpgradeState,
+        String,
+    ),
+    ApiError,
+> {
+    let Some((spec, owner, revision)) = ops
+        .store
+        .get_versioned(ns, name)
+        .await
+        .map_err(ApiError::from_kube)?
+    else {
         return Err(ApiError::not_found());
     };
     let Some(state) = ops
@@ -271,7 +286,7 @@ async fn require_phase(
             )),
         );
     }
-    Ok((spec, owner, state))
+    Ok((spec, owner, state, revision))
 }
 
 /// Delete an instance set. Its PVCs follow through the StatefulSet's
@@ -324,9 +339,9 @@ pub async fn start_upgrade(
     axum::Json(req): axum::Json<UpgradeRequest>,
 ) -> Result<StatusCode, ApiError> {
     let ops = ops(&state)?;
-    let Some((spec, owner)) = ops
+    let Some((mut spec, owner, revision)) = ops
         .store
-        .get(&ns, &name)
+        .get_versioned(&ns, &name)
         .await
         .map_err(ApiError::from_kube)?
     else {
@@ -386,7 +401,9 @@ pub async fn start_upgrade(
                  restoring a backup. Configure a backup repository for this cluster first.",
             ));
         }
-        let runs = crate::backup_runs::list(&ops.kube, &ns, &name).await;
+        let runs = crate::backup_runs::list(&ops.kube, &ns, &name)
+            .await
+            .map_err(ApiError::from_kube)?;
         if !runs
             .iter()
             .any(|r| r.state == crate::backup_runs::RunState::Succeeded)
@@ -456,6 +473,15 @@ pub async fn start_upgrade(
     }
 
     let in_place = req.mode == UpgradeMode::InPlace;
+    if in_place && !spec.parallel_pod_management {
+        // Persist before any immutable migration. Both ordinary reconciliation
+        // and upgrade retries must keep Parallel after the upgrade settles.
+        spec.parallel_pod_management = true;
+        ops.store
+            .update(&ns, &spec, &revision)
+            .await
+            .map_err(ApiError::from_kube)?;
+    }
     let state = UpgradeState {
         target_image,
         next_generation: next_generation(&spec.generation),
@@ -471,7 +497,7 @@ pub async fn start_upgrade(
     };
     if !ops
         .store
-        .set_upgrade(&ns, &name, Some(&state), None)
+        .set_upgrade(&ns, &name, Some(&state), None, None)
         .await
         .map_err(ApiError::from_kube)?
     {
@@ -491,23 +517,8 @@ pub async fn start_upgrade(
     )
     .await
     .map_err(ApiError::from_kube)?;
-    if in_place {
-        // Replace the pods so each agent boots into the conversion. Standbys
-        // go first (roll_order), so none is streaming from a primary whose
-        // timeline is about to be rewritten.
-        let roll_ops = ops.clone();
-        let roll_ns = ns.clone();
-        let roll_spec = spec.clone();
-        let roll_primary = primary.clone();
-        tokio::spawn(async move {
-            let order = crate::api::clusters::roll_order(
-                &roll_spec.sts_name(),
-                roll_spec.replicas,
-                &roll_primary,
-            );
-            crate::api::clusters::roll_pods(&roll_ops, &roll_ns, &roll_spec, order).await;
-        });
-    }
+    // In-place replacement is driven by the orchestrator's durable-state poll,
+    // not a request-owned task that disappears on a server restart.
     tracing::warn!(
         cluster = %name, image = %state.target_image, mode = ?state.mode,
         "major upgrade started"
@@ -535,7 +546,8 @@ pub async fn cutover_upgrade(
     Path((ns, name)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
     let ops = ops(&state)?;
-    let (spec, owner, upgrade) = require_phase(ops, &ns, &name, UpgradePhase::Migrating).await?;
+    let (spec, owner, upgrade, _revision) =
+        require_phase(ops, &ns, &name, UpgradePhase::Migrating).await?;
     reject_non_blue_green(&upgrade)?;
 
     let agent = fetch_agent_status(ops, &ns, &spec, &upgrade).await;
@@ -606,7 +618,13 @@ pub async fn cutover_upgrade(
     // that makes the new set the cluster's writer.
     if !ops
         .store
-        .set_upgrade(&ns, &name, Some(&next_state), Some(&green_primary))
+        .set_upgrade(
+            &ns,
+            &name,
+            Some(&next_state),
+            Some(&green_primary),
+            Some(&upgrade),
+        )
         .await
         .map_err(ApiError::from_kube)?
     {
@@ -654,8 +672,10 @@ pub async fn rollback_upgrade(
     Path((ns, name)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
     let ops = ops(&state)?;
-    let (spec, owner, upgrade) = require_phase(ops, &ns, &name, UpgradePhase::Soaking).await?;
+    let (spec, owner, upgrade, revision) =
+        require_phase(ops, &ns, &name, UpgradePhase::Soaking).await?;
     reject_non_blue_green(&upgrade)?;
+    let _ = revision;
     let previous = upgrade
         .previous_primary
         .clone()
@@ -665,7 +685,7 @@ pub async fn rollback_upgrade(
     // took one: no observer may see the cluster half-rolled-back.
     if !ops
         .store
-        .set_upgrade(&ns, &name, None, Some(&previous))
+        .set_upgrade(&ns, &name, None, Some(&previous), Some(&upgrade))
         .await
         .map_err(ApiError::from_kube)?
     {
@@ -728,7 +748,7 @@ pub async fn abort_upgrade(
     }
     if !ops
         .store
-        .set_upgrade(&ns, &name, None, None)
+        .set_upgrade(&ns, &name, None, None, Some(&upgrade))
         .await
         .map_err(ApiError::from_kube)?
     {
@@ -765,7 +785,7 @@ pub async fn abort_upgrade(
                 roll_spec.replicas,
                 &roll_primary,
             );
-            crate::api::clusters::roll_pods(&roll_ops, &roll_ns, &roll_spec, order).await;
+            let _ = crate::api::clusters::roll_pods(&roll_ops, &roll_ns, &roll_spec, order).await;
         });
         tracing::warn!(cluster = %name, "in-place upgrade aborted");
         return Ok(StatusCode::ACCEPTED);
@@ -799,10 +819,61 @@ pub async fn finalize_upgrade(
     Path((ns, name)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
     let ops = ops(&state)?;
-    let (spec, owner, upgrade) = require_phase(ops, &ns, &name, UpgradePhase::Soaking).await?;
+    let (mut spec, owner, upgrade, mut revision) =
+        require_phase(ops, &ns, &name, UpgradePhase::Soaking).await?;
     reject_non_blue_green(&upgrade)?;
+    // Claim before any irreversible action. Rollback uses the same record CAS.
+    let records: Api<k8s_openapi::api::core::v1::ConfigMap> =
+        Api::namespaced(ops.kube.clone(), &ns);
+    let record_name = crate::spec_store::spec_cm_name(&name);
+    let record = records
+        .get(&record_name)
+        .await
+        .map_err(ApiError::from_kube)?;
+    if crate::spec_store::upgrade_from_cm(&record).as_ref() != Some(&upgrade) {
+        return Err(ApiError::conflict("record_changed"));
+    }
+    let claim = serde_json::to_string(&upgrade).map_err(ApiError::from_kube)?;
+    if record
+        .metadata
+        .annotations
+        .as_ref()
+        .and_then(|a| a.get(crate::primary_record::FINALIZING_ANNOTATION))
+        != Some(&claim)
+    {
+        let annotations = serde_json::Map::from_iter([(
+            crate::primary_record::FINALIZING_ANNOTATION.into(),
+            serde_json::Value::String(claim),
+        )]);
+        if !crate::primary_record::cas_set_annotations(
+            &records,
+            &record_name,
+            record
+                .metadata
+                .resource_version
+                .as_deref()
+                .unwrap_or_default(),
+            annotations,
+        )
+        .await
+        .map_err(ApiError::from_kube)?
+        {
+            return Err(ApiError::conflict("record_changed"));
+        }
+        // Claim changed the ConfigMap RV. Reload the spec rather than stamping an old one.
+        let Some((fresh, _, fresh_revision)) = ops
+            .store
+            .get_versioned(&ns, &name)
+            .await
+            .map_err(ApiError::from_kube)?
+        else {
+            return Err(ApiError::not_found());
+        };
+        spec = fresh;
+        revision = fresh_revision;
+    }
     let green_primary = green_primary_pod(&spec, &upgrade);
-    let old_sts = spec.sts_name();
+    let old_sts = finalize_source_set(&spec, &upgrade)?;
 
     // The spec adopts the new generation and image: from here the new set is
     // simply the cluster, and nothing renders the old one any more.
@@ -812,7 +883,7 @@ pub async fn finalize_upgrade(
     // The fenced list names pods of the set being deleted.
     next.fenced = Vec::new();
     ops.store
-        .put(&ns, &next)
+        .update(&ns, &next, &revision)
         .await
         .map_err(ApiError::from_kube)?;
 
@@ -830,10 +901,24 @@ pub async fn finalize_upgrade(
         .await;
     }
 
-    delete_instance_set(ops, &ns, &old_sts).await;
+    let active = ops
+        .store
+        .primary(&ns, &name)
+        .await
+        .map_err(ApiError::from_kube)?;
+    if active.as_deref() != Some(green_primary.as_str()) {
+        return Err(ApiError::conflict("record_changed")
+            .with_detail("The upgraded primary is no longer active; refusing source deletion."));
+    }
+    let sets: Api<StatefulSet> = Api::namespaced(ops.kube.clone(), &ns);
+    match sets.delete(&old_sts, &Default::default()).await {
+        Ok(_) => {}
+        Err(kube::Error::Api(e)) if e.code == 404 => {}
+        Err(err) => return Err(ApiError::from_kube(err)),
+    }
     if !ops
         .store
-        .set_upgrade(&ns, &name, None, None)
+        .set_upgrade(&ns, &name, None, None, Some(&upgrade))
         .await
         .map_err(ApiError::from_kube)?
     {
@@ -861,11 +946,164 @@ pub async fn finalize_upgrade(
     tokio::spawn(async move {
         let order =
             crate::api::clusters::roll_order(&next.sts_name(), next.replicas, &green_primary);
-        crate::api::clusters::roll_pods(&roll_ops, &roll_ns, &next, order).await;
-        tracing::info!(cluster = %next.name, "post-finalize roll finished");
+        if crate::api::clusters::roll_pods(&roll_ops, &roll_ns, &next, order)
+            .await
+            .is_ok()
+        {
+            tracing::info!(cluster = %next.name, "post-finalize roll finished");
+        }
     });
     tracing::warn!(cluster = %name, deleted = %old_sts, "major upgrade finalized");
     Ok(StatusCode::ACCEPTED)
+}
+
+fn finalize_source_set(spec: &ClusterSpec, upgrade: &UpgradeState) -> Result<String, ApiError> {
+    // Cutover records this identity before the spec can adopt the green generation.
+    let source = upgrade
+        .previous_primary
+        .as_deref()
+        .and_then(|pod| pod.rsplit_once('-'))
+        .filter(|(_, ordinal)| ordinal.parse::<u32>().is_ok())
+        .map(|(set, _)| set)
+        .filter(|set| {
+            (*set == spec.name || set.starts_with(&format!("{}-g", spec.name)))
+                && *set != green_sts_name(spec, upgrade)
+        })
+        .ok_or_else(|| {
+            ApiError::conflict("invalid_upgrade_state")
+                .with_detail("Cannot safely identify the original instance set; refusing cleanup.")
+        })?;
+    Ok(source.to_string())
+}
+
+fn has_in_place_template(pod: &k8s_openapi::api::core::v1::Pod, state: &UpgradeState) -> bool {
+    pod.metadata.deletion_timestamp.is_none()
+        && pod.spec.as_ref().is_some_and(|s| {
+            s.containers.iter().any(|c| {
+                c.name == "postgres"
+                    && c.image.as_deref() == Some(state.target_image.as_str())
+                    && c.env.as_ref().is_some_and(|env| {
+                        env.iter().any(|e| {
+                            e.name == "PGLORD_AGENT_UPGRADE_IN_PLACE"
+                                && e.value.as_deref()
+                                    == state.from_major.map(|v| v.to_string()).as_deref()
+                        })
+                    })
+            })
+        })
+}
+
+/// Restart-safe, bounded pass: replace at most one pod, standbys before primary.
+/// Returns true only when every pod already carries the upgrade template.
+async fn advance_in_place(
+    ops: &ClusterOps,
+    ns: &str,
+    spec: &ClusterSpec,
+    state: &UpgradeState,
+) -> anyhow::Result<bool> {
+    use k8s_openapi::api::core::v1::Pod;
+    use kube::api::{DeleteParams, Preconditions};
+    let Some((mut current, _, revision)) = ops.store.get_versioned(ns, &spec.name).await? else {
+        return Ok(false);
+    };
+    if serde_json::to_value(&current)? != serde_json::to_value(spec)?
+        || ops.store.upgrade_state(ns, &spec.name).await?.as_ref() != Some(state)
+    {
+        return Ok(false);
+    }
+    if !current.parallel_pod_management {
+        current.parallel_pod_management = true;
+        ops.store.update(ns, &current, &revision).await?;
+        return Ok(false);
+    }
+    // Reconciliation owns immutable StatefulSet migration. Do not delete any
+    // pod until the observed controller can recreate paused standbys in parallel.
+    let sets: Api<StatefulSet> = Api::namespaced(ops.kube.clone(), ns);
+    let Some(set) = sets.get_opt(&spec.sts_name()).await? else {
+        return Ok(false);
+    };
+    if !in_place_controller_ready(&set, state) {
+        return Ok(false);
+    }
+    let primary = ops
+        .store
+        .primary(ns, &spec.name)
+        .await?
+        .unwrap_or_else(|| spec.instance_name(0));
+    if !(0..spec.replicas).any(|i| spec.instance_name(i) == primary) {
+        anyhow::bail!("in-place primary is outside the current instance set");
+    }
+    let api: Api<Pod> = Api::namespaced(ops.kube.clone(), ns);
+    let order = crate::api::clusters::roll_order(&spec.sts_name(), spec.replicas, &primary);
+    for name in order {
+        let Some(pod) = api.get_opt(&name).await? else {
+            return Ok(false);
+        };
+        if has_in_place_template(&pod, state) {
+            continue;
+        }
+        if pod.metadata.deletion_timestamp.is_some() {
+            return Ok(false);
+        }
+        if ops.store.upgrade_state(ns, &spec.name).await?.as_ref() != Some(state) {
+            return Ok(false);
+        }
+        let params = DeleteParams {
+            preconditions: Some(Preconditions {
+                uid: Some(pod.metadata.uid.context("pod has no UID")?),
+                resource_version: Some(
+                    pod.metadata
+                        .resource_version
+                        .context("pod has no resourceVersion")?,
+                ),
+            }),
+            ..Default::default()
+        };
+        match api.delete(&name, &params).await {
+            Ok(_) => {}
+            Err(kube::Error::Api(e)) if e.code == 404 || e.code == 409 => {}
+            Err(err) => return Err(err.into()),
+        }
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+fn in_place_controller_ready(set: &StatefulSet, state: &UpgradeState) -> bool {
+    set.metadata.deletion_timestamp.is_none()
+        && set.spec.as_ref().is_some_and(|spec| {
+            spec.pod_management_policy.as_deref() == Some("Parallel")
+                && has_in_place_template(
+                    &k8s_openapi::api::core::v1::Pod {
+                        metadata: Default::default(),
+                        spec: spec.template.spec.clone(),
+                        ..Default::default()
+                    },
+                    state,
+                )
+        })
+}
+
+/// Resume from persisted state on every orchestrator pass, including after restart.
+pub(crate) async fn drive_in_place(ops: &ClusterOps, ns: &str, name: &str) -> anyhow::Result<()> {
+    let Some(state) = ops.store.upgrade_state(ns, name).await? else {
+        return Ok(());
+    };
+    if state.mode != UpgradeMode::InPlace
+        || state.phase != UpgradePhase::Upgrading
+        || state.from_major.is_none()
+    {
+        return Ok(());
+    }
+    let Some((spec, _, _)) = ops.store.get_versioned(ns, name).await? else {
+        return Ok(());
+    };
+    if advance_in_place(ops, ns, &spec, &state).await? {
+        // Never reuse observations captured before pod replacement or a spec write.
+        let observations = crate::instance_probe::observe_cluster(&ops.http, &spec, ns).await;
+        settle_in_place(ops, ns, &spec, &state, &observations).await?;
+    }
+    Ok(())
 }
 
 /// Finish an in-place upgrade once every instance is back on the target
@@ -885,13 +1123,25 @@ pub async fn settle_in_place(
         // nothing to compare the observed majors against.
         return Ok(false);
     };
-    if state.mode != UpgradeMode::InPlace || !in_place_complete(obs, from_major) {
+    if state.mode != UpgradeMode::InPlace || state.phase != UpgradePhase::Upgrading {
+        return Ok(false);
+    }
+    if obs.len() != usize::from(spec.replicas) || !in_place_complete(obs, from_major) {
         return Ok(false);
     }
 
-    let mut next = spec.clone();
+    let Some((current, _, revision)) = ops.store.get_versioned(ns, &spec.name).await? else {
+        return Ok(false);
+    };
+    // Never attach a fresh revision to an old observation's spec.
+    if serde_json::to_value(&current)? != serde_json::to_value(spec)?
+        || ops.store.upgrade_state(ns, &spec.name).await?.as_ref() != Some(state)
+    {
+        return Ok(false);
+    }
+    let mut next = current;
     next.image = state.target_image.clone();
-    ops.store.put(ns, &next).await?;
+    ops.store.update(ns, &next, &revision).await?;
 
     if next.backup.enabled {
         // The stanza still describes the old major, exactly as at blue-green's
@@ -901,9 +1151,19 @@ pub async fn settle_in_place(
             .primary(ns, &next.name)
             .await?
             .unwrap_or_else(|| next.instance_name(0));
-        post_agent(ops, ns, &next.name, &primary, "backup/stanza-upgrade").await;
+        if !post_agent(ops, ns, &next.name, &primary, "backup/stanza-upgrade").await {
+            anyhow::bail!(
+                "backup stanza upgrade was not acknowledged; retaining upgrade state for retry"
+            );
+        }
     }
-    ops.store.set_upgrade(ns, &next.name, None, None).await?;
+    if !ops
+        .store
+        .set_upgrade(ns, &next.name, None, None, Some(state))
+        .await?
+    {
+        anyhow::bail!("upgrade state changed while settling");
+    }
     tracing::warn!(cluster = %next.name, image = %next.image, "in-place upgrade settled");
     Ok(true)
 }
@@ -911,6 +1171,292 @@ pub async fn settle_in_place(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct InPlaceApi {
+        cm: serde_json::Value,
+        pods: std::collections::BTreeMap<String, serde_json::Value>,
+        deleted: Vec<String>,
+    }
+
+    fn upgrade_pod(name: &str, target: bool) -> serde_json::Value {
+        serde_json::json!({
+            "apiVersion": "v1", "kind": "Pod",
+            "metadata": {"name": name, "uid": format!("uid-{name}"), "resourceVersion": "7"},
+            "spec": {"containers": [{"name": "postgres",
+                "image": if target { "pglord:17" } else { "pglord:16" },
+                "env": if target { serde_json::json!([{"name": "PGLORD_AGENT_UPGRADE_IN_PLACE", "value": "16"}]) } else { serde_json::json!([]) }
+            }]}
+        })
+    }
+
+    fn in_place_fixture() -> (
+        ClusterSpec,
+        UpgradeState,
+        std::sync::Arc<std::sync::Mutex<InPlaceApi>>,
+    ) {
+        let mut spec: ClusterSpec =
+            serde_json::from_value(serde_json::json!({"name": "demo", "replicas": 3}))
+                .expect("spec");
+        spec.image = "pglord:16".into();
+        spec.parallel_pod_management = true;
+        spec.backup.enabled = true;
+        let state = UpgradeState {
+            target_image: "pglord:17".into(),
+            next_generation: "g2".into(),
+            phase: UpgradePhase::Upgrading,
+            previous_primary: None,
+            mode: UpgradeMode::InPlace,
+            from_major: Some(16),
+        };
+        let mut cm = crate::spec_store::spec_to_configmap(&spec, "ns").expect("configmap");
+        cm.metadata.uid = Some("spec-uid".into());
+        cm.metadata.resource_version = Some("1".into());
+        cm.metadata.annotations = Some(
+            [
+                (
+                    pglord_core::upgrade::UPGRADE_ANNOTATION.into(),
+                    serde_json::to_string(&state).expect("state"),
+                ),
+                ("pglord.dev/primary".into(), "demo-0".into()),
+            ]
+            .into(),
+        );
+        let api = InPlaceApi {
+            cm: serde_json::to_value(cm).expect("json"),
+            pods: (0..3)
+                .map(|i| {
+                    let name = format!("demo-{i}");
+                    (name.clone(), upgrade_pod(&name, false))
+                })
+                .collect(),
+            deleted: vec![],
+        };
+        (spec, state, std::sync::Arc::new(std::sync::Mutex::new(api)))
+    }
+
+    fn in_place_ops(shared: std::sync::Arc<std::sync::Mutex<InPlaceApi>>) -> ClusterOps {
+        use axum::{
+            body::Body,
+            http::{Method, Request, Response},
+        };
+        use http_body_util::BodyExt;
+        let service = tower::service_fn(move |req: Request<kube::client::Body>| {
+            let shared = shared.clone();
+            async move {
+                let method = req.method().clone();
+                let path = req.uri().path().to_string();
+                let bytes = req.into_body().collect().await.expect("body").to_bytes();
+                let input: serde_json::Value = if bytes.is_empty() {
+                    serde_json::Value::Null
+                } else {
+                    serde_json::from_slice(&bytes).expect("json")
+                };
+                let mut api = shared.lock().expect("api");
+                let (code, value) = if path.ends_with("/configmaps/demo-spec") {
+                    if method == Method::PATCH {
+                        assert_eq!(
+                            input["metadata"]["resourceVersion"],
+                            api.cm["metadata"]["resourceVersion"]
+                        );
+                        assert!(
+                            input["metadata"]["annotations"].is_null(),
+                            "failed settlement must not clear persisted upgrade"
+                        );
+                        api.cm["data"] = input["data"].clone();
+                        api.cm["metadata"]["resourceVersion"] = "2".into();
+                    } else {
+                        assert_eq!(method, Method::GET);
+                    }
+                    (200, api.cm.clone())
+                } else if path.ends_with("/statefulsets/demo") {
+                    assert_eq!(method, Method::GET);
+                    (
+                        200,
+                        serde_json::json!({"apiVersion":"apps/v1", "kind":"StatefulSet", "metadata":{"name":"demo"},
+                        "spec":{"serviceName":"demo", "selector":{}, "podManagementPolicy":"Parallel",
+                        "template":{"spec":upgrade_pod("template", true)["spec"]}}}),
+                    )
+                } else {
+                    assert!(
+                        path.starts_with("/api/v1/namespaces/ns/pods/"),
+                        "unexpected request: {path}"
+                    );
+                    let name = path.rsplit('/').next().expect("pod name");
+                    if let Some(pod) = api.pods.get(name).cloned() {
+                        if method == Method::DELETE {
+                            assert_eq!(input["preconditions"]["uid"], pod["metadata"]["uid"]);
+                            assert_eq!(
+                                input["preconditions"]["resourceVersion"],
+                                pod["metadata"]["resourceVersion"]
+                            );
+                            api.deleted.push(name.into());
+                            api.pods.remove(name);
+                        } else {
+                            assert_eq!(method, Method::GET);
+                        }
+                        (200, pod)
+                    } else {
+                        assert_eq!(method, Method::GET);
+                        (
+                            404,
+                            serde_json::json!({"apiVersion":"v1", "kind":"Status", "status":"Failure", "reason":"NotFound", "message":"missing pod", "code":404}),
+                        )
+                    }
+                };
+                Ok::<_, std::convert::Infallible>(
+                    Response::builder()
+                        .status(code)
+                        .header("content-type", "application/json")
+                        .body(Body::from(value.to_string()))
+                        .expect("response"),
+                )
+            }
+        });
+        let kube = kube::Client::new(service, "ns");
+        ClusterOps {
+            store: std::sync::Arc::new(crate::spec_store::ConfigMapSpecStore::new(
+                kube.clone(),
+                "ns",
+            )),
+            kube,
+            // Force unavailable observations/commands locally, never resolve Kubernetes DNS.
+            http: reqwest::Client::builder()
+                .proxy(reqwest::Proxy::all("http://127.0.0.1:1").expect("proxy"))
+                .timeout(std::time::Duration::from_millis(100))
+                .build()
+                .expect("client"),
+            ns: "ns".into(),
+            default_agent_image: "pglord:16".into(),
+            spec_backend: "configmap".into(),
+            all_namespaces: false,
+            auth_kubernetes: false,
+            auth_oidc_rbac: false,
+            metrics: crate::metrics::Metrics::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn persisted_in_place_driver_resumes_one_guarded_pod_per_pass_without_get_handler() {
+        let (_, _, api) = in_place_fixture();
+        for name in ["demo-1", "demo-2", "demo-0"] {
+            let before = api.lock().expect("api").deleted.len();
+            // A fresh ops/store each time models a server restart; only Kubernetes state survives.
+            drive_in_place(&in_place_ops(api.clone()), "ns", "demo")
+                .await
+                .expect("drive");
+            {
+                let live = api.lock().expect("api");
+                assert_eq!(live.deleted.len(), before + 1);
+                assert_eq!(live.deleted.last().map(String::as_str), Some(name));
+            }
+            // Missing replacement must stop this pass, including before deleting the primary.
+            drive_in_place(&in_place_ops(api.clone()), "ns", "demo")
+                .await
+                .expect("missing replacement");
+            assert_eq!(api.lock().expect("api").deleted.len(), before + 1);
+            api.lock()
+                .expect("api")
+                .pods
+                .insert(name.into(), upgrade_pod(name, true));
+        }
+        drive_in_place(&in_place_ops(api.clone()), "ns", "demo")
+            .await
+            .expect("unavailable observations retain state");
+        let live = api.lock().expect("api");
+        assert_eq!(live.deleted, ["demo-1", "demo-2", "demo-0"]);
+        assert!(
+            live.cm["metadata"]["annotations"][pglord_core::upgrade::UPGRADE_ANNOTATION]
+                .is_string()
+        );
+    }
+
+    #[tokio::test]
+    async fn persisted_in_place_driver_waits_for_terminating_first_standby() {
+        let (_, _, api) = in_place_fixture();
+        api.lock()
+            .expect("api")
+            .pods
+            .get_mut("demo-1")
+            .expect("pod")["metadata"]["deletionTimestamp"] = "2026-01-01T00:00:00Z".into();
+        drive_in_place(&in_place_ops(api.clone()), "ns", "demo")
+            .await
+            .expect("wait for deletion");
+        assert!(api.lock().expect("api").deleted.is_empty());
+    }
+
+    #[tokio::test]
+    async fn in_place_settlement_retains_persisted_state_when_stanza_upgrade_fails() {
+        let (spec, state, api) = in_place_fixture();
+        let observations: Vec<_> = (0..3)
+            .map(|i| obs(&format!("demo-{i}"), true, Some(170010)))
+            .collect();
+        let result = settle_in_place(
+            &in_place_ops(api.clone()),
+            "ns",
+            &spec,
+            &state,
+            &observations,
+        )
+        .await;
+        assert!(
+            result
+                .expect_err("unacknowledged stanza")
+                .to_string()
+                .contains("stanza upgrade was not acknowledged")
+        );
+        let live = api.lock().expect("api");
+        let saved: ClusterSpec =
+            serde_json::from_str(live.cm["data"]["spec"].as_str().expect("spec string"))
+                .expect("saved spec");
+        assert_eq!(saved.image, state.target_image);
+        assert_eq!(
+            live.cm["metadata"]["annotations"][pglord_core::upgrade::UPGRADE_ANNOTATION],
+            serde_json::to_string(&state).expect("state")
+        );
+        assert!(live.deleted.is_empty());
+    }
+
+    #[test]
+    fn in_place_replacement_requires_target_image_marker_and_nonterminating_pod() {
+        let state = UpgradeState {
+            target_image: "pglord:17".into(),
+            next_generation: "g2".into(),
+            phase: UpgradePhase::Upgrading,
+            previous_primary: None,
+            mode: UpgradeMode::InPlace,
+            from_major: Some(16),
+        };
+        let mut pod: k8s_openapi::api::core::v1::Pod = serde_json::from_value(serde_json::json!({
+            "metadata": {}, "spec": { "containers": [{ "name": "postgres", "image": "pglord:17",
+                "env": [{ "name": "PGLORD_AGENT_UPGRADE_IN_PLACE", "value": "16" }] }] }
+        }))
+        .expect("pod");
+        assert!(has_in_place_template(&pod, &state));
+        let mut set: StatefulSet = serde_json::from_value(serde_json::json!({
+            "metadata": {}, "spec": { "serviceName": "demo", "selector": {},
+                "podManagementPolicy": "Parallel", "template": { "spec": pod.spec.clone() } }
+        }))
+        .expect("statefulset");
+        assert!(in_place_controller_ready(&set, &state));
+        set.spec.as_mut().expect("spec").pod_management_policy = Some("OrderedReady".into());
+        assert!(!in_place_controller_ready(&set, &state));
+        set.spec.as_mut().expect("spec").pod_management_policy = Some("Parallel".into());
+        set.spec
+            .as_mut()
+            .expect("spec")
+            .template
+            .spec
+            .as_mut()
+            .expect("pod spec")
+            .containers[0]
+            .image = Some("pglord:16".into());
+        assert!(!in_place_controller_ready(&set, &state));
+        pod.spec.as_mut().expect("spec").containers[0].image = Some("pglord:16".into());
+        assert!(!has_in_place_template(&pod, &state));
+        pod.spec.as_mut().expect("spec").containers[0].image = Some("pglord:17".into());
+        pod.spec.as_mut().expect("spec").containers[0].env = None;
+        assert!(!has_in_place_template(&pod, &state));
+    }
 
     fn agent(established: bool, ready: (i64, i64), lag: Option<i64>) -> AgentUpgradeStatus {
         AgentUpgradeStatus {
@@ -1022,6 +1568,27 @@ mod tests {
             ..in_place
         };
         assert!(reject_non_blue_green(&blue_green).is_ok());
+    }
+
+    #[test]
+    fn finalize_retry_keeps_original_set_and_rejects_active_target() {
+        let mut spec: ClusterSpec =
+            serde_json::from_value(serde_json::json!({ "name": "demo" })).expect("spec");
+        let mut state = UpgradeState {
+            target_image: "pglord-agent:18".into(),
+            next_generation: "g2".into(),
+            phase: UpgradePhase::Soaking,
+            previous_primary: Some("demo-1".into()),
+            mode: UpgradeMode::BlueGreen,
+            from_major: None,
+        };
+        assert_eq!(finalize_source_set(&spec, &state).expect("source"), "demo");
+        spec.generation = "g2".into();
+        assert_eq!(finalize_source_set(&spec, &state).expect("retry"), "demo");
+        state.previous_primary = Some("demo-g2-0".into());
+        assert!(finalize_source_set(&spec, &state).is_err());
+        state.previous_primary = None;
+        assert!(finalize_source_set(&spec, &state).is_err());
     }
 
     #[test]

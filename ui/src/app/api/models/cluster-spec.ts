@@ -47,8 +47,8 @@ export interface ClusterSpec {
 
   /**
    * Instances (pod names) held down: the agent stops postgres and keeps
-   * it stopped while listed. Standbys only — the fence endpoint refuses
-   * the recorded primary. Flipped only by the fence/unfence endpoints.
+   * it stopped while listed. Fencing the primary interrupts cluster writes.
+   * Flipped only by the fence/unfence endpoints.
    */
   fenced?: Array<string>;
 
@@ -84,6 +84,12 @@ export interface ClusterSpec {
    * it from metadata.name, so kubectl users write the name once.
    */
   name?: string;
+
+  /**
+   * Permanently enable independent pod creation after controlled in-place
+   * upgrade migration. Existing clusters retain OrderedReady by default.
+   */
+  parallel_pod_management?: boolean;
 
   /**
    * PostgreSQL settings applied on top of the defaults. Only settings in the

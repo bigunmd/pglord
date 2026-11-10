@@ -61,11 +61,66 @@ fn new_bindir() -> String {
         .unwrap_or_else(|| "/usr/local/bin".to_string())
 }
 
+const READY_MARKER: &str = "pglord.upgrade-ready";
+
+fn sibling(pgdata: &Path, suffix: &str) -> PathBuf {
+    pgdata.with_file_name(format!(
+        "{}.{suffix}",
+        pgdata.file_name().unwrap_or_default().to_string_lossy()
+    ))
+}
+
+/// Resume only a fully converted and configured target. Ambiguous artifacts
+/// require recovery, never initdb or another destructive conversion attempt.
+pub fn recover_handoff(pgdata: &Path) -> anyhow::Result<bool> {
+    let new = sibling(pgdata, "new");
+    let old = sibling(pgdata, "old");
+    if !new.exists() && !old.exists() {
+        return Ok(false);
+    }
+    if new.exists() {
+        if !new.join(READY_MARKER).is_file() || !new.join("PG_VERSION").is_file() {
+            bail!("incomplete in-place upgrade; refusing initialization or automatic retry");
+        }
+        if pgdata.exists() {
+            if old.exists() {
+                bail!("ambiguous in-place upgrade directories; manual recovery required");
+            }
+            std::fs::rename(pgdata, &old).context("preserve pre-upgrade directory")?;
+            sync_parent(pgdata)?;
+        }
+        std::fs::rename(&new, pgdata).context("promote converted directory")?;
+        sync_parent(pgdata)?;
+    }
+    if !pgdata.join(READY_MARKER).is_file() || !pgdata.join("PG_VERSION").is_file() {
+        bail!("missing completed upgrade directory; refusing initialization");
+    }
+    if old.exists() {
+        // The checked canonical directory owns the converted hard links now.
+        std::fs::remove_dir_all(&old).context("remove preserved old directory")?;
+        sync_parent(pgdata)?;
+    }
+    Ok(true)
+}
+
+fn preserve_restore_marker(source: &Path, target: &Path) -> anyhow::Result<()> {
+    let marker = crate::bootstrap::RESTORE_MARKER;
+    if source.join(marker).is_file() {
+        std::fs::copy(source.join(marker), target.join(marker))?;
+        std::fs::File::open(target.join(marker))?.sync_all()?;
+    }
+    Ok(())
+}
+
+fn sync_parent(path: &Path) -> anyhow::Result<()> {
+    std::fs::File::open(path.parent().context("PGDATA has no parent")?)?.sync_all()?;
+    Ok(())
+}
+
 /// Convert PGDATA to this binary's major.
 ///
-/// Destructive only on success: `--check` runs first and the original
-/// directory is removed only once pg_upgrade has reported the real run
-/// finished. A failure anywhere leaves the cluster startable on its old image.
+/// Interrupted conversion is fail-closed: --link may have modified old data,
+/// so an incomplete target must not be discarded and retried automatically.
 pub async fn run(
     cfg: &Config,
     old_major: u32,
@@ -78,10 +133,8 @@ pub async fn run(
         "in-place upgrade: converting the data directory"
     );
 
-    // A retried pod must not inherit a half-built directory from a previous
-    // attempt; pg_upgrade requires an empty target.
-    if p.new_datadir.exists() {
-        std::fs::remove_dir_all(&p.new_datadir).context("clear stale upgrade directory")?;
+    if recover_handoff(&cfg.pgdata)? {
+        return Ok(());
     }
     let status = tokio::process::Command::new(format!("{}/initdb", p.new_bindir))
         .arg("-D")
@@ -112,20 +165,14 @@ pub async fn run(
         tracing::info!(label, "pg_upgrade stage complete");
     }
 
-    // --link means both directories name the same files, so removing the old
-    // one keeps the data under the new name. This is what pg_upgrade's own
-    // delete_old_cluster.sh does.
-    std::fs::remove_dir_all(&cfg.pgdata).context("remove the pre-upgrade directory")?;
-    std::fs::rename(&p.new_datadir, &cfg.pgdata).context("promote the upgraded directory")?;
-
     // The converted directory came from a bare initdb and carries none of
     // pglord's configuration.
     crate::bootstrap::append(
-        &cfg.pgdata.join("postgresql.conf"),
+        &p.new_datadir.join("postgresql.conf"),
         &crate::bootstrap::postgresql_conf_extra(cfg.port),
     )?;
     std::fs::write(
-        cfg.pgdata.join("pg_hba.conf"),
+        p.new_datadir.join("pg_hba.conf"),
         pglord_core::hba::render(
             hba_rules,
             &cfg.repl_user,
@@ -133,6 +180,13 @@ pub async fn run(
         ),
     )
     .context("write pg_hba.conf")?;
+    preserve_restore_marker(&cfg.pgdata, &p.new_datadir)?;
+    for name in ["postgresql.conf", "pg_hba.conf"] {
+        std::fs::File::open(p.new_datadir.join(name))?.sync_all()?;
+    }
+    std::fs::File::create(p.new_datadir.join(READY_MARKER))?.sync_all()?;
+    std::fs::File::open(&p.new_datadir)?.sync_all()?;
+    recover_handoff(&cfg.pgdata)?;
     tracing::warn!(old_major, "in-place upgrade complete");
     Ok(())
 }
@@ -172,6 +226,51 @@ pub async fn analyze(cfg: &Config) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn handoff_recovers_each_rename_boundary_and_refuses_partial_conversion() {
+        let root = std::env::temp_dir().join(format!(
+            "pglord-handoff-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).expect("unique test directory");
+        for boundary in 0..3 {
+            let data = root.join(format!("pgdata{boundary}"));
+            let new = sibling(&data, "new");
+            let old = sibling(&data, "old");
+            let source = if boundary == 0 { &data } else { &old };
+            std::fs::create_dir(source).expect("source");
+            std::fs::write(source.join("PG_VERSION"), "16").expect("old version");
+            let target = if boundary == 2 { &data } else { &new };
+            std::fs::create_dir(target).expect("target");
+            std::fs::write(target.join("PG_VERSION"), "17").expect("new version");
+            std::fs::write(target.join("rows"), "user data").expect("data");
+            std::fs::write(source.join(crate::bootstrap::RESTORE_MARKER), "")
+                .expect("restore marker");
+            preserve_restore_marker(source, target).expect("preserve restore completion");
+            std::fs::write(target.join(READY_MARKER), "").expect("ready");
+            assert!(recover_handoff(&data).expect("recover"));
+            assert_eq!(
+                std::fs::read_to_string(data.join("rows")).expect("rows"),
+                "user data"
+            );
+            assert!(data.join(crate::bootstrap::RESTORE_MARKER).is_file());
+            assert!(!old.exists());
+            assert!(!new.exists());
+            assert!(!recover_handoff(&data).expect("idempotent"));
+        }
+        let data = root.join("incomplete");
+        std::fs::create_dir(sibling(&data, "new")).expect("partial target");
+        assert!(recover_handoff(&data).is_err());
+        assert!(!data.exists(), "must not initialize missing PGDATA");
+        // Only the unique directory created by this test is removed.
+        assert!(root.starts_with(std::env::temp_dir()));
+        std::fs::remove_dir_all(root).expect("cleanup test directory");
+    }
 
     #[test]
     fn the_new_datadir_is_a_sibling_of_pgdata() {

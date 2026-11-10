@@ -74,7 +74,7 @@ external protocol. Update adjacent unit tests for changed behavior.
 - Kubernetes Secrets supply credentials; do not copy values into specs, logs or docs.
   Agent control HTTP is an internal trust boundary, not protected by public API auth.
 - StatefulSets use OnDelete updates and explicit rolls. Their PVC policy retains
-  scale-down volumes, but the API separately cleans up orphan PVCs;
+  scale-down volumes; orphan cleanup requires explicit operator action;
   StatefulSet deletion/finalization is destructive.
 - Compare both install paths when changing RBAC, config, images or resources; preserve
   their intentional development/production differences.

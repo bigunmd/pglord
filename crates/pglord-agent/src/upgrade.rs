@@ -27,7 +27,7 @@ pub(crate) const TERMINATE_WRITERS_SQL: &str = "SELECT pg_terminate_backend(pid)
 
 /// Databases a migration covers: everything a user could have written to.
 const USER_DATABASES_SQL: &str = "SELECT datname, pg_get_userbyid(datdba) FROM pg_database \
-     WHERE datallowconn AND NOT datistemplate AND datname <> 'postgres' \
+     WHERE datallowconn AND NOT datistemplate \
      ORDER BY datname";
 
 const SLOT_LIKE: &str = r"pglord\_upgrade\_%";
@@ -295,13 +295,9 @@ async fn try_establish(cfg: &Config) -> anyhow::Result<()> {
         if !marker_exists(&cfg.pgdata, &schema_marker(&db)) {
             // The new major's pg_dump reading an older server is the supported
             // direction; the reverse is not, which is why this runs here.
-            let schema = run_capture(
-                cfg,
-                "pg_dump",
-                &[
-                    "--schema-only".to_string(),
-                    "--no-publications".to_string(),
-                    "--no-subscriptions".to_string(),
+            let schema = run_capture(cfg, "pg_dump", &{
+                let mut args = schema_dump_options();
+                args.extend([
                     "-h".to_string(),
                     cfg.upgrade_source.clone(),
                     "-p".to_string(),
@@ -309,8 +305,9 @@ async fn try_establish(cfg: &Config) -> anyhow::Result<()> {
                     "-U".to_string(),
                     cfg.superuser.clone(),
                     db.clone(),
-                ],
-            )
+                ]);
+                args
+            })
             .await?;
             apply_sql(cfg, &db, &schema, true).await?;
             write_marker(&cfg.pgdata, &schema_marker(&db))?;
@@ -354,6 +351,21 @@ async fn try_establish(cfg: &Config) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn schema_dump_options() -> Vec<String> {
+    // postgres already contains managed pooler objects; replace them rather than
+    // ignoring duplicate-object errors (which would hide failed user DDL too).
+    [
+        "--schema-only",
+        "--clean",
+        "--if-exists",
+        "--no-publications",
+        "--no-subscriptions",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
 /// Run a client binary against the source, returning its stdout.
 async fn run_capture(cfg: &Config, program: &str, args: &[String]) -> anyhow::Result<String> {
     let out = tokio::process::Command::new(program)
@@ -387,7 +399,7 @@ async fn apply_sql(cfg: &Config, db: &str, sql: &str, stop_on_error: bool) -> an
         "--no-psqlrc",
     ]);
     if stop_on_error {
-        cmd.args(["-v", "ON_ERROR_STOP=1"]);
+        cmd.args(["-v", "ON_ERROR_STOP=1", "--single-transaction"]);
     }
     cmd.arg("-f").arg(&file);
     cmd.env("PGPASSWORD", &cfg.superuser_password);
@@ -448,7 +460,7 @@ pub async fn status(cfg: &Config) -> UpgradeAgentStatus {
         };
         match local_db
             .query_one(
-                "SELECT COALESCE(COUNT(*), 0)::int8, \
+                "SELECT COALESCE(COUNT(r.srrelid), 0)::int8, \
                  COALESCE(COUNT(*) FILTER (WHERE r.srsubstate = 'r'), 0)::int8 \
                  FROM pg_subscription s LEFT JOIN pg_subscription_rel r ON r.srsubid = s.oid \
                  WHERE s.subname = $1",
@@ -605,6 +617,14 @@ pub async fn cutover(cfg: &Config) -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn migration_includes_postgres_and_replaces_managed_schema_atomically() {
+        assert!(!super::USER_DATABASES_SQL.contains("datname <> 'postgres'"));
+        let args = super::schema_dump_options();
+        assert!(args.contains(&"--clean".to_string()));
+        assert!(args.contains(&"--if-exists".to_string()));
+    }
+
     use super::*;
 
     fn cfg() -> Config {

@@ -82,12 +82,6 @@ async fn main() -> anyhow::Result<()> {
                     cfg.all_namespaces,
                 ));
             }
-            tokio::spawn(pglord_server::orchestrator::run(
-                client.clone(),
-                ns.clone(),
-                cfg.all_namespaces,
-                metrics.clone(),
-            ));
 
             // One-shot permission report at startup; the full detail is served
             // at /api/v1/preflight and shown in the UI.
@@ -148,6 +142,7 @@ async fn main() -> anyhow::Result<()> {
                 auth_oidc_rbac: cfg.auth_oidc_rbac,
                 metrics: metrics.clone(),
             };
+            tokio::spawn(pglord_server::orchestrator::run(ops.clone()));
             tokio::spawn(pglord_server::backup_scheduler::run(ops.clone()));
             Some(ops)
         }

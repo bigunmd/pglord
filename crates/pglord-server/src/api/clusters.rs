@@ -252,9 +252,9 @@ pub async fn create_cluster(
             .with_detail("A cluster with this name already exists."));
     }
     ops.store
-        .put(&ns, &spec)
+        .create(&ns, &spec)
         .await
-        .map_err(ApiError::from_kube)?;
+        .map_err(crate::spec_store::mutation_error)?;
     Ok((StatusCode::CREATED, Json(spec)))
 }
 
@@ -390,21 +390,7 @@ pub async fn get_cluster(
         .await
         .map_err(ApiError::from_kube)?
     {
-        Some(state) => {
-            // An in-place upgrade finishes by observation, not by a user
-            // action: when every instance is back on the target major the
-            // state is settled here (and by the reconciler, which is level-
-            // triggered, so it converges with nobody watching).
-            match crate::api::upgrade::settle_in_place(ops, &ns, &spec, &state, &observations).await
-            {
-                Ok(true) => None,
-                Ok(false) => Some(crate::api::upgrade::status_dto(ops, &ns, &spec, &state).await),
-                Err(err) => {
-                    tracing::warn!(%err, "settling the in-place upgrade failed; retrying next read");
-                    Some(crate::api::upgrade::status_dto(ops, &ns, &spec, &state).await)
-                }
-            }
-        }
+        Some(state) => Some(crate::api::upgrade::status_dto(ops, &ns, &spec, &state).await),
         None => None,
     };
     Ok(Json(ClusterDetail {
@@ -511,9 +497,9 @@ pub async fn patch_cluster(
     Json(change): Json<SpecChange>,
 ) -> Result<Json<ClusterDetail>, ApiError> {
     let ops = ops(&state)?;
-    let Some((current, owner)) = ops
+    let Some((current, owner, revision)) = ops
         .store
-        .get(&ns, &name)
+        .get_versioned(&ns, &name)
         .await
         .map_err(ApiError::from_kube)?
     else {
@@ -523,9 +509,14 @@ pub async fn patch_cluster(
     reject_upgrading(ops, &ns, &name).await?;
     let next = current.apply_change(&change).map_err(spec_error)?;
 
-    // Grow volumes before the spec lands so a rejected expansion (StorageClass
-    // without allowVolumeExpansion) leaves the cluster exactly as it was.
-    if next.storage_size != current.storage_size {
+    ops.store
+        .update(&ns, &next, &revision)
+        .await
+        .map_err(crate::spec_store::mutation_error)?;
+
+    // Claim the spec revision before changing external resources. Expansion failure
+    // leaves desired state visible for reconciliation/retry; never overwrite newer state.
+    if change.storage_size.is_some() {
         crate::reconciler::expand_pvcs(
             &ops.kube,
             &ns,
@@ -537,26 +528,12 @@ pub async fn patch_cluster(
         .map_err(|e| {
             ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, "storage_expansion_failed")
                 .with_detail(format!(
-                    "Kubernetes rejected the volume expansion: {e}. The StorageClass must allow volume expansion."
+                    "Desired storage size was saved, but Kubernetes rejected volume expansion: {e}. The StorageClass must allow expansion; retry the storage-size request after correcting it."
                 ))
         })?;
     }
 
-    ops.store
-        .put(&ns, &next)
-        .await
-        .map_err(ApiError::from_kube)?;
-
-    if next.replicas < current.replicas {
-        crate::reconciler::delete_orphan_pvcs(
-            &ops.kube,
-            &ns,
-            &next.sts_name(),
-            next.replicas,
-            current.replicas,
-        )
-        .await;
-    }
+    // Retain scaled-down volumes: a newer scale-up can already need them.
 
     if pod_template_changed(&current, &next, &ns) {
         let primary = ops
@@ -572,15 +549,14 @@ pub async fn patch_cluster(
         // (reject_upgrading), so passing None cannot drop a green set.
         crate::reconciler::apply_cluster(&ops.kube, &ops.http, &ns, &next, &owner, &primary, None)
             .await
-            .map_err(ApiError::from_kube)?;
+            .map_err(crate::spec_store::mutation_error)?;
         let ops = ops.clone();
         let roll_spec = next.clone();
         let roll_ns = ns.clone();
         tokio::spawn(async move {
             let order = roll_order(&roll_spec.sts_name(), roll_spec.replicas, &primary);
             tracing::info!(cluster = %roll_spec.name, ?order, "template change: rolling instances");
-            roll_pods(&ops, &roll_ns, &roll_spec, order).await;
-            tracing::info!(cluster = %roll_spec.name, "template roll finished");
+            let _ = roll_pods(&ops, &roll_ns, &roll_spec, order).await;
         });
     }
     tracing::info!(cluster = %next.name, replicas = next.replicas, storage = %next.storage_size, "cluster updated");
@@ -656,9 +632,33 @@ pub async fn switchover(
         ));
     }
 
-    if !ops
-        .store
-        .set_primary(&ns, &name, &req.target)
+    // Decide from the same record revision that will be changed. A fresh RV
+    // fetched after checking the fence would conceal a concurrent unfence.
+    let records: Api<k8s_openapi::api::core::v1::ConfigMap> =
+        Api::namespaced(ops.kube.clone(), &ns);
+    let record_name = crate::spec_store::spec_cm_name(&name);
+    let record = records
+        .get(&record_name)
+        .await
+        .map_err(ApiError::from_kube)?;
+    let (record_spec, _) =
+        crate::spec_store::configmap_to_spec(&record).map_err(ApiError::from_kube)?;
+    if crate::primary_record::recorded_primary(&record, &record_spec.instance_name(0)) != current
+        || crate::spec_store::upgrade_from_cm(&record).is_some()
+        || record_spec.fenced.contains(&req.target)
+        || !crate::orchestrator::primary_fencing_confirmed(&ops.http, &record_spec, &ns, &current)
+            .await
+    {
+        return Err(ApiError::conflict("primary_not_fenced").with_detail(
+            "Fence the current primary and wait for its agent to acknowledge the boot-time hold before switching.",
+        ));
+    }
+    let revision = record
+        .metadata
+        .resource_version
+        .as_deref()
+        .unwrap_or_default();
+    if !crate::primary_record::cas_set_primary(&records, &record_name, revision, &req.target)
         .await
         .map_err(ApiError::from_kube)?
     {
@@ -726,8 +726,9 @@ pub async fn restart_cluster(
     tokio::spawn(async move {
         let order = roll_order(&spec.sts_name(), spec.replicas, &primary);
         tracing::info!(cluster = %spec.name, ?order, "rolling restart started");
-        roll_pods(&ops, &roll_ns, &spec, order).await;
-        tracing::info!(cluster = %spec.name, "rolling restart finished");
+        if roll_pods(&ops, &roll_ns, &spec, order).await.is_ok() {
+            tracing::info!(cluster = %spec.name, "rolling restart finished");
+        }
     });
     Ok(StatusCode::ACCEPTED)
 }
@@ -787,9 +788,9 @@ pub async fn hibernate(
     Path((ns, name)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
     let ops = ops(&state)?;
-    let Some((mut spec, _owner)) = ops
+    let Some((mut spec, _owner, revision)) = ops
         .store
-        .get(&ns, &name)
+        .get_versioned(&ns, &name)
         .await
         .map_err(ApiError::from_kube)?
     else {
@@ -802,9 +803,9 @@ pub async fn hibernate(
     reject_upgrading(ops, &ns, &name).await?;
     spec.hibernated = true;
     ops.store
-        .put(&ns, &spec)
+        .update(&ns, &spec, &revision)
         .await
-        .map_err(ApiError::from_kube)?;
+        .map_err(crate::spec_store::mutation_error)?;
     tracing::warn!(cluster = %name, "HIBERNATE: scaling to zero, PVCs retained");
     Ok(StatusCode::ACCEPTED)
 }
@@ -829,9 +830,9 @@ pub async fn wake(
     Path((ns, name)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
     let ops = ops(&state)?;
-    let Some((mut spec, _owner)) = ops
+    let Some((mut spec, _owner, revision)) = ops
         .store
-        .get(&ns, &name)
+        .get_versioned(&ns, &name)
         .await
         .map_err(ApiError::from_kube)?
     else {
@@ -844,14 +845,14 @@ pub async fn wake(
     }
     spec.hibernated = false;
     ops.store
-        .put(&ns, &spec)
+        .update(&ns, &spec, &revision)
         .await
-        .map_err(ApiError::from_kube)?;
+        .map_err(crate::spec_store::mutation_error)?;
     tracing::warn!(cluster = %name, replicas = spec.replicas, "WAKE: restoring instances");
     Ok(StatusCode::ACCEPTED)
 }
 
-/// Stop postgres on one standby; the pod stays up for inspection.
+/// Stop postgres on one instance; fencing the primary interrupts cluster writes.
 #[utoipa::path(
     post,
     path = "/api/v1/namespaces/{ns}/clusters/{name}/instances/{pod}/fence",
@@ -864,7 +865,7 @@ pub async fn wake(
     responses(
         (status = 202, description = "Fencing started"),
         (status = 404, description = "Not found", body = crate::error::ProblemDetails, content_type = "application/problem+json"),
-        (status = 409, description = "Primary, already fenced, or cluster hibernated", body = crate::error::ProblemDetails, content_type = "application/problem+json"),
+        (status = 409, description = "Already fenced or cluster hibernated", body = crate::error::ProblemDetails, content_type = "application/problem+json"),
         (status = 422, description = "Not an instance of this cluster", body = crate::error::ProblemDetails, content_type = "application/problem+json"),
     )
 )]
@@ -873,9 +874,9 @@ pub async fn fence_instance(
     Path((ns, name, pod)): Path<(String, String, String)>,
 ) -> Result<StatusCode, ApiError> {
     let ops = ops(&state)?;
-    let Some((mut spec, _owner)) = ops
+    let Some((mut spec, _owner, revision)) = ops
         .store
-        .get(&ns, &name)
+        .get_versioned(&ns, &name)
         .await
         .map_err(ApiError::from_kube)?
     else {
@@ -890,16 +891,8 @@ pub async fn fence_instance(
                 .with_detail(format!("'{pod}' is not an instance of this cluster.")),
         );
     }
-    let primary = ops
-        .store
-        .primary(&ns, &name)
-        .await
-        .map_err(ApiError::from_kube)?
-        .unwrap_or_else(|| spec.instance_name(0));
-    if pod == primary {
-        return Err(ApiError::conflict("cannot_fence_primary")
-            .with_detail("That instance is the recorded primary; switch over first."));
-    }
+    // Fencing the primary deliberately interrupts writes and is the required
+    // first step of a fail-closed switchover. Promotion waits for its hold ACK.
     if spec.fenced.contains(&pod) {
         return Err(
             ApiError::conflict("already_fenced").with_detail("That instance is already fenced.")
@@ -907,9 +900,9 @@ pub async fn fence_instance(
     }
     spec.fenced.push(pod.clone());
     ops.store
-        .put(&ns, &spec)
+        .update(&ns, &spec, &revision)
         .await
-        .map_err(ApiError::from_kube)?;
+        .map_err(crate::spec_store::mutation_error)?;
     tracing::warn!(cluster = %name, %pod, "FENCE: instance held down by spec");
     Ok(StatusCode::ACCEPTED)
 }
@@ -936,9 +929,9 @@ pub async fn unfence_instance(
     Path((ns, name, pod)): Path<(String, String, String)>,
 ) -> Result<StatusCode, ApiError> {
     let ops = ops(&state)?;
-    let Some((mut spec, _owner)) = ops
+    let Some((mut spec, _owner, revision)) = ops
         .store
-        .get(&ns, &name)
+        .get_versioned(&ns, &name)
         .await
         .map_err(ApiError::from_kube)?
     else {
@@ -959,9 +952,9 @@ pub async fn unfence_instance(
     }
     spec.fenced.retain(|p| p != &pod);
     ops.store
-        .put(&ns, &spec)
+        .update(&ns, &spec, &revision)
         .await
-        .map_err(ApiError::from_kube)?;
+        .map_err(crate::spec_store::mutation_error)?;
     tracing::warn!(cluster = %name, %pod, "UNFENCE: instance released");
     Ok(StatusCode::ACCEPTED)
 }
@@ -983,22 +976,75 @@ pub(crate) async fn roll_pods(
     ns: &str,
     spec: &pglord_core::spec::ClusterSpec,
     order: Vec<String>,
-) {
+) -> anyhow::Result<()> {
     let pods: Api<k8s_openapi::api::core::v1::Pod> = Api::namespaced(ops.kube.clone(), ns);
-    for pod in order {
-        if let Err(err) = pods.delete(&pod, &Default::default()).await {
-            tracing::warn!(%pod, %err, "roll: pod delete failed");
-            continue;
-        }
-        for _ in 0..60u32 {
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-            let obs = crate::instance_probe::observe_cluster(&ops.http, spec, ns).await;
-            if obs.iter().any(|o| o.pod == pod && o.ready) {
-                break;
+    let result = roll_sequence(order, |pod| {
+        let pods = &pods;
+        async move {
+            let old = pods.get(&pod).await?;
+            let uid = old
+                .metadata
+                .uid
+                .ok_or_else(|| anyhow::anyhow!("pod has no UID"))?;
+            let params = kube::api::DeleteParams {
+                preconditions: Some(kube::api::Preconditions {
+                    uid: Some(uid.clone()),
+                    resource_version: None,
+                }),
+                ..Default::default()
+            };
+            pods.delete(&pod, &params).await?;
+            for _ in 0..60u32 {
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                let Some(replacement) = pods.get_opt(&pod).await? else {
+                    continue;
+                };
+                if !replacement_pod(&replacement, &uid) {
+                    continue;
+                }
+                let obs = crate::instance_probe::observe_cluster(&ops.http, spec, ns).await;
+                let ready = replacement
+                    .status
+                    .as_ref()
+                    .and_then(|s| s.conditions.as_ref())
+                    .is_some_and(|conditions| {
+                        conditions
+                            .iter()
+                            .any(|c| c.type_ == "Ready" && c.status == "True")
+                    });
+                if ready && obs.iter().any(|o| o.pod == pod && o.ready) {
+                    tracing::info!(%pod, "roll: replacement ready");
+                    return Ok(());
+                }
             }
+            anyhow::bail!("replacement for {pod} did not become ready; roll stopped")
         }
-        tracing::info!(%pod, "roll: instance back");
+    })
+    .await;
+    if let Err(err) = &result {
+        tracing::error!(cluster = %spec.name, %err, "roll aborted; remaining instances untouched");
     }
+    result
+}
+
+fn replacement_pod(pod: &k8s_openapi::api::core::v1::Pod, old_uid: &str) -> bool {
+    pod.metadata.deletion_timestamp.is_none()
+        && pod
+            .metadata
+            .uid
+            .as_deref()
+            .is_some_and(|uid| uid != old_uid)
+}
+
+async fn roll_sequence<F, Fut>(order: Vec<String>, mut replace: F) -> anyhow::Result<()>
+where
+    F: FnMut(String) -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<()>>,
+{
+    for pod in order {
+        replace(pod).await?;
+    }
+    Ok(())
 }
 
 /// Delete a cluster (children are garbage-collected via ownerReferences).
@@ -1029,5 +1075,35 @@ pub async fn delete_cluster(
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::not_found())
+    }
+}
+
+#[cfg(test)]
+mod roll_safety_tests {
+    use super::*;
+    #[tokio::test]
+    async fn failed_standby_never_deletes_primary() {
+        let mut visited = Vec::new();
+        let result = roll_sequence(vec!["standby".into(), "primary".into()], |pod| {
+            visited.push(pod);
+            std::future::ready(Err(anyhow::anyhow!("readiness timeout")))
+        })
+        .await;
+        assert!(result.is_err());
+        assert_eq!(visited, vec!["standby"]);
+    }
+    #[test]
+    fn old_or_terminating_pod_cannot_complete_roll() {
+        let mut pod = k8s_openapi::api::core::v1::Pod::default();
+        pod.metadata.uid = Some("old".into());
+        assert!(!replacement_pod(&pod, "old"));
+        pod.metadata.uid = Some("new".into());
+        assert!(replacement_pod(&pod, "old"));
+        pod.metadata.deletion_timestamp = Some(
+            serde_json::from_value(serde_json::json!("2026-01-01T00:00:00Z")).expect("timestamp"),
+        );
+        assert!(!replacement_pod(&pod, "old"));
+        pod.metadata.uid = None;
+        assert!(!replacement_pod(&pod, "old"));
     }
 }

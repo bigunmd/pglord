@@ -616,6 +616,7 @@ pub fn render_statefulset_for_upgrade(
                 i32::from(spec.replicas)
             }),
             service_name: Some(headless_service_name(&spec.name)),
+            pod_management_policy: spec.parallel_pod_management.then(|| "Parallel".to_string()),
             // pglord owns rolls (standbys first, primary last, ready-gated);
             // the controller must not race it on template changes.
             update_strategy: Some(StatefulSetUpdateStrategy {
@@ -625,8 +626,8 @@ pub fn render_statefulset_for_upgrade(
             // PVCs created from volumeClaimTemplates carry no ownerReferences,
             // so without whenDeleted they outlive the cluster as orphaned
             // storage. whenScaled is Retain: hibernation scales to zero and
-            // must keep every volume; a real scale-down's orphans are deleted
-            // explicitly by the reconciler (delete_orphan_pvcs), never here.
+            // must keep every volume. Scale-down also retains volumes;
+            // any orphan cleanup requires explicit operator action.
             persistent_volume_claim_retention_policy: Some(
                 StatefulSetPersistentVolumeClaimRetentionPolicy {
                     when_deleted: Some("Delete".to_string()),
@@ -989,6 +990,31 @@ mod tests {
         assert_eq!(sts.spec.as_ref().and_then(|s| s.replicas), Some(0));
         let dep = render_pooler_deployment(&spec, "pglord", &owner, "h");
         assert_eq!(dep.spec.as_ref().and_then(|s| s.replicas), Some(0));
+    }
+
+    #[test]
+    fn parallel_policy_is_explicit_durable_and_not_inferred_from_generation() {
+        let (mut spec, owner) = demo();
+        assert!(!spec.parallel_pod_management);
+        spec.generation = "g2".into();
+        assert_eq!(
+            render_statefulset(&spec, "pglord", &owner)
+                .spec
+                .expect("spec")
+                .pod_management_policy,
+            None
+        );
+        spec.parallel_pod_management = true;
+        let persisted = serde_json::to_value(&spec).expect("serialize");
+        let reloaded = serde_json::from_value(persisted).expect("deserialize");
+        assert_eq!(
+            render_statefulset(&reloaded, "pglord", &owner)
+                .spec
+                .expect("spec")
+                .pod_management_policy
+                .as_deref(),
+            Some("Parallel")
+        );
     }
 
     #[test]

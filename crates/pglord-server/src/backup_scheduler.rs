@@ -98,10 +98,13 @@ pub async fn run(ops: ClusterOps) {
                 continue;
             }
 
-            let runs = crate::backup_runs::stale_running_to_unknown(
-                crate::backup_runs::list(&ops.kube, &item_ns, &spec.name).await,
-                crate::api::backups::now_seconds(),
-            );
+            let runs = match crate::backup_runs::list(&ops.kube, &item_ns, &spec.name).await {
+                Ok(runs) => runs,
+                Err(err) => {
+                    tracing::warn!(cluster = %spec.name, %err, "could not read backup history");
+                    continue;
+                }
+            };
             if crate::backup_runs::has_run_in_flight(&runs) {
                 tracing::debug!(cluster = %spec.name, "skipping scheduled backup: one is running");
                 continue;

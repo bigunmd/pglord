@@ -93,6 +93,7 @@ pub fn restored_spec(source: &ClusterSpec, req: &RestoreRequest) -> ClusterSpec 
         // source, not of the data.
         hibernated: false,
         fenced: Vec::new(),
+        parallel_pod_management: false,
         // A fresh instance set: the source's generation is a fact about that
         // cluster's upgrade history, and inheriting it would give the restored
         // copy suffixed object names for no reason.
@@ -174,9 +175,9 @@ pub async fn restore_cluster(
             .with_detail("A cluster with this name already exists."));
     }
     ops.store
-        .put(&ns, &spec)
+        .create(&ns, &spec)
         .await
-        .map_err(ApiError::from_kube)?;
+        .map_err(crate::spec_store::mutation_error)?;
     tracing::info!(
         source = %name,
         target = %spec.name,

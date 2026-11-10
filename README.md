@@ -5,7 +5,7 @@ CRDs or holding cluster-admin**.
 
 pglord is a control plane for HA PostgreSQL clusters: a Rust server with an embedded
 Angular UI and a REST API. It provisions the instances, keeps one primary and one or
-more streaming standbys, promotes a standby automatically when the primary fails, and
+more streaming standbys, gates promotion on acknowledged primary fencing, and
 handles the day-2 work — backups, upgrades, pooling, TLS, roles — through the same
 interface.
 
@@ -38,8 +38,8 @@ limitations](docs/user-guide.md#current-limitations).
 
 ## What it does
 
-**Availability** — streaming replication, automatic failover on the highest-LSN ready
-standby, planned switchover, optional synchronous replication with a strict quorum,
+**Availability** — streaming replication, fail-closed promotion to the highest-LSN ready
+standby after acknowledged fencing, planned switchover, optional synchronous replication with a strict quorum,
 hibernation and per-instance fencing.
 
 **Data safety** — pgBackRest backups to S3-compatible storage, scheduling with

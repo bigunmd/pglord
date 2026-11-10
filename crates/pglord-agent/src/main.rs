@@ -25,10 +25,16 @@ async fn main() -> anyhow::Result<()> {
     // Role resolution: the primary record wins when reachable; ordinal
     // fallback keeps K8s-less environments (docker e2e) working.
     let reader = record::RecordReader::try_new(&cfg).await;
+    // In Kubernetes, an unreadable control record must never revive a fenced primary.
+    let managed = std::env::var_os("KUBERNETES_SERVICE_HOST").is_some() && !cfg.cluster.is_empty();
+    if managed && reader.is_none() {
+        anyhow::bail!("cannot start a managed instance without Kubernetes access");
+    }
     cfg.role = match &reader {
         Some(r) => match record::apply_record_to_config(&mut cfg, r, &hostname).await {
-            Some(role) => role,
-            None => rolestrategy::resolve_role(cfg.role, &hostname)?,
+            Ok(Some(role)) => role,
+            Err(err) if managed => return Err(err),
+            Ok(None) | Err(_) => rolestrategy::resolve_role(cfg.role, &hostname)?,
         },
         None => rolestrategy::resolve_role(cfg.role, &hostname)?,
     };
@@ -39,6 +45,9 @@ async fn main() -> anyhow::Result<()> {
         Some(r) => r.spec().await,
         None => None,
     };
+    if managed && cluster_spec.is_none() {
+        anyhow::bail!("cannot start a managed instance with an unreadable cluster spec");
+    }
     let restore = cluster_spec.as_ref().and_then(|s| s.restore.clone());
     let restored = restore.is_some();
 
