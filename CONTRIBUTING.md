@@ -13,15 +13,14 @@ cuts against one of them needs a conversation before it needs a diff.
 
 The reasoning behind most non-obvious decisions is written down:
 
-- `docs/superpowers/specs/` — design specs, one per feature, with a
-  "Decisions" table and an explicit "Out of scope" section.
-- `docs/superpowers/plans/` — the implementation plan each spec produced.
-- `docs/user-guide.md` — user-facing behaviour. If your change alters
-  behaviour, this file changes with it.
+- [Agent guide](AGENTS.md) — repository map, commands and safety boundaries.
+- [GOLD development guide](docs/development.md) — scope approval, verification and acceptance.
+- [C4 architecture](docs/architecture/c4.md) — current boundaries, state and tradeoffs.
+- [User guide](docs/user-guide.md) — user-facing behaviour; update it when behaviour changes.
 
-If you are about to argue with a design decision, check whether the spec
-already considered and rejected your alternative. If it did and the reasoning is
-wrong, say so — that is a useful issue.
+Check the current implementation and architecture before challenging a decision.
+Document new architectural decisions when needed; do not treat old plans as proof
+that an implementation is safe or a proposal was shipped.
 
 ## Getting set up
 
@@ -61,11 +60,12 @@ there and nowhere else, so the three cannot disagree.
 
 ## Before you open a pull request
 
-Run the full gate. CI runs the same thing, and it is much faster to find out
-locally:
+Run the checks relevant to your change. The recommended local gate is broader
+than current CI (which does not run UI tests, CRD drift checks or E2E):
 
 ```bash
-make lint test openapi-check ui-client-check ui-lint ui-test
+make lint test openapi-check crd-check ui-client-check ui-lint ui-build
+npm --prefix ui test -- --watch=false
 ```
 
 - `make lint` is `cargo fmt --all --check` plus `clippy --all-targets -D warnings`.
@@ -111,7 +111,7 @@ and take minutes each:
 
 ```bash
 make stand-up stand-deploy stand-smoke
-make cluster-e2e failover-e2e day2-e2e     # 19 suites in total, see make help
+make cluster-e2e failover-e2e day2-e2e     # see make help for all suites
 ```
 
 Some need extra infrastructure — `backup-e2e`, `restore-e2e` and

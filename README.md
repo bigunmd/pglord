@@ -158,8 +158,9 @@ End-to-end suites run against a minikube stand (`make cluster-e2e failover-e2e d
 backup-e2e restore-e2e upgrade-e2e upgrade-inplace-e2e`, and more — see `make help`).
 They exercise real clusters, real failovers and real upgrades rather than mocks.
 
-Design specs live in `docs/superpowers/specs/`, per-feature implementation plans with
-the reasoning behind non-obvious decisions in `docs/superpowers/plans/`.
+Start with the [agent guide](AGENTS.md), [GOLD development process](docs/development.md)
+and [current C4 architecture](docs/architecture/c4.md) for repository guidance,
+verification expectations and the reasoning behind important boundaries.
 
 ## Configuration
 
