@@ -1,8 +1,19 @@
 import { Component, inject, signal } from '@angular/core';
-import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
+import { NavigationEnd, Router, RouterLink, RouterOutlet } from '@angular/router';
+import { toSignal } from '@angular/core/rxjs-interop';
+import { filter, map } from 'rxjs';
 import { TranslocoModule } from '@jsverse/transloco';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { lucideCheck, lucideLogOut, lucideMonitor, lucideMoon, lucideSun } from '@ng-icons/lucide';
+import {
+  lucideCheck,
+  lucideDatabase,
+  lucideLayoutDashboard,
+  lucideLogOut,
+  lucideMonitor,
+  lucideMoon,
+  lucideShieldCheck,
+  lucideSun,
+} from '@ng-icons/lucide';
 import { HlmButtonImports } from '@spartan-ng/helm/button';
 import { HlmDropdownMenuImports } from '@spartan-ng/helm/dropdown-menu';
 
@@ -16,7 +27,6 @@ import { PglordLogoComponent } from './pglord-logo.component';
   selector: 'pg-shell',
   imports: [
     RouterLink,
-    RouterLinkActive,
     RouterOutlet,
     TranslocoModule,
     NgIcon,
@@ -24,97 +34,142 @@ import { PglordLogoComponent } from './pglord-logo.component';
     HlmDropdownMenuImports,
     PglordLogoComponent,
   ],
-  providers: [provideIcons({ lucideCheck, lucideLogOut, lucideMonitor, lucideMoon, lucideSun })],
+  providers: [
+    provideIcons({
+      lucideCheck,
+      lucideDatabase,
+      lucideLayoutDashboard,
+      lucideLogOut,
+      lucideMonitor,
+      lucideMoon,
+      lucideShieldCheck,
+      lucideSun,
+    }),
+  ],
   template: `
-    <div class="flex min-h-svh flex-col">
-      <header class="border-border bg-card flex h-14 items-center gap-3 border-b px-4 lg:px-6">
-        <a routerLink="/" class="flex items-center gap-2">
-          <pg-logo [size]="26" />
-          <span class="text-primary font-semibold tracking-tight">
-            {{ 'app.title' | transloco }}
-          </span>
+    <a
+      class="pg-skip-link"
+      href="#main-content"
+      (click)="$event.preventDefault(); main.focus(); main.scrollIntoView()"
+      >{{ 'ux.shell.skip' | transloco }}</a
+    >
+    <div class="pg-shell">
+      <aside class="pg-sidebar">
+        <a routerLink="/" class="pg-brand" [attr.aria-label]="'app.title' | transloco">
+          <pg-logo [size]="36" />
+          <span class="pg-brand-name">{{ 'app.title' | transloco }}</span>
         </a>
-        <span class="text-muted-foreground hidden text-sm sm:inline">
-          {{ 'app.tagline' | transloco }}
-        </span>
-        <nav class="ml-6 flex items-center gap-1 text-sm">
-          <a
-            routerLink="/"
-            routerLinkActive="text-foreground font-medium"
-            [routerLinkActiveOptions]="{ exact: true }"
-            class="text-muted-foreground hover:text-foreground rounded-md px-3 py-1.5 transition-colors"
-          >
-            {{ 'nav.home' | transloco }}
-          </a>
-          <a
-            routerLink="/clusters"
-            routerLinkActive="text-foreground font-medium"
-            class="text-muted-foreground hover:text-foreground rounded-md px-3 py-1.5 transition-colors"
-          >
-            {{ 'nav.clusters' | transloco }}
-          </a>
-          <a
-            routerLink="/preflight"
-            routerLinkActive="text-foreground font-medium"
-            class="text-muted-foreground hover:text-foreground rounded-md px-3 py-1.5 transition-colors"
-          >
-            {{ 'nav.permissions' | transloco }}
-          </a>
-        </nav>
-        <div class="ml-auto">
-          <button hlmBtn variant="ghost" size="icon" [hlmDropdownMenuTrigger]="themeMenu">
-            <ng-icon [name]="theme.resolved() === 'dark' ? 'lucideMoon' : 'lucideSun'" size="18" />
-          </button>
-          <ng-template #themeMenu>
-            <hlm-dropdown-menu class="w-40">
-              <div hlmDropdownMenuLabel>{{ 'theme.label' | transloco }}</div>
-              @for (t of themeModes; track t.mode) {
-                <button hlmDropdownMenuItem (click)="theme.setMode(t.mode)">
-                  <ng-icon [name]="t.icon" size="16" />
-                  {{ t.labelKey | transloco }}
-                  @if (theme.mode() === t.mode) {
-                    <ng-icon name="lucideCheck" size="16" class="ml-auto" />
-                  }
-                </button>
-              }
-            </hlm-dropdown-menu>
-          </ng-template>
-          @if (auth.current()) {
-            @if (who(); as me) {
-              <span
-                class="text-muted-foreground mr-1 hidden text-xs sm:inline"
-                [title]="'auth.signedInAs' | transloco: { user: me.user || me.mode }"
-                data-testid="signed-in-as"
+        <div>
+          <p class="pg-nav-label hidden lg:block">{{ 'ux.shell.workspace' | transloco }}</p>
+          <nav [attr.aria-label]="'ux.shell.navigation' | transloco">
+            @for (item of navigation; track item.path) {
+              <a
+                [routerLink]="item.path"
+                [class.is-active]="active(item.path)"
+                [attr.aria-current]="active(item.path) ? 'page' : null"
+                class="pg-nav-link"
               >
-                {{ me.display_name || me.user }}
-              </span>
+                <ng-icon [name]="item.icon" size="19" aria-hidden="true" />
+                {{ item.label | transloco }}
+              </a>
+            }
+          </nav>
+        </div>
+        <div class="mt-auto hidden border-t border-white/10 px-2 pt-5 lg:block">
+          <p class="text-xs font-medium text-white">{{ 'ux.shell.console' | transloco }}</p>
+          <p class="mt-2 text-xs leading-relaxed">{{ 'app.tagline' | transloco }}</p>
+        </div>
+      </aside>
+      <div class="pg-shell-body">
+        <header class="pg-topbar">
+          <p class="text-muted-foreground text-xs font-medium sm:text-sm">
+            {{ 'ux.shell.console' | transloco }}
+          </p>
+          <div class="flex min-w-0 items-center gap-2">
+            @if (auth.current()) {
+              @if (who(); as me) {
+                <span
+                  class="text-muted-foreground hidden max-w-48 truncate text-xs sm:inline"
+                  [title]="'auth.signedInAs' | transloco: { user: me.user || me.mode }"
+                  data-testid="signed-in-as"
+                  >{{ me.display_name || me.user }}</span
+                >
+              }
             }
             <button
               hlmBtn
               variant="ghost"
               size="icon"
-              [attr.aria-label]="'auth.logout' | transloco"
-              (click)="logout()"
+              [hlmDropdownMenuTrigger]="themeMenu"
+              [attr.aria-label]="'theme.label' | transloco"
             >
-              <ng-icon name="lucideLogOut" size="18" />
+              <ng-icon
+                [name]="theme.resolved() === 'dark' ? 'lucideMoon' : 'lucideSun'"
+                size="18"
+                aria-hidden="true"
+              />
             </button>
-          }
-        </div>
-      </header>
-      <main class="flex-1 p-4 lg:p-6">
-        <router-outlet />
-      </main>
+            <ng-template #themeMenu>
+              <hlm-dropdown-menu class="w-44">
+                <div hlmDropdownMenuLabel>{{ 'theme.label' | transloco }}</div>
+                @for (t of themeModes; track t.mode) {
+                  <button hlmDropdownMenuItem (click)="theme.setMode(t.mode)">
+                    <ng-icon [name]="t.icon" size="16" aria-hidden="true" />
+                    {{ t.labelKey | transloco }}
+                    @if (theme.mode() === t.mode) {
+                      <ng-icon name="lucideCheck" size="16" class="ml-auto" aria-hidden="true" />
+                      <span class="sr-only">{{ 'ux.shell.selected' | transloco }}</span>
+                    }
+                  </button>
+                }
+              </hlm-dropdown-menu>
+            </ng-template>
+            @if (auth.current()) {
+              <button
+                hlmBtn
+                variant="ghost"
+                size="icon"
+                [attr.aria-label]="'auth.logout' | transloco"
+                (click)="logout()"
+              >
+                <ng-icon name="lucideLogOut" size="18" aria-hidden="true" />
+              </button>
+            }
+          </div>
+        </header>
+        <main #main id="main-content" tabindex="-1" class="pg-main">
+          <router-outlet />
+        </main>
+      </div>
     </div>
   `,
 })
 export class ShellComponent {
+  private readonly router = inject(Router);
+  private readonly currentUrl = toSignal(
+    this.router.events.pipe(
+      filter((event): event is NavigationEnd => event instanceof NavigationEnd),
+      map((event) => event.urlAfterRedirects),
+    ),
+    { initialValue: this.router.url },
+  );
+
+  protected active(path: string): boolean {
+    const current = this.currentUrl().split(/[?#]/)[0];
+    return path === '/'
+      ? current === '/'
+      : current.startsWith(path) || (path === '/clusters' && current.startsWith('/namespaces/'));
+  }
+
   protected readonly theme = inject(ThemeService);
   protected readonly auth = inject(AuthService);
   private readonly oidc = inject(OidcService);
-
-  /** Who the server says we are. Blank until it answers; a failure here must
-   * not break the header, so it degrades to showing nothing. */
   protected readonly who = signal<WhoamiResponse | null>(null);
+  protected readonly navigation = [
+    { path: '/', label: 'ux.shell.overview', icon: 'lucideLayoutDashboard' },
+    { path: '/clusters', label: 'nav.clusters', icon: 'lucideDatabase' },
+    { path: '/preflight', label: 'nav.permissions', icon: 'lucideShieldCheck' },
+  ];
 
   constructor() {
     if (this.auth.current()) {
@@ -126,8 +181,6 @@ export class ShellComponent {
   }
 
   protected logout(): void {
-    // Goes through OidcService so an IdP session is ended too when the
-    // issuer supports it; it falls back to a local clear otherwise.
     this.oidc.logout();
   }
 

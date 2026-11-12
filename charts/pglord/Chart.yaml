@@ -3,8 +3,8 @@ name: pglord
 description: Control plane and web UI for HA PostgreSQL clusters on Kubernetes
 type: application
 # Chart version moves with packaging changes; appVersion tracks the pglord release.
-version: 0.2.1
-appVersion: "0.2.1"
+version: 0.3.0
+appVersion: "0.3.0"
 home: https://github.com/bigunmd/pglord
 sources:
   - https://github.com/bigunmd/pglord

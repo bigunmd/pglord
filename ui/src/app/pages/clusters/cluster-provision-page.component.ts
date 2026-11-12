@@ -46,28 +46,30 @@ interface ExtRow {
   selector: 'pg-cluster-provision-page',
   imports: [FormsModule, TranslocoModule, HlmButton, HlmInput, HlmLabel, BreadcrumbsComponent],
   template: `
-    <div class="mx-auto max-w-3xl pb-24">
+    <div class="pg-form-page">
       <pg-breadcrumbs [crumbs]="crumbs()" />
-      <h1 class="mb-1 text-lg font-semibold">{{ 'provision.editTitle' | transloco }}</h1>
-      <p class="text-muted-foreground mb-6 text-sm">{{ 'provision.intro' | transloco }}</p>
+      <h1 class="pg-page-title">{{ 'provision.editTitle' | transloco }}</h1>
+      <p class="pg-page-description mb-6">{{ 'provision.intro' | transloco }}</p>
 
       @if (error(); as err) {
-        <p class="text-destructive mb-4 text-sm" role="alert">{{ err }}</p>
+        <p class="pg-alert text-destructive mb-4" role="alert">{{ err }}</p>
       }
 
       @if (loading()) {
-        <p class="text-muted-foreground text-sm">{{ 'common.loading' | transloco }}</p>
+        <p class="pg-panel text-muted-foreground text-sm" role="status">
+          {{ 'common.loading' | transloco }}
+        </p>
       } @else {
         <div class="grid gap-5">
           <p class="text-muted-foreground text-xs leading-relaxed">
             {{ 'provision.explainer' | transloco }}
           </p>
 
-          <div class="grid gap-3">
-            <h3 class="text-sm font-medium">{{ 'provision.roles' | transloco }}</h3>
+          <section class="pg-form-section !my-0 grid gap-4">
+            <h2 class="text-base font-semibold">{{ 'provision.roles' | transloco }}</h2>
             @for (row of roleRows(); track $index; let i = $index) {
               <div class="border-border grid gap-2 rounded-md border p-3">
-                <div class="grid grid-cols-2 gap-2">
+                <div class="grid gap-3 sm:grid-cols-2">
                   <div class="grid gap-1">
                     <label hlmLabel [for]="'role-name-' + i">{{
                       'provision.roleName' | transloco
@@ -125,7 +127,7 @@ interface ExtRow {
                     {{ 'provision.createrole' | transloco }}
                   </label>
                 </div>
-                <div class="grid grid-cols-2 gap-2">
+                <div class="grid gap-3 sm:grid-cols-2">
                   <div class="grid gap-1">
                     <label hlmLabel [for]="'role-secret-' + i">{{
                       'provision.secretName' | transloco
@@ -177,10 +179,10 @@ interface ExtRow {
             <button hlmBtn variant="outline" size="sm" data-testid="add-role" (click)="addRole()">
               {{ 'provision.addRole' | transloco }}
             </button>
-          </div>
+          </section>
 
-          <div class="grid gap-3">
-            <h3 class="text-sm font-medium">{{ 'provision.databases' | transloco }}</h3>
+          <section class="pg-form-section !my-0 grid gap-4">
+            <h2 class="text-base font-semibold">{{ 'provision.databases' | transloco }}</h2>
             @for (row of dbRows(); track $index; let i = $index) {
               <div class="grid grid-cols-[1fr_1fr_auto] items-end gap-2">
                 <div class="grid gap-1">
@@ -220,10 +222,10 @@ interface ExtRow {
             <button hlmBtn variant="outline" size="sm" data-testid="add-database" (click)="addDb()">
               {{ 'provision.addDatabase' | transloco }}
             </button>
-          </div>
+          </section>
 
-          <div class="grid gap-3">
-            <h3 class="text-sm font-medium">{{ 'provision.extensions' | transloco }}</h3>
+          <section class="pg-form-section !my-0 grid gap-4">
+            <h2 class="text-base font-semibold">{{ 'provision.extensions' | transloco }}</h2>
             <p class="text-muted-foreground text-xs">{{ 'provision.preloadHint' | transloco }}</p>
             @for (row of extRows(); track $index; let i = $index) {
               <div class="grid grid-cols-[1fr_1fr_1fr_auto_auto] items-end gap-2">
@@ -292,27 +294,24 @@ interface ExtRow {
             >
               {{ 'provision.addExtension' | transloco }}
             </button>
-          </div>
+          </section>
         </div>
       }
-    </div>
-
-    <!-- Sticky action bar: on a long form the primary action must stay
-         reachable without scrolling back down. -->
-    <div class="bg-background/95 border-border fixed inset-x-0 bottom-0 border-t backdrop-blur">
-      <div class="mx-auto flex max-w-3xl items-center gap-3 px-4 py-3">
-        <div class="ml-auto flex gap-2">
-          <button hlmBtn variant="ghost" (click)="cancel()">
-            {{ 'common.cancel' | transloco }}
-          </button>
-          <button
-            hlmBtn
-            data-testid="provision-submit"
-            [disabled]="loading() || busy()"
-            (click)="submit()"
-          >
-            {{ 'provision.apply' | transloco }}
-          </button>
+      <div class="pg-form-actions">
+        <div>
+          <div class="ml-auto flex gap-2">
+            <button hlmBtn variant="ghost" (click)="cancel()">
+              {{ 'common.cancel' | transloco }}
+            </button>
+            <button
+              hlmBtn
+              data-testid="provision-submit"
+              [disabled]="loading() || busy()"
+              (click)="submit()"
+            >
+              {{ (busy() ? 'ux.forms.saving' : 'provision.apply') | transloco }}
+            </button>
+          </div>
         </div>
       </div>
     </div>

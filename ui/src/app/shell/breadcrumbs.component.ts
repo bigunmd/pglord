@@ -1,5 +1,6 @@
 import { ChangeDetectionStrategy, Component, input } from '@angular/core';
 import { RouterLink } from '@angular/router';
+import { TranslocoModule } from '@jsverse/transloco';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { lucideChevronRight } from '@ng-icons/lucide';
 
@@ -16,11 +17,11 @@ export interface Crumb {
  */
 @Component({
   selector: 'pg-breadcrumbs',
-  imports: [RouterLink, NgIcon],
+  imports: [RouterLink, NgIcon, TranslocoModule],
   providers: [provideIcons({ lucideChevronRight })],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <nav [attr.aria-label]="ariaLabel()" class="mb-3">
+    <nav [attr.aria-label]="ariaLabel() || ('ux.forms.breadcrumb' | transloco)" class="mb-5">
       <ol class="text-muted-foreground flex flex-wrap items-center gap-1 text-sm">
         @for (crumb of crumbs(); track crumb.label; let last = $last) {
           <li class="flex items-center gap-1">
@@ -47,5 +48,5 @@ export interface Crumb {
 })
 export class BreadcrumbsComponent {
   public readonly crumbs = input.required<Crumb[]>();
-  public readonly ariaLabel = input('Breadcrumb');
+  public readonly ariaLabel = input('');
 }

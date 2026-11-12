@@ -2043,7 +2043,7 @@ dependencies = [
 
 [[package]]
 name = "pglord-agent"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -2064,7 +2064,7 @@ dependencies = [
 
 [[package]]
 name = "pglord-core"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "cron",
@@ -2080,7 +2080,7 @@ dependencies = [
 
 [[package]]
 name = "pglord-server"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",

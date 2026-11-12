@@ -24,17 +24,19 @@ const METHODS: HbaRule['method'][] = ['scram-sha-256', 'reject', 'trust', 'cert'
   imports: [FormsModule, TranslocoModule, NgIcon, HlmButton, HlmInput, BreadcrumbsComponent],
   providers: [provideIcons({ lucidePlus, lucideTrash2 })],
   template: `
-    <div class="mx-auto max-w-3xl pb-24">
+    <div class="pg-form-page">
       <pg-breadcrumbs [crumbs]="crumbs()" />
-      <h1 class="mb-1 text-lg font-semibold">{{ 'hba.editTitle' | transloco }}</h1>
-      <p class="text-muted-foreground mb-6 text-sm">{{ 'hba.intro' | transloco }}</p>
+      <h1 class="pg-page-title">{{ 'hba.editTitle' | transloco }}</h1>
+      <p class="pg-page-description mb-6">{{ 'hba.intro' | transloco }}</p>
 
       @if (error(); as err) {
-        <p class="text-destructive mb-4 text-sm" role="alert">{{ err }}</p>
+        <p class="pg-alert text-destructive mb-4" role="alert">{{ err }}</p>
       }
 
       @if (loading()) {
-        <p class="text-muted-foreground text-sm">{{ 'common.loading' | transloco }}</p>
+        <p class="pg-panel text-muted-foreground text-sm" role="status">
+          {{ 'common.loading' | transloco }}
+        </p>
       } @else {
         <div class="grid gap-4">
           <p class="text-muted-foreground text-xs leading-relaxed">
@@ -43,7 +45,7 @@ const METHODS: HbaRule['method'][] = ['scram-sha-256', 'reject', 'trust', 'cert'
 
           @for (row of rows(); track $index; let i = $index) {
             <div
-              class="grid items-end gap-2 sm:grid-cols-[7rem_1fr_1fr_1fr_9rem_auto]"
+              class="pg-panel grid items-end gap-3 sm:grid-cols-2 xl:grid-cols-[7rem_1fr_1fr_1fr_9rem_auto]"
               [attr.data-testid]="'hba-row-' + i"
             >
               <select
@@ -113,24 +115,21 @@ const METHODS: HbaRule['method'][] = ['scram-sha-256', 'reject', 'trust', 'cert'
           </div>
         </div>
       }
-    </div>
-
-    <!-- Sticky action bar: on a long form the primary action must stay
-         reachable without scrolling back down. -->
-    <div class="bg-background/95 border-border fixed inset-x-0 bottom-0 border-t backdrop-blur">
-      <div class="mx-auto flex max-w-3xl items-center gap-3 px-4 py-3">
-        <div class="ml-auto flex gap-2">
-          <button hlmBtn variant="ghost" (click)="cancel()">
-            {{ 'common.cancel' | transloco }}
-          </button>
-          <button
-            hlmBtn
-            data-testid="hba-submit"
-            [disabled]="loading() || busy() || !valid()"
-            (click)="submit()"
-          >
-            {{ 'hba.apply' | transloco }}
-          </button>
+      <div class="pg-form-actions">
+        <div>
+          <div class="ml-auto flex gap-2">
+            <button hlmBtn variant="ghost" (click)="cancel()">
+              {{ 'common.cancel' | transloco }}
+            </button>
+            <button
+              hlmBtn
+              data-testid="hba-submit"
+              [disabled]="loading() || busy() || !valid()"
+              (click)="submit()"
+            >
+              {{ (busy() ? 'ux.forms.saving' : 'hba.apply') | transloco }}
+            </button>
+          </div>
         </div>
       </div>
     </div>

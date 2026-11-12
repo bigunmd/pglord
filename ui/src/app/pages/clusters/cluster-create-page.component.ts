@@ -36,254 +36,270 @@ const REPLICA_CHOICES = [1, 2, 3, 4, 5] as const;
     BreadcrumbsComponent,
   ],
   template: `
-    <div class="mx-auto max-w-2xl pb-24">
+    <div class="pg-form-page">
       <pg-breadcrumbs [crumbs]="crumbs()" />
-      <h1 class="mb-1 text-lg font-semibold">{{ 'clusters.createTitle' | transloco }}</h1>
+      <h1 class="pg-page-title">{{ 'clusters.createTitle' | transloco }}</h1>
       <p class="text-muted-foreground mb-6 text-sm">{{ 'clusters.createIntro' | transloco }}</p>
 
       @if (error(); as err) {
         <p class="text-destructive mb-4 text-sm" role="alert">{{ err }}</p>
       }
 
-      <div class="grid gap-6">
-      <div class="grid gap-1.5">
-        <label hlmLabel for="pg-cluster-namespace">{{ 'clusters.namespace' | transloco }}</label>
-        @if (namespaceFixed()) {
-          <!-- The server manages exactly one namespace, so there is nothing to
+      <section class="pg-form-section grid gap-6" aria-labelledby="identity-heading">
+        <div>
+          <h2 id="identity-heading" class="font-semibold">{{ 'ux.forms.identity' | transloco }}</h2>
+          <p class="pg-page-description">{{ 'ux.forms.identityHint' | transloco }}</p>
+        </div>
+        <div class="grid gap-1.5">
+          <label hlmLabel for="pg-cluster-namespace">{{ 'clusters.namespace' | transloco }}</label>
+          @if (namespaceFixed()) {
+            <!-- The server manages exactly one namespace, so there is nothing to
                choose: show which one rather than offering a field that can
                only be filled in wrongly. -->
-          <p
-            class="border-border bg-muted/40 text-muted-foreground rounded-md border px-3 py-2 font-mono text-sm"
-            data-testid="cluster-namespace-fixed"
-          >
-            {{ namespace() || '…' }}
+            <p
+              class="border-border bg-muted/40 text-muted-foreground rounded-md border px-3 py-2 font-mono text-sm"
+              data-testid="cluster-namespace-fixed"
+            >
+              {{ namespace() || '…' }}
+            </p>
+          } @else {
+            <input
+              hlmInput
+              id="pg-cluster-namespace"
+              class="font-mono"
+              data-testid="cluster-namespace"
+              list="pg-known-namespaces"
+              [ngModel]="namespace()"
+              (ngModelChange)="namespace.set($event)"
+              autocomplete="off"
+            />
+            <datalist id="pg-known-namespaces">
+              @for (n of knownNamespaces(); track n) {
+                <option [value]="n"></option>
+              }
+            </datalist>
+          }
+          <p class="text-muted-foreground text-xs">
+            {{
+              (namespaceFixed() ? 'clusters.namespaceFixedHelp' : 'clusters.namespaceHelp')
+                | transloco
+            }}
           </p>
-        } @else {
+        </div>
+        <div class="grid gap-1.5">
+          <label hlmLabel for="pg-cluster-name">{{ 'clusters.name' | transloco }}</label>
           <input
             hlmInput
-            id="pg-cluster-namespace"
-            class="font-mono"
-            data-testid="cluster-namespace"
-            list="pg-known-namespaces"
-            [ngModel]="namespace()"
-            (ngModelChange)="namespace.set($event)"
+            id="pg-cluster-name"
+            data-testid="cluster-name"
+            [ngModel]="name()"
+            (ngModelChange)="name.set($event)"
+            placeholder="orders-db"
             autocomplete="off"
           />
-          <datalist id="pg-known-namespaces">
-            @for (n of knownNamespaces(); track n) {
-              <option [value]="n"></option>
-            }
-          </datalist>
-        }
-        <p class="text-muted-foreground text-xs">
-          {{ (namespaceFixed() ? 'clusters.namespaceFixedHelp' : 'clusters.namespaceHelp') | transloco }}
-        </p>
-      </div>
-      <div class="grid gap-1.5">
-        <label hlmLabel for="pg-cluster-name">{{ 'clusters.name' | transloco }}</label>
-        <input
-          hlmInput
-          id="pg-cluster-name"
-          data-testid="cluster-name"
-          [ngModel]="name()"
-          (ngModelChange)="name.set($event)"
-          placeholder="orders-db"
-          autocomplete="off"
-        />
-        <!-- Persistent helper text: the same string is always rendered and only
+          <!-- Persistent helper text: the same string is always rendered and only
              recolored on error, so nothing reflows regardless of wrapping. -->
-        <p
-          class="text-xs"
-          [class.text-muted-foreground]="!name() || nameValid()"
-          [class.text-destructive]="name() && !nameValid()"
-        >
-          {{ 'clusters.nameHelp' | transloco }}
-        </p>
-      </div>
-      <div class="grid gap-1.5">
-        <span hlmLabel>{{ 'clusters.replicas' | transloco }}</span>
-        <div class="bg-muted grid grid-cols-5 gap-1 rounded-lg p-1" role="tablist">
-          @for (n of replicaChoices; track n) {
-            <button
-              type="button"
-              class="cursor-pointer rounded-md px-3 py-1.5 font-mono text-sm font-medium transition-colors"
-              [class.bg-background]="replicas() === n"
-              [class.shadow-sm]="replicas() === n"
-              [class.text-muted-foreground]="replicas() !== n"
-              role="tab"
-              [attr.aria-selected]="replicas() === n"
-              (click)="replicas.set(n)"
-            >
-              {{ n }}
-            </button>
-          }
-        </div>
-        <p class="text-muted-foreground text-xs">{{ 'clusters.replicasHint' | transloco }}</p>
-      </div>
-      <div class="grid gap-1.5">
-        <label hlmLabel for="pg-cluster-storage">{{ 'clusters.storage' | transloco }}</label>
-        <input
-          hlmInput
-          id="pg-cluster-storage"
-          [ngModel]="storage()"
-          (ngModelChange)="storage.set($event)"
-          placeholder="1Gi"
-        />
-        <p
-          class="text-xs"
-          [class.text-muted-foreground]="!storage() || storageValid()"
-          [class.text-destructive]="storage() && !storageValid()"
-        >
-          {{ 'clusters.storageHelp' | transloco }}
-        </p>
-      </div>
-      <div class="grid gap-1.5">
-        <label hlmLabel for="pg-cluster-image">{{ 'clusters.image' | transloco }}</label>
-        <input
-          hlmInput
-          id="pg-cluster-image"
-          [ngModel]="image()"
-          (ngModelChange)="image.set($event)"
-          [placeholder]="defaultImage() || ('clusters.imageDefault' | transloco)"
-        />
-        <p class="text-muted-foreground text-xs leading-relaxed">
-          @if (defaultImage(); as fallback) {
-            {{ 'clusters.imageDefaultHelp' | transloco: { image: fallback } }}
-          } @else {
-            {{ 'clusters.imageHelp' | transloco }}
-          }
-        </p>
-      </div>
-
-      <!-- Collapsed by default: most clusters need none of this, but init
-           scripts and their environment can only be set here, since they run
-           when the data directory is first created. -->
-      <div class="border-border border-t pt-4">
-        <button
-          hlmBtn
-          variant="ghost"
-          size="sm"
-          class="-ml-2"
-          data-testid="toggle-advanced"
-          [attr.aria-expanded]="advanced()"
-          (click)="advanced.set(!advanced())"
-        >
-          {{ (advanced() ? 'clusters.hideAdvanced' : 'clusters.showAdvanced') | transloco }}
-        </button>
-      </div>
-
-      @if (advanced()) {
-        <div class="grid gap-6">
-          <div class="grid gap-1.5">
-            <label hlmLabel for="pg-cluster-creds">
-              {{ 'secrets.credentialsSecret' | transloco }}
-            </label>
-            <input
-              hlmInput
-              id="pg-cluster-creds"
-              data-testid="create-credentials-secret"
-              [placeholder]="(name() || 'orders-db') + '-credentials'"
-              [ngModel]="credentialsSecret()"
-              (ngModelChange)="credentialsSecret.set($event)"
-            />
-            <p class="text-muted-foreground text-xs leading-relaxed">
-              {{ 'secrets.credentialsSecretHelp' | transloco }}
-            </p>
-          </div>
-
-          <pg-env-editor [(rows)]="rows" />
-
-          <div class="grid gap-1.5">
-            <label hlmLabel for="pg-cluster-init-cm">
-              {{ 'secrets.initConfigMap' | transloco }}
-            </label>
-            <input
-              hlmInput
-              id="pg-cluster-init-cm"
-              data-testid="create-init-configmap"
-              [ngModel]="initConfigMap()"
-              (ngModelChange)="initConfigMap.set($event)"
-            />
-            <p class="text-muted-foreground text-xs leading-relaxed">
-              {{ 'secrets.initHelp' | transloco }}
-            </p>
-          </div>
-
-          <div class="grid gap-1.5">
-            <label hlmLabel for="pg-cluster-init-secret">
-              {{ 'secrets.initSecret' | transloco }}
-            </label>
-            <input
-              hlmInput
-              id="pg-cluster-init-secret"
-              data-testid="create-init-secret"
-              [ngModel]="initSecret()"
-              (ngModelChange)="initSecret.set($event)"
-            />
-            <p class="text-muted-foreground text-xs leading-relaxed">
-              {{ 'secrets.initSecretHelp' | transloco }}
-            </p>
-          </div>
-
-          <div class="grid gap-1.5">
-            <label hlmLabel for="pg-cluster-tls-secret">
-              {{ 'tls.serverSecret' | transloco }}
-            </label>
-            <input
-              hlmInput
-              id="pg-cluster-tls-secret"
-              data-testid="create-tls-secret"
-              [placeholder]="'tls.serverSecretPlaceholder' | transloco"
-              [ngModel]="tlsSecret()"
-              (ngModelChange)="tlsSecret.set($event)"
-            />
-            <p class="text-muted-foreground text-xs leading-relaxed">
-              {{ 'tls.serverSecretHelp' | transloco }}
-            </p>
-          </div>
-
-          <label hlmLabel class="flex items-center gap-2">
-            <input
-              type="checkbox"
-              class="accent-primary"
-              data-testid="create-pooler-enabled"
-              [ngModel]="poolerEnabled()"
-              (ngModelChange)="poolerEnabled.set($event)"
-            />
-            {{ 'pooler.enable' | transloco }}
-          </label>
-          <p class="text-muted-foreground -mt-2 text-xs leading-relaxed">
-            {{ 'pooler.explainer' | transloco }}
+          <p
+            class="text-xs"
+            [class.text-muted-foreground]="!name() || nameValid()"
+            [class.text-destructive]="name() && !nameValid()"
+          >
+            {{ 'clusters.nameHelp' | transloco }}
           </p>
         </div>
-        }
-      </div>
-    </div>
-
-    <!-- Sticky action bar: on a long form the primary action must stay
-         reachable without scrolling back down. -->
-    <div class="bg-background/95 border-border fixed inset-x-0 bottom-0 border-t backdrop-blur">
-      <div class="mx-auto flex max-w-2xl items-center gap-3 px-4 py-3">
-        <!-- A disabled button with no stated reason reads as a broken form: the
-             name field's placeholder looks like a filled-in value, so an empty
-             name silently deactivates submit. Say what is missing. -->
-        @if (!valid()) {
-          <p class="text-muted-foreground text-xs" data-testid="cluster-submit-blocked">
-            {{ blockedReason() | transloco }}
+      </section>
+      <section class="pg-form-section grid gap-6" aria-labelledby="capacity-heading">
+        <div>
+          <h2 id="capacity-heading" class="font-semibold">{{ 'ux.forms.capacity' | transloco }}</h2>
+          <p class="pg-page-description">{{ 'ux.forms.capacityHint' | transloco }}</p>
+        </div>
+        <div class="grid gap-1.5">
+          <span hlmLabel id="replicas-label">{{ 'clusters.replicas' | transloco }}</span>
+          <div
+            class="bg-muted grid grid-cols-5 gap-1 rounded-lg p-1"
+            role="group"
+            aria-labelledby="replicas-label"
+          >
+            @for (n of replicaChoices; track n) {
+              <button
+                type="button"
+                class="cursor-pointer rounded-md px-3 py-1.5 font-mono text-sm font-medium transition-colors"
+                [class.bg-background]="replicas() === n"
+                [class.shadow-sm]="replicas() === n"
+                [class.text-muted-foreground]="replicas() !== n"
+                [attr.aria-pressed]="replicas() === n"
+                (click)="replicas.set(n)"
+              >
+                {{ n }}
+              </button>
+            }
+          </div>
+          <p class="text-muted-foreground text-xs">{{ 'clusters.replicasHint' | transloco }}</p>
+        </div>
+        <div class="grid gap-1.5">
+          <label hlmLabel for="pg-cluster-storage">{{ 'clusters.storage' | transloco }}</label>
+          <input
+            hlmInput
+            id="pg-cluster-storage"
+            [ngModel]="storage()"
+            (ngModelChange)="storage.set($event)"
+            placeholder="1Gi"
+          />
+          <p
+            class="text-xs"
+            [class.text-muted-foreground]="!storage() || storageValid()"
+            [class.text-destructive]="storage() && !storageValid()"
+          >
+            {{ 'clusters.storageHelp' | transloco }}
           </p>
-        }
-        <div class="ml-auto flex gap-2">
-          <button hlmBtn variant="ghost" (click)="cancel()">
-            {{ 'common.cancel' | transloco }}
-          </button>
+        </div>
+      </section>
+      <section class="pg-form-section">
+        <div>
           <button
             hlmBtn
-            data-testid="cluster-submit"
-            [disabled]="!valid() || busy()"
-            (click)="submit()"
+            variant="ghost"
+            size="sm"
+            class="-ml-2"
+            data-testid="toggle-advanced"
+            [attr.aria-expanded]="advanced()"
+            aria-controls="advanced-options"
+            (click)="advanced.set(!advanced())"
           >
-            {{ 'clusters.create' | transloco }}
+            {{ (advanced() ? 'clusters.hideAdvanced' : 'clusters.showAdvanced') | transloco }}
           </button>
+        </div>
+
+        <p class="pg-page-description">{{ 'ux.forms.advancedHint' | transloco }}</p>
+        <div id="advanced-options" [hidden]="!advanced()">
+          @if (advanced()) {
+            <div class="mt-6 grid gap-6">
+              <div class="grid gap-1.5">
+                <label hlmLabel for="pg-cluster-image">{{ 'clusters.image' | transloco }}</label>
+                <input
+                  hlmInput
+                  id="pg-cluster-image"
+                  [ngModel]="image()"
+                  (ngModelChange)="image.set($event)"
+                  [placeholder]="defaultImage() || ('clusters.imageDefault' | transloco)"
+                />
+                <p class="text-muted-foreground text-xs leading-relaxed">
+                  @if (defaultImage(); as fallback) {
+                    {{ 'clusters.imageDefaultHelp' | transloco: { image: fallback } }}
+                  } @else {
+                    {{ 'clusters.imageHelp' | transloco }}
+                  }
+                </p>
+              </div>
+              <div class="grid gap-1.5">
+                <label hlmLabel for="pg-cluster-creds">
+                  {{ 'secrets.credentialsSecret' | transloco }}
+                </label>
+                <input
+                  hlmInput
+                  id="pg-cluster-creds"
+                  data-testid="create-credentials-secret"
+                  [placeholder]="(name() || 'orders-db') + '-credentials'"
+                  [ngModel]="credentialsSecret()"
+                  (ngModelChange)="credentialsSecret.set($event)"
+                />
+                <p class="text-muted-foreground text-xs leading-relaxed">
+                  {{ 'secrets.credentialsSecretHelp' | transloco }}
+                </p>
+              </div>
+
+              <pg-env-editor [(rows)]="rows" />
+
+              <div class="grid gap-1.5">
+                <label hlmLabel for="pg-cluster-init-cm">
+                  {{ 'secrets.initConfigMap' | transloco }}
+                </label>
+                <input
+                  hlmInput
+                  id="pg-cluster-init-cm"
+                  data-testid="create-init-configmap"
+                  [ngModel]="initConfigMap()"
+                  (ngModelChange)="initConfigMap.set($event)"
+                />
+                <p class="text-muted-foreground text-xs leading-relaxed">
+                  {{ 'secrets.initHelp' | transloco }}
+                </p>
+              </div>
+
+              <div class="grid gap-1.5">
+                <label hlmLabel for="pg-cluster-init-secret">
+                  {{ 'secrets.initSecret' | transloco }}
+                </label>
+                <input
+                  hlmInput
+                  id="pg-cluster-init-secret"
+                  data-testid="create-init-secret"
+                  [ngModel]="initSecret()"
+                  (ngModelChange)="initSecret.set($event)"
+                />
+                <p class="text-muted-foreground text-xs leading-relaxed">
+                  {{ 'secrets.initSecretHelp' | transloco }}
+                </p>
+              </div>
+
+              <div class="grid gap-1.5">
+                <label hlmLabel for="pg-cluster-tls-secret">
+                  {{ 'tls.serverSecret' | transloco }}
+                </label>
+                <input
+                  hlmInput
+                  id="pg-cluster-tls-secret"
+                  data-testid="create-tls-secret"
+                  [placeholder]="'tls.serverSecretPlaceholder' | transloco"
+                  [ngModel]="tlsSecret()"
+                  (ngModelChange)="tlsSecret.set($event)"
+                />
+                <p class="text-muted-foreground text-xs leading-relaxed">
+                  {{ 'tls.serverSecretHelp' | transloco }}
+                </p>
+              </div>
+
+              <label hlmLabel class="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  class="accent-primary"
+                  data-testid="create-pooler-enabled"
+                  [ngModel]="poolerEnabled()"
+                  (ngModelChange)="poolerEnabled.set($event)"
+                />
+                {{ 'pooler.enable' | transloco }}
+              </label>
+              <p class="text-muted-foreground -mt-2 text-xs leading-relaxed">
+                {{ 'pooler.explainer' | transloco }}
+              </p>
+            </div>
+          }
+        </div>
+      </section>
+
+      <div class="pg-form-actions">
+        <div>
+          <!-- A disabled button with no stated reason reads as a broken form: the
+             name field's placeholder looks like a filled-in value, so an empty
+             name silently deactivates submit. Say what is missing. -->
+          @if (!valid()) {
+            <p class="text-muted-foreground text-xs" data-testid="cluster-submit-blocked">
+              {{ blockedReason() | transloco }}
+            </p>
+          }
+          <div class="ml-auto flex gap-2">
+            <button hlmBtn variant="ghost" (click)="cancel()">
+              {{ 'common.cancel' | transloco }}
+            </button>
+            <button
+              hlmBtn
+              data-testid="cluster-submit"
+              [disabled]="!valid() || busy()"
+              (click)="submit()"
+            >
+              {{ (busy() ? 'ux.forms.creating' : 'clusters.create') | transloco }}
+            </button>
+          </div>
         </div>
       </div>
     </div>

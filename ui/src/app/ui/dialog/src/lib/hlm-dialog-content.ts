@@ -11,6 +11,7 @@ import {
   ViewEncapsulation,
 } from '@angular/core';
 import { NgIcon, provideIcons } from '@ng-icons/core';
+import { TranslocoModule } from '@jsverse/transloco';
 import { lucideX } from '@ng-icons/lucide';
 import { BrnDialogRef, injectBrnDialogContext } from '@spartan-ng/brain/dialog';
 import { HlmButton } from '@spartan-ng/helm/button';
@@ -26,7 +27,7 @@ type HlmDialogContentContext = {
 
 @Component({
   selector: 'hlm-dialog-content',
-  imports: [NgComponentOutlet, HlmButton, HlmDialogClose, NgIcon],
+  imports: [NgComponentOutlet, HlmButton, HlmDialogClose, NgIcon, TranslocoModule],
   providers: [provideIcons({ lucideX })],
   changeDetection: ChangeDetectionStrategy.OnPush,
   // The dialog's real content is a dynamically created component, so its host
@@ -56,7 +57,7 @@ type HlmDialogContentContext = {
 
     @if (showCloseButton()) {
       <button hlmBtn variant="ghost" size="icon-sm" class="absolute end-2 top-2" hlmDialogClose>
-        <span class="sr-only">close</span>
+        <span class="sr-only">{{ 'ux.forms.close' | transloco }}</span>
         <ng-icon name="lucideX" />
       </button>
     }

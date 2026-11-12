@@ -36,21 +36,23 @@ interface Row {
   ],
   providers: [provideIcons({ lucidePlus, lucideTrash2 })],
   template: `
-    <div class="mx-auto max-w-3xl pb-24">
+    <div class="pg-form-page">
       <pg-breadcrumbs [crumbs]="crumbs()" />
-      <h1 class="mb-1 text-lg font-semibold">{{ 'config.editTitle' | transloco }}</h1>
-      <p class="text-muted-foreground mb-6 text-sm">{{ 'config.intro' | transloco }}</p>
+      <h1 class="pg-page-title">{{ 'config.editTitle' | transloco }}</h1>
+      <p class="pg-page-description mb-6">{{ 'config.intro' | transloco }}</p>
 
       @if (error(); as err) {
-        <p class="text-destructive mb-4 text-sm" role="alert">{{ err }}</p>
+        <p class="pg-alert text-destructive mb-4" role="alert">{{ err }}</p>
       }
 
       @if (loading()) {
-        <p class="text-muted-foreground text-sm">{{ 'common.loading' | transloco }}</p>
+        <p class="pg-panel text-muted-foreground text-sm" role="status">
+          {{ 'common.loading' | transloco }}
+        </p>
       } @else {
         <div class="grid gap-5">
           @for (row of rows(); track row.name) {
-            <div class="grid gap-2" [attr.data-testid]="'param-' + row.name">
+            <div class="pg-form-section !my-0 grid gap-3" [attr.data-testid]="'param-' + row.name">
               <div class="flex items-center justify-between gap-3">
                 <label hlmLabel [for]="'param-input-' + row.name" class="font-mono text-sm">
                   {{ row.name }}
@@ -135,24 +137,21 @@ interface Row {
           </div>
         </div>
       }
-    </div>
-
-    <!-- Sticky action bar: on a long form the primary action must stay
-         reachable without scrolling back down. -->
-    <div class="bg-background/95 border-border fixed inset-x-0 bottom-0 border-t backdrop-blur">
-      <div class="mx-auto flex max-w-3xl items-center gap-3 px-4 py-3">
-        <div class="ml-auto flex gap-2">
-          <button hlmBtn variant="ghost" (click)="cancel()">
-            {{ 'common.cancel' | transloco }}
-          </button>
-          <button
-            hlmBtn
-            data-testid="config-submit"
-            [disabled]="loading() || busy() || !valid()"
-            (click)="submit()"
-          >
-            {{ 'config.apply' | transloco }}
-          </button>
+      <div class="pg-form-actions">
+        <div>
+          <div class="ml-auto flex gap-2">
+            <button hlmBtn variant="ghost" (click)="cancel()">
+              {{ 'common.cancel' | transloco }}
+            </button>
+            <button
+              hlmBtn
+              data-testid="config-submit"
+              [disabled]="loading() || busy() || !valid()"
+              (click)="submit()"
+            >
+              {{ (busy() ? 'ux.forms.saving' : 'config.apply') | transloco }}
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -178,7 +177,9 @@ export class ClusterConfigPageComponent {
   protected readonly rows = signal<Row[]>([]);
   protected readonly selected = signal('');
 
-  protected readonly categories = computed(() => [...new Set(this.catalog().map((g) => g.category))]);
+  protected readonly categories = computed(() => [
+    ...new Set(this.catalog().map((g) => g.category)),
+  ]);
   protected readonly valid = computed(() => this.rows().every((r) => r.value.trim().length > 0));
 
   constructor() {

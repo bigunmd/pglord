@@ -70,15 +70,16 @@ your own registry:
 Agent images are tagged by **PostgreSQL major**, not by pglord version, because
 the major is what decides whether your data can be read: `16`, `17`, `18`, each
 also with a `-timescaledb` variant. Release-pinned tags exist alongside them as
-`<pglord-version>-pg<major>`, e.g. `0.2.1-pg17`. Nothing is tagged `latest` on
+`<pglord-version>-pg<major>`, e.g. `0.3.0-pg17`. Nothing is tagged `latest` on
 the agent side on purpose — a moving major would change the version your data
-can be read by. The server image *is* tagged with the pglord version (`0.2.1`,
+can be read by. The server image *is* tagged with the pglord version (`0.3.0`,
 or `latest`), and the chart defaults `image.tag` to its own `appVersion`, so you
 normally set only `image.repository`.
 
 Choose the major deliberately: changing it later is a [major version
 upgrade](#major-version-upgrades), the most involved operation pglord performs.
-The create form shows the image a cluster will get before you submit it.
+The create form's **Advanced options** show the default image and let you choose
+another before submitting.
 
 Installing into a different namespace needs nothing more than `--namespace`:
 pglord is namespaced throughout, so two installations in two namespaces are
@@ -116,6 +117,35 @@ their StatefulSets, Services, Secrets and volumes are owned by the spec
 ConfigMaps, not by the Helm release, so they keep running without a UI. Delete
 clusters through the UI first if that is what you meant.
 
+### Navigate the console
+
+The sidebar (top navigation on small screens) opens **Overview**, **Clusters**,
+and **Permissions**. The theme menu offers light, dark, and system modes.
+**Overview** separates control-plane reachability from database readiness and
+shows totals, clusters needing attention, and intentionally hibernated clusters.
+These are current API observations, not historical monitoring charts.
+
+In **Clusters**, search by name or namespace and combine that search with an exact
+namespace filter. The namespace filter is remembered; clear it to see all accessible
+clusters. Selecting a namespace also carries it into **Create cluster**. Without a
+selection, creation uses the server's namespace or asks for one in cluster-wide mode.
+Errors retain previously loaded data and explain that it may be stale; use **Refresh**
+to try again.
+
+Open a cluster-name link to enter its workspace:
+
+- **Overview:** instance health, recorded primary, fencing, and switchover.
+- **Backups:** repository settings, backup runs, and restore into a new cluster.
+- **Configuration:** instances, storage, PostgreSQL settings, replication, and workload.
+- **Access & security:** client access rules, TLS, pooling, roles/databases/extensions,
+  and required secrets.
+- **Maintenance:** hibernation, image changes, and major version upgrades.
+
+Section links can be bookmarked or opened in a new tab. Operational warnings remain
+visible across sections. Editors retain namespace context; destructive or disruptive
+operations retain their explicit confirmations. A recorded primary or a readiness
+indicator is not proof that a former primary has stopped accepting writes.
+
 ## 2. Check permissions
 
 Open **Permissions** in the UI. It asks the Kubernetes API server what pglord is
@@ -124,7 +154,7 @@ unknown.
 
 If anything is denied, cluster management will fail. Ask whoever administers the
 namespace to apply `deploy/k8s/rbac.yaml` (or install the chart with
-`rbac.create=true`, the default), then reload the page. The same report is
+`rbac.create=true`, the default), then select **Check again**. The same report is
 available at `GET /api/v1/preflight`, and the server logs a summary at startup.
 
 Worth checking after an upgrade too: a denied row here is the difference between
@@ -141,14 +171,18 @@ on `persistentvolumeclaims`.
 | Name | Becomes the prefix of every object: pods `<name>-0`, `<name>-1`, services `<name>-rw`, `<name>-pods`. Lowercase letters, digits, hyphens; max 40 characters. |
 | Instances | Total instances: 1 primary plus streaming standbys. Two or more allows failover after acknowledged primary fencing; one has no redundancy. |
 | Storage per instance | Size of the persistent volume for each instance, e.g. `1Gi`. |
-| Image | The pglord agent image. Leave the default unless you build your own. |
+| Image (Advanced options) | The pglord agent image. Leave the default unless you build your own. |
+
+The initial form emphasizes identity and capacity. Expand **Advanced options** for
+image, credential references, environment variables, initialization, TLS, and pooling.
+Validation explains what is needed before creation can continue.
 
 The cluster appears immediately; the instance dots turn green as each instance
 finishes bootstrapping (typically 30–60 seconds — the first instance initializes
 a database, the others clone it).
 
-Click the row to open the cluster: which instance is primary, per-instance
-health, and each instance's WAL position.
+Click the cluster-name link to open its **Overview**: which instance is primary,
+per-instance health, and each instance's WAL position.
 
 ## 4. Connect an application
 

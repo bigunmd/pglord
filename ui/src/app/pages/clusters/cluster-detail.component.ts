@@ -1,6 +1,7 @@
 import { Component, OnDestroy, computed, inject, input, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { Router, RouterLink } from '@angular/router';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
+import { toSignal } from '@angular/core/rxjs-interop';
 import { TranslocoModule } from '@jsverse/transloco';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
@@ -68,10 +69,7 @@ import { BackupRun } from '../../api/models/backup-run';
 import { listBackups } from '../../api/fn/backups/list-backups';
 import { createBackup } from '../../api/fn/backups/create-backup';
 import { ClusterRestoreDialogComponent } from './cluster-restore-dialog.component';
-import {
-  ClusterEnvDialogComponent,
-  EnvDialogResult,
-} from './cluster-env-dialog.component';
+import { ClusterEnvDialogComponent, EnvDialogResult } from './cluster-env-dialog.component';
 import { ResourceList } from '../../api/models/resource-list';
 import { listRequiredSecrets } from '../../api/fn/clusters/list-required-secrets';
 import { RestoreRequest } from '../../api/models/restore-request';
@@ -94,13 +92,20 @@ export const FORM_DIALOG_CLASS = 'sm:max-w-lg';
 /** Confirm a planned switchover; resolves true only on explicit confirmation. */
 @Component({
   selector: 'pg-switchover-dialog',
-  imports: [TranslocoModule, HlmButton, HlmDialogFooter, HlmDialogHeader, HlmDialogTitle, HlmDialogBody],
+  imports: [
+    TranslocoModule,
+    HlmButton,
+    HlmDialogFooter,
+    HlmDialogHeader,
+    HlmDialogTitle,
+    HlmDialogBody,
+  ],
   template: `
     <div hlmDialogHeader>
       <h2 hlmDialogTitle>{{ 'clusterDetail.switchoverTitle' | transloco: { pod: pod } }}</h2>
     </div>
     <div hlmDialogBody>
-  <p class="text-muted-foreground text-sm">
+      <p class="text-muted-foreground text-sm">
         {{ 'clusterDetail.switchoverWarning' | transloco }}
       </p>
     </div>
@@ -122,13 +127,20 @@ export class SwitchoverDialogComponent {
 /** Confirm hibernation: every instance stops and connections drop. */
 @Component({
   selector: 'pg-hibernate-dialog',
-  imports: [TranslocoModule, HlmButton, HlmDialogFooter, HlmDialogHeader, HlmDialogTitle, HlmDialogBody],
+  imports: [
+    TranslocoModule,
+    HlmButton,
+    HlmDialogFooter,
+    HlmDialogHeader,
+    HlmDialogTitle,
+    HlmDialogBody,
+  ],
   template: `
     <div hlmDialogHeader>
       <h2 hlmDialogTitle>{{ 'clusterDetail.hibernateTitle' | transloco: { name: name } }}</h2>
     </div>
     <div hlmDialogBody>
-  <p class="text-muted-foreground text-sm">
+      <p class="text-muted-foreground text-sm">
         {{ 'clusterDetail.hibernateWarning' | transloco }}
       </p>
     </div>
@@ -150,13 +162,20 @@ export class HibernateDialogComponent {
 /** Confirm fencing one instance: postgres stops, the pod stays. */
 @Component({
   selector: 'pg-fence-dialog',
-  imports: [TranslocoModule, HlmButton, HlmDialogFooter, HlmDialogHeader, HlmDialogTitle, HlmDialogBody],
+  imports: [
+    TranslocoModule,
+    HlmButton,
+    HlmDialogFooter,
+    HlmDialogHeader,
+    HlmDialogTitle,
+    HlmDialogBody,
+  ],
   template: `
     <div hlmDialogHeader>
       <h2 hlmDialogTitle>{{ 'clusterDetail.fenceTitle' | transloco: { pod: pod } }}</h2>
     </div>
     <div hlmDialogBody>
-  <p class="text-muted-foreground text-sm">
+      <p class="text-muted-foreground text-sm">
         {{ 'clusterDetail.fenceWarning' | transloco }}
       </p>
     </div>
@@ -178,13 +197,20 @@ export class FenceDialogComponent {
 /** Confirm a rolling restart. */
 @Component({
   selector: 'pg-restart-dialog',
-  imports: [TranslocoModule, HlmButton, HlmDialogFooter, HlmDialogHeader, HlmDialogTitle, HlmDialogBody],
+  imports: [
+    TranslocoModule,
+    HlmButton,
+    HlmDialogFooter,
+    HlmDialogHeader,
+    HlmDialogTitle,
+    HlmDialogBody,
+  ],
   template: `
     <div hlmDialogHeader>
       <h2 hlmDialogTitle>{{ 'config.restartTitle' | transloco: { name: name } }}</h2>
     </div>
     <div hlmDialogBody>
-  <p class="text-muted-foreground text-sm">{{ 'config.restartWarning' | transloco }}</p>
+      <p class="text-muted-foreground text-sm">{{ 'config.restartWarning' | transloco }}</p>
     </div>
     <div hlmDialogFooter>
       <button hlmBtn variant="ghost" (click)="ref.close(false)">
@@ -203,13 +229,20 @@ export class RestartDialogComponent {
 
 @Component({
   selector: 'pg-rotate-credentials-dialog',
-  imports: [TranslocoModule, HlmButton, HlmDialogFooter, HlmDialogHeader, HlmDialogTitle, HlmDialogBody],
+  imports: [
+    TranslocoModule,
+    HlmButton,
+    HlmDialogFooter,
+    HlmDialogHeader,
+    HlmDialogTitle,
+    HlmDialogBody,
+  ],
   template: `
     <div hlmDialogHeader>
       <h2 hlmDialogTitle>{{ 'secrets.rotateTitle' | transloco: { name: name } }}</h2>
     </div>
     <div hlmDialogBody>
-  <p class="text-muted-foreground text-sm">{{ 'secrets.rotateWarning' | transloco }}</p>
+      <p class="text-muted-foreground text-sm">{{ 'secrets.rotateWarning' | transloco }}</p>
     </div>
     <div hlmDialogFooter>
       <button hlmBtn variant="ghost" (click)="ref.close(false)">
@@ -230,7 +263,14 @@ export class RotateCredentialsDialogComponent {
  * strict-blocking trade-off plainly. */
 @Component({
   selector: 'pg-sync-dialog',
-  imports: [TranslocoModule, HlmButton, HlmDialogFooter, HlmDialogHeader, HlmDialogTitle, HlmDialogBody],
+  imports: [
+    TranslocoModule,
+    HlmButton,
+    HlmDialogFooter,
+    HlmDialogHeader,
+    HlmDialogTitle,
+    HlmDialogBody,
+  ],
   template: `
     <div hlmDialogHeader>
       <h2 hlmDialogTitle>
@@ -238,7 +278,7 @@ export class RotateCredentialsDialogComponent {
       </h2>
     </div>
     <div hlmDialogBody>
-  <p class="text-muted-foreground text-sm">
+      <p class="text-muted-foreground text-sm">
         {{ (enable ? 'sync.enableWarning' : 'sync.disableWarning') | transloco }}
       </p>
     </div>
@@ -279,7 +319,7 @@ export class SyncDialogComponent {
       <h2 hlmDialogTitle>{{ 'image.title' | transloco: { name: name } }}</h2>
     </div>
     <div hlmDialogBody>
-  <div class="grid gap-2 py-1">
+      <div class="grid gap-2 py-1">
         <label hlmLabel for="pg-image-input">{{ 'image.label' | transloco }}</label>
         <input
           hlmInput
@@ -332,7 +372,7 @@ export class ImageDialogComponent {
   providers: [
     provideIcons({
       lucideArrowLeft,
-  lucideArrowUp,
+      lucideArrowUp,
       lucideBan,
       lucideCrown,
       lucideLock,
@@ -352,79 +392,65 @@ export class ImageDialogComponent {
     }),
   ],
   template: `
-    <div class="mx-auto max-w-4xl">
-      <a hlmBtn variant="ghost" size="sm" routerLink="/clusters" class="mb-3 -ml-2">
+    <div class="pg-page pb-8">
+      <a hlmBtn variant="ghost" size="sm" routerLink="/clusters" class="mb-5 -ml-2">
         <ng-icon name="lucideArrowLeft" size="16" />
         {{ 'clusterDetail.back' | transloco }}
       </a>
-
       @if (error(); as err) {
-        <p class="text-destructive mb-3 text-sm" role="alert">{{ err }}</p>
+        <p class="pg-alert text-destructive mb-5" role="alert">{{ err }}</p>
       }
-
       @if (detail(); as d) {
-        <div class="mb-1 flex items-center gap-3">
-          <h1 class="font-mono text-lg font-semibold">{{ d.name }}</h1>
-          <span
-            class="bg-muted text-muted-foreground rounded-full px-2 py-0.5 font-mono text-xs"
-            data-testid="ns-badge"
-            [attr.aria-label]="'clusterDetail.namespace' | transloco"
-          >
-            {{ d.namespace }}
-          </span>
-          <span class="text-muted-foreground font-mono text-xs tabular-nums">
-            {{ d.ready_replicas }}/{{ d.replicas }}
-          </span>
-          @if (!d.hibernated) {
-            <button
-              hlmBtn
-              variant="outline"
-              size="sm"
-              class="ml-auto"
-              data-testid="open-hibernate"
-              [disabled]="busy()"
-              (click)="openHibernate(d)"
-            >
-              <ng-icon name="lucideMoon" size="14" />
-              {{ 'clusterDetail.hibernate' | transloco }}
-            </button>
-          }
-          <button
-            hlmBtn
-            variant="outline"
-            size="sm"
-            [class.ml-auto]="d.hibernated"
-            data-testid="open-edit"
-            [disabled]="busy() || d.hibernated"
-            (click)="openEdit(d)"
-          >
-            <ng-icon name="lucidePencil" size="14" />
-            {{ 'clusterDetail.edit' | transloco }}
-          </button>
-        </div>
-        <p class="text-muted-foreground mb-4 flex items-center gap-1 text-sm">
-          <span class="font-mono text-xs">{{ d.image }}</span>
-          <button
-            hlmBtn
-            variant="ghost"
-            size="sm"
-            class="h-6 px-1.5"
-            data-testid="open-image"
-            [disabled]="busy() || d.hibernated"
-            [attr.aria-label]="'image.edit' | transloco"
-            (click)="openImage(d)"
-          >
-            <ng-icon name="lucidePencil" size="12" />
-          </button>
-          · {{ d.storage_size }} · {{ 'clusterDetail.primaryIs' | transloco: { pod: d.primary } }}
-        </p>
-
+        <header class="pg-page-header">
+          <div class="min-w-0">
+            <div class="mb-2 flex flex-wrap items-center gap-2">
+              <span
+                class="pg-status font-mono"
+                data-testid="ns-badge"
+                [attr.aria-label]="'clusterDetail.namespace' | transloco"
+                >{{ d.namespace }}</span
+              >
+              @if (d.hibernated) {
+                <span class="pg-status text-muted-foreground">{{
+                  'ux.workspace.hibernated' | transloco
+                }}</span>
+              } @else {
+                <span
+                  class="pg-status"
+                  [class.text-success]="d.ready_replicas === d.replicas"
+                  [class.text-warning]="d.ready_replicas !== d.replicas"
+                >
+                  {{
+                    'ux.workspace.readyCount'
+                      | transloco: { ready: d.ready_replicas, total: d.replicas }
+                  }}
+                </span>
+              }
+            </div>
+            <h1 class="pg-page-title font-mono">{{ d.name }}</h1>
+            <p class="pg-page-description">{{ 'ux.workspace.description' | transloco }}</p>
+          </div>
+          <dl class="grid min-w-0 gap-x-6 gap-y-3 text-sm sm:grid-cols-2">
+            <div>
+              <dt class="text-muted-foreground text-xs">
+                {{ 'ux.workspace.primary' | transloco }}
+              </dt>
+              <dd class="mt-1 break-all font-mono text-xs">{{ d.primary || '—' }}</dd>
+            </div>
+            <div>
+              <dt class="text-muted-foreground text-xs">
+                {{ 'ux.workspace.storage' | transloco }}
+              </dt>
+              <dd class="mt-1 font-mono text-xs">{{ d.storage_size }}</dd>
+            </div>
+          </dl>
+        </header>
         @if (d.hibernated) {
           <!-- Asleep on purpose: instances are gone but every volume is kept.
-               Rendered instead of the instance table, whose probes would all
-               read "unknown" and look like an outage. -->
+                   Rendered instead of the instance table, whose probes would all
+                   read "unknown" and look like an outage. -->
           <div
-            class="border-border bg-muted/40 mb-4 flex items-center gap-2 rounded-lg border p-3 text-sm"
+            class="pg-alert border-border bg-muted/40 mb-4 flex flex-wrap items-center gap-3"
             data-testid="hibernated-banner"
           >
             <ng-icon name="lucideMoon" size="18" class="text-muted-foreground" />
@@ -445,7 +471,7 @@ export class ImageDialogComponent {
 
         @if (d.restore; as r) {
           <!-- Provenance matters: someone looking at this cluster months later
-               needs to know its data is a copy, and of what. -->
+                   needs to know its data is a copy, and of what. -->
           <p
             class="border-border bg-muted/40 text-muted-foreground mb-4 rounded-lg border px-3 py-2 text-xs leading-relaxed"
             data-testid="restored-from"
@@ -464,540 +490,9 @@ export class ImageDialogComponent {
           </p>
         }
 
-        @if (!d.hibernated) {
-        <div class="border-border overflow-x-auto rounded-lg border">
-          <table hlmTable class="w-full">
-            <thead hlmTHead>
-              <tr hlmTr>
-                <th hlmTh>{{ 'clusterDetail.instance' | transloco }}</th>
-                <th hlmTh>{{ 'clusterDetail.role' | transloco }}</th>
-                <th hlmTh>{{ 'clusterDetail.health' | transloco }}</th>
-                <th hlmTh>{{ 'clusterDetail.lsn' | transloco }}</th>
-                <th hlmTh class="w-32"></th>
-              </tr>
-            </thead>
-            <tbody hlmTBody>
-              @for (i of d.instances; track i.pod) {
-                <tr hlmTr [attr.data-testid]="'instance-' + i.pod">
-                  <td hlmTd class="font-mono text-sm font-medium">
-                    <span class="inline-flex items-center gap-1.5">
-                      {{ i.pod }}
-                      @if (i.pod === d.primary) {
-                        <ng-icon
-                          name="lucideCrown"
-                          size="14"
-                          class="text-primary"
-                          [attr.aria-label]="'clusterDetail.recordedPrimary' | transloco"
-                        />
-                      }
-                    </span>
-                  </td>
-                  <td hlmTd>
-                    <span
-                      class="rounded-full px-2 py-0.5 text-xs font-medium"
-                      [class.bg-primary]="i.role === 'primary'"
-                      [class.text-primary-foreground]="i.role === 'primary'"
-                      [class.bg-secondary]="i.role === 'standby'"
-                      [class.text-secondary-foreground]="i.role === 'standby'"
-                      [class.bg-warning]="i.role === 'unknown'"
-                      [class.text-background]="i.role === 'unknown'"
-                      [class.bg-muted]="i.role === 'fenced'"
-                      [class.text-muted-foreground]="i.role === 'fenced'"
-                    >
-                      {{ 'clusterDetail.roles.' + i.role | transloco }}
-                    </span>
-                  </td>
-                  <td hlmTd>
-                    <span class="inline-flex items-center gap-1.5 text-sm">
-                      <span
-                        class="h-2.5 w-2.5 rounded-full"
-                        [class.bg-success]="i.ready"
-                        [class.bg-destructive]="!i.ready"
-                      ></span>
-                      {{ (i.ready ? 'clusterDetail.ready' : 'clusterDetail.notReady') | transloco }}
-                      @if (i.ssl) {
-                        <ng-icon
-                          name="lucideLock"
-                          size="13"
-                          class="text-success"
-                          [attr.data-testid]="'ssl-' + i.pod"
-                          [attr.aria-label]="'tls.instanceOn' | transloco"
-                        />
-                      }
-                    </span>
-                  </td>
-                  <td hlmTd class="font-mono text-xs tabular-nums">{{ i.lsn ?? '—' }}</td>
-                  <td hlmTd>
-                    @if (i.pod !== d.primary && i.ready && i.role === 'standby') {
-                      <button
-                        hlmBtn
-                        variant="ghost"
-                        size="sm"
-                        [disabled]="busy() || d.hibernated"
-                        [attr.data-testid]="'switchover-' + i.pod"
-                        (click)="openSwitchover(d, i.pod)"
-                      >
-                        <ng-icon name="lucideRefreshCw" size="14" />
-                        {{ 'clusterDetail.makePrimary' | transloco }}
-                      </button>
-                    }
-                    @if (i.role === 'fenced') {
-                      <button
-                        hlmBtn
-                        variant="ghost"
-                        size="sm"
-                        [disabled]="busy()"
-                        [attr.data-testid]="'unfence-' + i.pod"
-                        (click)="unfence(i.pod)"
-                      >
-                        <ng-icon name="lucidePlay" size="14" />
-                        {{ 'clusterDetail.unfence' | transloco }}
-                      </button>
-                    } @else {
-                      <button
-                        hlmBtn
-                        variant="ghost"
-                        size="sm"
-                        class="text-muted-foreground"
-                        [disabled]="busy()"
-                        [attr.data-testid]="'fence-' + i.pod"
-                        (click)="openFence(i.pod)"
-                      >
-                        <ng-icon name="lucideBan" size="14" />
-                        {{ 'clusterDetail.fence' | transloco }}
-                      </button>
-                    }
-                  </td>
-                </tr>
-              }
-            </tbody>
-          </table>
-        </div>
-        }
-
-        <!-- Placement and resources -->
-        <div class="mt-6 flex items-center justify-between">
-          <h2 class="font-medium">{{ 'workload.title' | transloco }}</h2>
-          <button
-            hlmBtn
-            variant="outline"
-            size="sm"
-            data-testid="open-workload"
-            [disabled]="busy() || d.hibernated"
-            (click)="openWorkload(d)"
-          >
-            <ng-icon name="lucideServer" size="14" />
-            {{ 'workload.edit' | transloco }}
-          </button>
-        </div>
-        <dl class="text-muted-foreground mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
-          <dt>{{ 'workload.antiAffinity' | transloco }}</dt>
-          <dd class="text-foreground" data-testid="workload-anti-affinity">
-            {{ 'workload.antiAffinityModes.' + (d.workload.anti_affinity ?? 'preferred') | transloco }}
-          </dd>
-          <dt>{{ 'workload.resources' | transloco }}</dt>
-          <dd class="text-foreground font-mono text-xs" data-testid="workload-resources">
-            {{ resourceSummary(d.workload) }}
-          </dd>
-          @if (labelSummary(d.workload); as l) {
-            <dt>{{ 'workload.labels' | transloco }}</dt>
-            <dd class="text-foreground font-mono text-xs">{{ l }}</dd>
-          }
-          @if (annotationSummary(d.workload); as a) {
-            <dt>{{ 'workload.annotations' | transloco }}</dt>
-            <dd class="text-foreground font-mono text-xs">{{ a }}</dd>
-          }
-        </dl>
-
-        <!-- Backups -->
-        <div class="mt-6 flex items-center justify-between">
-          <h2 class="font-medium">{{ 'backups.title' | transloco }}</h2>
-          <span class="flex items-center gap-2">
-            @if (backups()?.enabled) {
-              <button
-                hlmBtn
-                size="sm"
-                data-testid="backup-now"
-                [disabled]="busy() || backupRunning()"
-                [hlmDropdownMenuTrigger]="backupKindMenu"
-              >
-                <ng-icon name="lucideDatabaseBackup" size="14" />
-                {{ (backupRunning() ? 'backups.running' : 'backups.backupNow') | transloco }}
-              </button>
-              <ng-template #backupKindMenu>
-                <hlm-dropdown-menu class="w-64">
-                  @for (k of backupKinds; track k) {
-                    <button
-                      hlmDropdownMenuItem
-                      [attr.data-testid]="'backup-kind-' + k"
-                      (click)="backupNow(k)"
-                    >
-                      <span class="grid gap-0.5">
-                        <span>{{ 'backups.kinds.' + k | transloco }}</span>
-                        <span class="text-muted-foreground text-xs">
-                          {{ 'backups.kindHelp.' + k | transloco }}
-                        </span>
-                      </span>
-                    </button>
-                  }
-                </hlm-dropdown-menu>
-              </ng-template>
-            }
-            <button
-              hlmBtn
-              variant="outline"
-              size="sm"
-              data-testid="open-backup-config"
-              [disabled]="busy() || d.hibernated"
-              (click)="openBackupConfig()"
-            >
-              {{ 'backups.configure' | transloco }}
-            </button>
-          </span>
-        </div>
-
-        @if (backups(); as b) {
-          @if (!b.enabled) {
-            <p class="text-muted-foreground mt-2 text-sm">{{ 'backups.disabled' | transloco }}</p>
-          } @else {
-            <p class="text-muted-foreground mt-2 text-sm">
-              <span class="font-mono text-xs">{{ b.repository }}</span>
-              · {{ 'backups.keeping' | transloco: { count: d.backup.retention_full } }}
-              @if (b.schedule) {
-                · {{ 'backups.scheduled' | transloco: { cron: b.schedule } }}
-              } @else {
-                · {{ 'backups.manualOnly' | transloco }}
-              }
-            </p>
-
-            @if (b.runs.length) {
-              <h3 class="text-muted-foreground mt-4 text-xs font-medium uppercase">
-                {{ 'backups.runs' | transloco }}
-              </h3>
-              <div class="border-border mt-1 overflow-x-auto rounded-lg border">
-                <table hlmTable class="w-full">
-                  <thead hlmTHead>
-                    <tr hlmTr>
-                      <th hlmTh>{{ 'backups.state' | transloco }}</th>
-                      <th hlmTh>{{ 'backups.kind' | transloco }}</th>
-                      <th hlmTh>{{ 'backups.trigger' | transloco }}</th>
-                      <th hlmTh>{{ 'backups.started' | transloco }}</th>
-                      <th hlmTh>{{ 'backups.duration' | transloco }}</th>
-                    </tr>
-                  </thead>
-                  <tbody hlmTBody>
-                    @for (r of b.runs; track r.id) {
-                      <tr hlmTr [attr.data-testid]="'run-' + r.id">
-                        <td hlmTd>
-                          <span class="inline-flex items-center gap-1.5 text-sm">
-                            <span
-                              class="h-2.5 w-2.5 rounded-full"
-                              [class.bg-primary]="r.state === 'running'"
-                              [class.animate-pulse]="r.state === 'running'"
-                              [class.bg-success]="r.state === 'succeeded'"
-                              [class.bg-destructive]="r.state === 'failed'"
-                              [class.bg-warning]="r.state === 'unknown'"
-                            ></span>
-                            {{ 'backups.states.' + r.state | transloco }}
-                          </span>
-                        </td>
-                        <td hlmTd class="text-sm">{{ 'backups.kinds.' + r.kind | transloco }}</td>
-                        <td hlmTd class="text-muted-foreground text-sm">
-                          {{ 'backups.triggers.' + r.trigger | transloco }}
-                        </td>
-                        <td hlmTd class="text-muted-foreground text-xs">
-                          {{ formatTime(r.started) }}
-                        </td>
-                        <td hlmTd class="font-mono text-xs tabular-nums">
-                          {{ formatDuration(r) }}
-                        </td>
-                      </tr>
-                      @if (r.error) {
-                        <tr hlmTr>
-                          <td hlmTd colspan="5" class="text-destructive pt-0 text-xs">
-                            {{ r.error }}
-                          </td>
-                        </tr>
-                      }
-                    }
-                  </tbody>
-                </table>
-              </div>
-              <h3 class="text-muted-foreground mt-4 text-xs font-medium uppercase">
-                {{ 'backups.inRepository' | transloco }}
-              </h3>
-            }
-            @if (b.backups.length) {
-              <div class="border-border mt-2 overflow-x-auto rounded-lg border">
-                <table hlmTable class="w-full">
-                  <thead hlmTHead>
-                    <tr hlmTr>
-                      <th hlmTh>{{ 'backups.label' | transloco }}</th>
-                      <th hlmTh>{{ 'backups.kind' | transloco }}</th>
-                      <th hlmTh>{{ 'backups.size' | transloco }}</th>
-                      <th hlmTh>{{ 'backups.finished' | transloco }}</th>
-                      <th hlmTh class="text-right">{{ 'common.actions' | transloco }}</th>
-                    </tr>
-                  </thead>
-                  <tbody hlmTBody>
-                    @for (bk of b.backups; track bk.label) {
-                      <tr hlmTr [attr.data-testid]="'backup-' + bk.label">
-                        <td hlmTd class="font-mono text-xs">{{ bk.label }}</td>
-                        <td hlmTd class="text-sm">{{ bk.kind }}</td>
-                        <td hlmTd class="font-mono text-xs tabular-nums">
-                          {{ formatSize(bk.size_bytes) }}
-                        </td>
-                        <td hlmTd class="text-muted-foreground text-xs">
-                          {{ formatTime(bk.finished) }}
-                        </td>
-                        <td hlmTd class="text-right">
-                          <button
-                            hlmBtn
-                            variant="outline"
-                            size="sm"
-                            [attr.data-testid]="'restore-' + bk.label"
-                            [disabled]="busy() || d.hibernated"
-                            (click)="openRestore(d, bk.label, bk.finished)"
-                          >
-                            {{ 'restore.action' | transloco }}
-                          </button>
-                        </td>
-                      </tr>
-                    }
-                  </tbody>
-                </table>
-              </div>
-            } @else {
-              <p class="text-muted-foreground mt-2 text-sm">{{ 'backups.none' | transloco }}</p>
-            }
-          }
-        }
-
-        <!-- Secrets and initialisation -->
-        <div class="mt-6 flex items-center justify-between">
-          <h2 class="font-medium">{{ 'secrets.title' | transloco }}</h2>
-          <div class="flex items-center gap-2">
-            @if (!d.credentials_secret) {
-              <button
-                hlmBtn
-                variant="outline"
-                size="sm"
-                data-testid="rotate-credentials"
-                [disabled]="busy() || d.hibernated"
-                (click)="openRotateCredentials()"
-              >
-                {{ 'secrets.rotate' | transloco }}
-              </button>
-            }
-            <button
-              hlmBtn
-              variant="outline"
-              size="sm"
-              data-testid="open-env"
-              [disabled]="busy() || d.hibernated"
-              (click)="openEnv(d)"
-            >
-              {{ 'secrets.edit' | transloco }}
-            </button>
-          </div>
-        </div>
-        @if (secrets(); as s) {
-          @if (!s.satisfied) {
-            <p class="text-destructive mt-2 text-sm" role="alert" data-testid="secrets-unsatisfied">
-              {{ 'secrets.unsatisfied' | transloco }}
-            </p>
-          }
-          <div class="border-border mt-2 overflow-x-auto rounded-lg border">
-            <table hlmTable class="w-full">
-              <thead hlmTHead>
-                <tr hlmTr>
-                  <th hlmTh>{{ 'secrets.object' | transloco }}</th>
-                  <th hlmTh>{{ 'secrets.purpose' | transloco }}</th>
-                  <th hlmTh>{{ 'secrets.keys' | transloco }}</th>
-                  <th hlmTh>{{ 'secrets.state' | transloco }}</th>
-                </tr>
-              </thead>
-              <tbody hlmTBody>
-                @for (r of s.resources; track r.name + r.kind) {
-                  <tr hlmTr [attr.data-testid]="'secret-' + r.name">
-                    <td hlmTd>
-                      <span class="font-mono text-xs">{{ r.name }}</span>
-                      <span class="text-muted-foreground ml-2 text-xs">{{ r.kind }}</span>
-                    </td>
-                    <td hlmTd class="text-sm">
-                      {{ 'secrets.purposes.' + r.purpose | transloco }}
-                    </td>
-                    <td hlmTd class="text-muted-foreground font-mono text-xs">
-                      {{ r.keys.length ? r.keys.join(', ') : '—' }}
-                    </td>
-                    <td hlmTd class="text-xs">
-                      @if (r.managed) {
-                        <span class="text-muted-foreground">
-                          {{ 'secrets.states.managed' | transloco }}
-                        </span>
-                      } @else if (!r.exists) {
-                        <span class="text-destructive font-medium">
-                          {{ 'secrets.states.missing' | transloco }}
-                        </span>
-                      } @else if (r.missing_keys.length) {
-                        <span class="text-destructive font-medium">
-                          {{ 'secrets.states.missingKeys' | transloco }}
-                          <span class="font-mono">{{ r.missing_keys.join(', ') }}</span>
-                        </span>
-                      } @else {
-                        <span class="text-muted-foreground">
-                          {{ 'secrets.states.present' | transloco }}
-                        </span>
-                      }
-                    </td>
-                  </tr>
-                }
-              </tbody>
-            </table>
-          </div>
-        }
-
-        <!-- Major version upgrade -->
-        <div class="mt-6 flex items-center justify-between">
-          <h2 class="font-medium">{{ 'upgrade.title' | transloco }}</h2>
-          @if (!d.upgrade) {
-            <button
-              hlmBtn
-              variant="outline"
-              size="sm"
-              data-testid="open-upgrade"
-              [disabled]="busy() || d.hibernated"
-              (click)="openUpgrade(d)"
-            >
-              <ng-icon name="lucideArrowUp" size="14" />
-              {{ 'upgrade.start' | transloco }}
-            </button>
-          }
-        </div>
-
-        @if (d.upgrade; as u) {
-          <div class="border-border mt-2 rounded-lg border p-3 text-sm" data-testid="upgrade-card">
-            <div class="flex flex-wrap items-center gap-2">
-              <span class="font-medium">
-                {{
-                  (u.mode === 'in_place'
-                    ? 'upgrade.upgrading'
-                    : u.phase === 'soaking'
-                      ? 'upgrade.soaking'
-                      : 'upgrade.migrating'
-                  ) | transloco
-                }}
-              </span>
-              <span class="text-muted-foreground font-mono text-xs">{{ u.target_image }}</span>
-              @if (u.mode === 'blue_green' && u.phase === 'migrating') {
-                <span
-                  class="text-muted-foreground text-xs"
-                  data-testid="upgrade-readiness"
-                >
-                  {{ (u.ready_to_cutover ? 'upgrade.ready' : 'upgrade.notReady') | transloco }}
-                </span>
-              }
-            </div>
-
-            @if (u.error) {
-              <p class="text-warning mt-2 text-xs" data-testid="upgrade-error">{{ u.error }}</p>
-            }
-
-            @for (db of u.databases; track db.name) {
-              <p class="text-muted-foreground mt-1 text-xs" [attr.data-testid]="'upgrade-db-' + db.name">
-                <span class="font-mono">{{ db.name }}</span>
-                —
-                {{ 'upgrade.tables' | transloco: { ready: db.tables_ready, total: db.tables_total } }}
-              </p>
-            }
-            @if (u.lag_bytes !== null && u.lag_bytes !== undefined) {
-              <p class="text-muted-foreground mt-1 text-xs" data-testid="upgrade-lag">
-                {{ 'upgrade.lag' | transloco }}: {{ u.lag_bytes }} B
-              </p>
-            }
-
-            @if (u.mode === 'in_place') {
-              <p class="text-muted-foreground mt-2 text-xs" data-testid="upgrade-inplace-note">
-                {{ 'upgrade.inPlaceRunning' | transloco }}
-              </p>
-            }
-
-            <div class="mt-3 flex flex-wrap gap-2">
-              @if (u.mode === 'in_place') {
-                <button
-                  hlmBtn
-                  variant="ghost"
-                  size="sm"
-                  data-testid="upgrade-abort"
-                  [disabled]="busy()"
-                  (click)="confirmUpgrade('abort', true)"
-                >
-                  {{ 'upgrade.abort' | transloco }}
-                </button>
-              } @else if (u.phase === 'migrating') {
-                <button
-                  hlmBtn
-                  size="sm"
-                  data-testid="upgrade-cutover"
-                  [disabled]="busy() || !u.ready_to_cutover"
-                  (click)="confirmUpgrade('cutover')"
-                >
-                  {{ 'upgrade.cutover' | transloco }}
-                </button>
-                <button
-                  hlmBtn
-                  variant="ghost"
-                  size="sm"
-                  data-testid="upgrade-abort"
-                  [disabled]="busy()"
-                  (click)="confirmUpgrade('abort')"
-                >
-                  {{ 'upgrade.abort' | transloco }}
-                </button>
-              } @else {
-                <button
-                  hlmBtn
-                  size="sm"
-                  data-testid="upgrade-finalize"
-                  [disabled]="busy()"
-                  (click)="confirmUpgrade('finalize')"
-                >
-                  {{ 'upgrade.finalize' | transloco }}
-                </button>
-                <button
-                  hlmBtn
-                  variant="ghost"
-                  size="sm"
-                  data-testid="upgrade-rollback"
-                  [disabled]="busy()"
-                  (click)="confirmUpgrade('rollback')"
-                >
-                  {{ 'upgrade.rollback' | transloco }}
-                </button>
-              }
-            </div>
-          </div>
-        }
-
-        <!-- Configuration -->
-        <div class="mt-6 flex items-center justify-between">
-          <h2 class="font-medium">{{ 'config.title' | transloco }}</h2>
-          <button
-            hlmBtn
-            variant="outline"
-            size="sm"
-            data-testid="open-config"
-            [disabled]="busy() || d.hibernated"
-            (click)="openConfig()"
-          >
-            <ng-icon name="lucideSettings" size="14" />
-            {{ 'config.edit' | transloco }}
-          </button>
-        </div>
-
         @if (d.pending_restart) {
           <div
-            class="border-warning mt-2 flex items-center gap-2 rounded-lg border p-3 text-sm"
+            class="pg-alert text-warning mb-4 flex flex-wrap items-center gap-3"
             data-testid="restart-banner"
           >
             <ng-icon name="lucideTriangleAlert" size="18" class="text-warning" />
@@ -1016,48 +511,9 @@ export class ImageDialogComponent {
           </div>
         }
 
-        @if (parameterRows(d).length) {
-          <div class="border-border mt-2 overflow-x-auto rounded-lg border">
-            <table hlmTable class="w-full">
-              <thead hlmTHead>
-                <tr hlmTr>
-                  <th hlmTh>{{ 'config.setting' | transloco }}</th>
-                  <th hlmTh>{{ 'config.value' | transloco }}</th>
-                </tr>
-              </thead>
-              <tbody hlmTBody>
-                @for (p of parameterRows(d); track p.name) {
-                  <tr hlmTr [attr.data-testid]="'config-row-' + p.name">
-                    <td hlmTd class="font-mono text-xs">{{ p.name }}</td>
-                    <td hlmTd class="font-mono text-xs">{{ p.value }}</td>
-                  </tr>
-                }
-              </tbody>
-            </table>
-          </div>
-        } @else {
-          <p class="text-muted-foreground mt-2 text-sm">{{ 'config.usingDefaults' | transloco }}</p>
-        }
-
-        <!-- Synchronous replication -->
-        <div class="mt-6 flex items-center justify-between">
-          <h2 class="font-medium">{{ 'sync.title' | transloco }}</h2>
-          <button
-            hlmBtn
-            variant="outline"
-            size="sm"
-            data-testid="toggle-sync"
-            [disabled]="busy() || d.hibernated"
-            (click)="openSync(d)"
-          >
-            <ng-icon name="lucideRefreshCw" size="14" />
-            {{ (d.synchronous ? 'sync.disable' : 'sync.enable') | transloco }}
-          </button>
-        </div>
-
         @if (d.sync_degraded) {
           <div
-            class="border-warning mt-2 flex items-center gap-2 rounded-lg border p-3 text-sm"
+            class="pg-alert text-warning mb-4 flex flex-wrap items-center gap-3"
             data-testid="sync-degraded-banner"
           >
             <ng-icon name="lucideTriangleAlert" size="18" class="text-warning" />
@@ -1065,171 +521,988 @@ export class ImageDialogComponent {
           </div>
         }
 
-        <p class="text-muted-foreground mt-2 text-sm" data-testid="sync-state">
-          {{
-            d.synchronous
-              ? ('sync.on' | transloco: { count: syncStandbys(d) ?? '?' })
-              : ('sync.off' | transloco)
-          }}
-        </p>
-
-        <!-- Client access rules -->
-        <div class="mt-6 flex items-center justify-between">
-          <h2 class="font-medium">{{ 'hba.title' | transloco }}</h2>
-          <button
-            hlmBtn
-            variant="outline"
-            size="sm"
-            data-testid="open-hba"
-            [disabled]="busy() || d.hibernated"
-            (click)="openHba()"
-          >
-            <ng-icon name="lucideShield" size="14" />
-            {{ 'hba.edit' | transloco }}
-          </button>
-        </div>
-
-        @if (d.pg_hba.length) {
-          <div class="border-border mt-2 overflow-x-auto rounded-lg border">
-            <table hlmTable class="w-full">
-              <thead hlmTHead>
-                <tr hlmTr>
-                  <th hlmTh>{{ 'hba.conn' | transloco }}</th>
-                  <th hlmTh>{{ 'hba.database' | transloco }}</th>
-                  <th hlmTh>{{ 'hba.user' | transloco }}</th>
-                  <th hlmTh>{{ 'hba.address' | transloco }}</th>
-                  <th hlmTh>{{ 'hba.method' | transloco }}</th>
-                </tr>
-              </thead>
-              <tbody hlmTBody>
-                @for (r of d.pg_hba; track $index; let i = $index) {
-                  <tr hlmTr [attr.data-testid]="'hba-view-row-' + i">
-                    <td hlmTd class="font-mono text-xs">{{ r.conn }}</td>
-                    <td hlmTd class="font-mono text-xs">{{ r.database }}</td>
-                    <td hlmTd class="font-mono text-xs">{{ r.user }}</td>
-                    <td hlmTd class="font-mono text-xs">{{ r.address }}</td>
-                    <td hlmTd class="font-mono text-xs">{{ r.method }}</td>
-                  </tr>
-                }
-              </tbody>
-            </table>
+        @if (d.upgrade; as u) {
+          <div class="pg-alert text-warning mb-4" data-testid="upgrade-banner">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <span class="font-medium"
+                >{{ 'ux.workspace.upgradeActive' | transloco }} ·
+                {{
+                  (u.mode === 'in_place'
+                    ? 'upgrade.upgrading'
+                    : u.phase === 'soaking'
+                      ? 'upgrade.soaking'
+                      : 'upgrade.migrating'
+                  ) | transloco
+                }}
+              </span>
+              <a
+                hlmBtn
+                variant="outline"
+                size="sm"
+                [routerLink]="[]"
+                [queryParams]="{ section: 'maintenance' }"
+                queryParamsHandling="merge"
+              >
+                {{ 'ux.workspace.reviewMaintenance' | transloco }}
+              </a>
+            </div>
+            @if (u.error) {
+              <p class="mt-2">{{ u.error }}</p>
+            }
           </div>
-        } @else {
-          <p class="text-muted-foreground mt-2 text-sm">{{ 'hba.noneSet' | transloco }}</p>
         }
+        @if (secrets(); as s) {
+          @if (!s.satisfied) {
+            <div
+              class="pg-alert text-destructive mb-4"
+              role="alert"
+              data-testid="secrets-unsatisfied"
+            >
+              {{ 'secrets.unsatisfied' | transloco }}
+              <a
+                class="ml-2 underline underline-offset-4"
+                [routerLink]="[]"
+                [queryParams]="{ section: 'access' }"
+                queryParamsHandling="merge"
+                >{{ 'ux.workspace.access' | transloco }}</a
+              >
+            </div>
+          }
+        }
+        <nav
+          class="border-border mb-7 flex flex-wrap gap-1 border-b pb-2"
+          [attr.aria-label]="'ux.workspace.navigation' | transloco"
+        >
+          @for (item of sections; track item) {
+            <a
+              [routerLink]="[]"
+              [queryParams]="{ section: item }"
+              queryParamsHandling="merge"
+              class="hover:bg-muted rounded-md px-4 py-3 text-sm font-medium"
+              [class.bg-accent]="section() === item"
+              [class.text-accent-foreground]="section() === item"
+              [class.text-muted-foreground]="section() !== item"
+              [attr.aria-current]="section() === item ? 'page' : null"
+              [attr.data-testid]="'section-' + item"
+              >{{ 'ux.workspace.' + item | transloco }}</a
+            >
+          }
+        </nav>
+        @if (section() === 'overview') {
+          <div class="space-y-5" data-testid="workspace-overview">
+            <div>
+              <h2 class="text-xl font-semibold tracking-tight">
+                {{ 'ux.workspace.overview' | transloco }}
+              </h2>
+              <p class="pg-page-description">
+                {{ 'ux.workspace.overviewDescription' | transloco }}
+              </p>
+            </div>
+            <section class="pg-panel">
+              <div class="pg-section-header">
+                <h3 class="font-semibold">{{ 'ux.workspace.instances' | transloco }}</h3>
+                <span class="text-muted-foreground text-xs">{{
+                  'ux.workspace.refreshNote' | transloco
+                }}</span>
+              </div>
+              @if (!d.hibernated) {
+                <div class="border-border overflow-x-auto rounded-lg border">
+                  <table hlmTable class="w-full">
+                    <thead hlmTHead>
+                      <tr hlmTr>
+                        <th hlmTh>{{ 'clusterDetail.instance' | transloco }}</th>
+                        <th hlmTh>{{ 'clusterDetail.role' | transloco }}</th>
+                        <th hlmTh>{{ 'clusterDetail.health' | transloco }}</th>
+                        <th hlmTh>{{ 'clusterDetail.lsn' | transloco }}</th>
+                        <th hlmTh class="w-32">{{ 'common.actions' | transloco }}</th>
+                      </tr>
+                    </thead>
+                    <tbody hlmTBody>
+                      @for (i of d.instances; track i.pod) {
+                        <tr hlmTr [attr.data-testid]="'instance-' + i.pod">
+                          <td hlmTd class="font-mono text-sm font-medium">
+                            <span class="inline-flex items-center gap-1.5">
+                              {{ i.pod }}
+                              @if (i.pod === d.primary) {
+                                <ng-icon
+                                  name="lucideCrown"
+                                  size="14"
+                                  class="text-primary"
+                                  [attr.aria-label]="'clusterDetail.recordedPrimary' | transloco"
+                                />
+                              }
+                            </span>
+                          </td>
+                          <td hlmTd>
+                            <span
+                              class="rounded-full px-2 py-0.5 text-xs font-medium"
+                              [class.bg-primary]="i.role === 'primary'"
+                              [class.text-primary-foreground]="i.role === 'primary'"
+                              [class.bg-secondary]="i.role === 'standby'"
+                              [class.text-secondary-foreground]="i.role === 'standby'"
+                              [class.bg-warning]="i.role === 'unknown'"
+                              [class.text-background]="i.role === 'unknown'"
+                              [class.bg-muted]="i.role === 'fenced'"
+                              [class.text-muted-foreground]="i.role === 'fenced'"
+                            >
+                              {{ 'clusterDetail.roles.' + i.role | transloco }}
+                            </span>
+                          </td>
+                          <td hlmTd>
+                            <span class="inline-flex items-center gap-1.5 text-sm">
+                              <span
+                                class="h-2.5 w-2.5 rounded-full"
+                                [class.bg-success]="i.ready"
+                                [class.bg-destructive]="!i.ready"
+                              ></span>
+                              {{
+                                (i.ready ? 'clusterDetail.ready' : 'clusterDetail.notReady')
+                                  | transloco
+                              }}
+                              @if (i.ssl) {
+                                <ng-icon
+                                  name="lucideLock"
+                                  size="13"
+                                  class="text-success"
+                                  [attr.data-testid]="'ssl-' + i.pod"
+                                  [attr.aria-label]="'tls.instanceOn' | transloco"
+                                />
+                              }
+                            </span>
+                          </td>
+                          <td hlmTd class="font-mono text-xs tabular-nums">{{ i.lsn ?? '—' }}</td>
+                          <td hlmTd>
+                            @if (i.pod !== d.primary && i.ready && i.role === 'standby') {
+                              <button
+                                hlmBtn
+                                variant="ghost"
+                                size="sm"
+                                [disabled]="busy() || d.hibernated"
+                                [attr.data-testid]="'switchover-' + i.pod"
+                                (click)="openSwitchover(d, i.pod)"
+                              >
+                                <ng-icon name="lucideRefreshCw" size="14" />
+                                {{ 'clusterDetail.makePrimary' | transloco }}
+                              </button>
+                            }
+                            @if (i.role === 'fenced') {
+                              <button
+                                hlmBtn
+                                variant="ghost"
+                                size="sm"
+                                [disabled]="busy()"
+                                [attr.data-testid]="'unfence-' + i.pod"
+                                (click)="unfence(i.pod)"
+                              >
+                                <ng-icon name="lucidePlay" size="14" />
+                                {{ 'clusterDetail.unfence' | transloco }}
+                              </button>
+                            } @else {
+                              <button
+                                hlmBtn
+                                variant="ghost"
+                                size="sm"
+                                class="text-muted-foreground"
+                                [disabled]="busy()"
+                                [attr.data-testid]="'fence-' + i.pod"
+                                (click)="openFence(i.pod)"
+                              >
+                                <ng-icon name="lucideBan" size="14" />
+                                {{ 'clusterDetail.fence' | transloco }}
+                              </button>
+                            }
+                          </td>
+                        </tr>
+                      } @empty {
+                        <tr hlmTr>
+                          <td hlmTd colspan="5" class="text-muted-foreground py-8 text-center">
+                            {{ 'ux.workspace.noInstances' | transloco }}
+                          </td>
+                        </tr>
+                      }
+                    </tbody>
+                  </table>
+                </div>
+              } @else {
+                <p class="text-muted-foreground text-sm">
+                  {{ 'clusterDetail.hibernatedBanner' | transloco: { count: d.replicas } }}
+                </p>
+              }
+            </section>
+          </div>
+        }
+        @if (section() === 'backups') {
+          <div class="space-y-5" data-testid="workspace-backups">
+            <div>
+              <h2 class="text-xl font-semibold tracking-tight">
+                {{ 'ux.workspace.backups' | transloco }}
+              </h2>
+              <p class="pg-page-description">{{ 'ux.workspace.backupsDescription' | transloco }}</p>
+            </div>
+            <section class="pg-panel">
+              <!-- Backups -->
+              <div class="pg-section-header">
+                <h3 class="font-semibold">{{ 'backups.title' | transloco }}</h3>
+                <span class="flex flex-wrap items-center gap-2">
+                  @if (backups()?.enabled) {
+                    <button
+                      hlmBtn
+                      size="sm"
+                      data-testid="backup-now"
+                      [disabled]="busy() || backupRunning()"
+                      [hlmDropdownMenuTrigger]="backupKindMenu"
+                    >
+                      <ng-icon name="lucideDatabaseBackup" size="14" />
+                      {{ (backupRunning() ? 'backups.running' : 'backups.backupNow') | transloco }}
+                    </button>
+                    <ng-template #backupKindMenu>
+                      <hlm-dropdown-menu class="w-64">
+                        @for (k of backupKinds; track k) {
+                          <button
+                            hlmDropdownMenuItem
+                            [attr.data-testid]="'backup-kind-' + k"
+                            (click)="backupNow(k)"
+                          >
+                            <span class="grid gap-0.5">
+                              <span>{{ 'backups.kinds.' + k | transloco }}</span>
+                              <span class="text-muted-foreground text-xs">
+                                {{ 'backups.kindHelp.' + k | transloco }}
+                              </span>
+                            </span>
+                          </button>
+                        }
+                      </hlm-dropdown-menu>
+                    </ng-template>
+                  }
+                  <button
+                    hlmBtn
+                    variant="outline"
+                    size="sm"
+                    data-testid="open-backup-config"
+                    [disabled]="busy() || d.hibernated"
+                    (click)="openBackupConfig()"
+                  >
+                    {{ 'backups.configure' | transloco }}
+                  </button>
+                </span>
+              </div>
 
-        <!-- TLS -->
-        <div class="mt-6 flex items-center justify-between">
-          <h2 class="font-medium">{{ 'tls.title' | transloco }}</h2>
-          <button
-            hlmBtn
-            variant="outline"
-            size="sm"
-            data-testid="open-tls"
-            [disabled]="busy() || d.hibernated"
-            (click)="openTls(d)"
-          >
-            <ng-icon name="lucideLock" size="14" />
-            {{ 'tls.edit' | transloco }}
-          </button>
-        </div>
-        <p class="text-muted-foreground mt-2 text-sm" data-testid="tls-state">
-          {{
-            d.tls.server_secret
-              ? ('tls.on' | transloco: { secret: d.tls.server_secret })
-              : ('tls.off' | transloco)
-          }}
-        </p>
-
-        <!-- Pooler -->
-        <div class="mt-6 flex items-center justify-between">
-          <h2 class="font-medium">{{ 'pooler.title' | transloco }}</h2>
-          <button
-            hlmBtn
-            variant="outline"
-            size="sm"
-            data-testid="open-pooler"
-            [disabled]="busy() || d.hibernated"
-            (click)="openPooler(d)"
-          >
-            <ng-icon name="lucideNetwork" size="14" />
-            {{ 'pooler.edit' | transloco }}
-          </button>
-        </div>
-        @if (d.pooler.spec.enabled) {
-          <p class="text-muted-foreground mt-2 text-sm" data-testid="pooler-state">
-            {{
-              'pooler.on'
-                | transloco
-                  : {
-                      ready: d.pooler.ready_replicas,
-                      total: d.pooler.spec.replicas,
-                      mode: d.pooler.spec.pool_mode,
+              @if (backups(); as b) {
+                @if (!b.enabled) {
+                  <p class="text-muted-foreground mt-2 text-sm">
+                    {{ 'backups.disabled' | transloco }}
+                  </p>
+                } @else {
+                  <p class="text-muted-foreground mt-2 text-sm">
+                    <span class="font-mono text-xs">{{ b.repository }}</span>
+                    · {{ 'backups.keeping' | transloco: { count: d.backup.retention_full } }}
+                    @if (b.schedule) {
+                      · {{ 'backups.scheduled' | transloco: { cron: b.schedule } }}
+                    } @else {
+                      · {{ 'backups.manualOnly' | transloco }}
                     }
-            }}
-          </p>
-          <p class="text-muted-foreground mt-1 font-mono text-xs" data-testid="pooler-connect">
-            {{ 'pooler.connectVia' | transloco: { service: d.pooler.service } }}
-          </p>
-        } @else {
-          <p class="text-muted-foreground mt-2 text-sm" data-testid="pooler-state">
-            {{ 'pooler.off' | transloco }}
-          </p>
-        }
+                  </p>
 
-        <!-- Roles & databases -->
-        <div class="mt-6 flex items-center justify-between">
-          <h2 class="font-medium">{{ 'provision.title' | transloco }}</h2>
-          <button
-            hlmBtn
-            variant="outline"
-            size="sm"
-            data-testid="open-provision"
-            [disabled]="busy() || d.hibernated"
-            (click)="openProvision()"
-          >
-            <ng-icon name="lucideUsers" size="14" />
-            {{ 'provision.edit' | transloco }}
-          </button>
-        </div>
-        @if (d.roles.length || d.databases.length || d.extensions.length) {
-          <p class="text-muted-foreground mt-2 text-sm" data-testid="provision-state">
-            {{
-              'provision.summary'
-                | transloco: { roles: d.roles.length, databases: d.databases.length }
-            }}
-          </p>
-          <div class="mt-1 grid gap-1">
-            @for (r of d.roles; track r.name) {
-              <p class="text-muted-foreground font-mono text-xs">
-                {{ r.name }}{{ r.login === false ? ' · nologin' : '' }}
-                {{ r.in_roles?.length ? '→ ' + r.in_roles!.join(', ') : '' }}
-              </p>
-            }
-            @for (db of d.databases; track db.name) {
-              <p class="text-muted-foreground font-mono text-xs">
-                {{ db.name }} ({{ db.owner }})
-              </p>
-            }
-            @for (ext of d.extensions; track ext.name + '/' + ext.database) {
-              <p class="text-muted-foreground font-mono text-xs" [attr.data-testid]="'ext-' + ext.name">
-                {{ ext.name }} @ {{ ext.database
-                }}{{ ext.schema ? ' (' + ext.schema + ')' : '' }}
-                @if (ext.preload) {
-                  <span class="bg-muted ml-1 rounded-full px-1.5 py-0.5 text-[10px]">
-                    {{ 'provision.extensionPreload' | transloco }}
-                  </span>
+                  @if (b.runs.length) {
+                    <h3 class="text-muted-foreground mt-4 text-xs font-medium uppercase">
+                      {{ 'backups.runs' | transloco }}
+                    </h3>
+                    <div class="border-border mt-1 overflow-x-auto rounded-lg border">
+                      <table hlmTable class="w-full">
+                        <thead hlmTHead>
+                          <tr hlmTr>
+                            <th hlmTh>{{ 'backups.state' | transloco }}</th>
+                            <th hlmTh>{{ 'backups.kind' | transloco }}</th>
+                            <th hlmTh>{{ 'backups.trigger' | transloco }}</th>
+                            <th hlmTh>{{ 'backups.started' | transloco }}</th>
+                            <th hlmTh>{{ 'backups.duration' | transloco }}</th>
+                          </tr>
+                        </thead>
+                        <tbody hlmTBody>
+                          @for (r of b.runs; track r.id) {
+                            <tr hlmTr [attr.data-testid]="'run-' + r.id">
+                              <td hlmTd>
+                                <span class="inline-flex items-center gap-1.5 text-sm">
+                                  <span
+                                    class="h-2.5 w-2.5 rounded-full"
+                                    [class.bg-primary]="r.state === 'running'"
+                                    [class.animate-pulse]="r.state === 'running'"
+                                    [class.bg-success]="r.state === 'succeeded'"
+                                    [class.bg-destructive]="r.state === 'failed'"
+                                    [class.bg-warning]="r.state === 'unknown'"
+                                  ></span>
+                                  {{ 'backups.states.' + r.state | transloco }}
+                                </span>
+                              </td>
+                              <td hlmTd class="text-sm">
+                                {{ 'backups.kinds.' + r.kind | transloco }}
+                              </td>
+                              <td hlmTd class="text-muted-foreground text-sm">
+                                {{ 'backups.triggers.' + r.trigger | transloco }}
+                              </td>
+                              <td hlmTd class="text-muted-foreground text-xs">
+                                {{ formatTime(r.started) }}
+                              </td>
+                              <td hlmTd class="font-mono text-xs tabular-nums">
+                                {{ formatDuration(r) }}
+                              </td>
+                            </tr>
+                            @if (r.error) {
+                              <tr hlmTr>
+                                <td hlmTd colspan="5" class="text-destructive pt-0 text-xs">
+                                  {{ r.error }}
+                                </td>
+                              </tr>
+                            }
+                          }
+                        </tbody>
+                      </table>
+                    </div>
+                    <h3 class="text-muted-foreground mt-4 text-xs font-medium uppercase">
+                      {{ 'backups.inRepository' | transloco }}
+                    </h3>
+                  }
+                  @if (b.backups.length) {
+                    <div class="border-border mt-2 overflow-x-auto rounded-lg border">
+                      <table hlmTable class="w-full">
+                        <thead hlmTHead>
+                          <tr hlmTr>
+                            <th hlmTh>{{ 'backups.label' | transloco }}</th>
+                            <th hlmTh>{{ 'backups.kind' | transloco }}</th>
+                            <th hlmTh>{{ 'backups.size' | transloco }}</th>
+                            <th hlmTh>{{ 'backups.finished' | transloco }}</th>
+                            <th hlmTh class="text-right">{{ 'common.actions' | transloco }}</th>
+                          </tr>
+                        </thead>
+                        <tbody hlmTBody>
+                          @for (bk of b.backups; track bk.label) {
+                            <tr hlmTr [attr.data-testid]="'backup-' + bk.label">
+                              <td hlmTd class="font-mono text-xs">{{ bk.label }}</td>
+                              <td hlmTd class="text-sm">{{ bk.kind }}</td>
+                              <td hlmTd class="font-mono text-xs tabular-nums">
+                                {{ formatSize(bk.size_bytes) }}
+                              </td>
+                              <td hlmTd class="text-muted-foreground text-xs">
+                                {{ formatTime(bk.finished) }}
+                              </td>
+                              <td hlmTd class="text-right">
+                                <button
+                                  hlmBtn
+                                  variant="outline"
+                                  size="sm"
+                                  [attr.data-testid]="'restore-' + bk.label"
+                                  [disabled]="busy() || d.hibernated"
+                                  (click)="openRestore(d, bk.label, bk.finished)"
+                                >
+                                  {{ 'restore.action' | transloco }}
+                                </button>
+                              </td>
+                            </tr>
+                          }
+                        </tbody>
+                      </table>
+                    </div>
+                  } @else {
+                    <p class="text-muted-foreground mt-2 text-sm">
+                      {{ 'backups.none' | transloco }}
+                    </p>
+                  }
                 }
-              </p>
-            }
+              }
+            </section>
           </div>
-        } @else {
-          <p class="text-muted-foreground mt-2 text-sm" data-testid="provision-state">
-            {{ 'provision.none' | transloco }}
-          </p>
+        }
+        @if (section() === 'configuration') {
+          <div class="space-y-5" data-testid="workspace-configuration">
+            <div>
+              <h2 class="text-xl font-semibold tracking-tight">
+                {{ 'ux.workspace.configuration' | transloco }}
+              </h2>
+              <p class="pg-page-description">
+                {{ 'ux.workspace.configurationDescription' | transloco }}
+              </p>
+            </div>
+            <section class="pg-panel">
+              <div class="pg-section-header">
+                <h3 class="font-semibold">{{ 'ux.workspace.capacity' | transloco }}</h3>
+                <button
+                  hlmBtn
+                  variant="outline"
+                  size="sm"
+                  data-testid="open-edit"
+                  [disabled]="busy() || d.hibernated"
+                  (click)="openEdit(d)"
+                >
+                  <ng-icon name="lucidePencil" size="14" />
+                  {{ 'clusterDetail.edit' | transloco }}
+                </button>
+              </div>
+              <p class="text-muted-foreground text-sm">
+                {{
+                  'ux.workspace.capacitySummary'
+                    | transloco: { count: d.replicas, storage: d.storage_size }
+                }}
+              </p>
+            </section>
+            <section class="pg-panel">
+              <!-- Configuration -->
+              <div class="pg-section-header">
+                <h3 class="font-semibold">{{ 'config.title' | transloco }}</h3>
+                <button
+                  hlmBtn
+                  variant="outline"
+                  size="sm"
+                  data-testid="open-config"
+                  [disabled]="busy() || d.hibernated"
+                  (click)="openConfig()"
+                >
+                  <ng-icon name="lucideSettings" size="14" />
+                  {{ 'config.edit' | transloco }}
+                </button>
+              </div>
+
+              @if (parameterRows(d).length) {
+                <div class="border-border mt-2 overflow-x-auto rounded-lg border">
+                  <table hlmTable class="w-full">
+                    <thead hlmTHead>
+                      <tr hlmTr>
+                        <th hlmTh>{{ 'config.setting' | transloco }}</th>
+                        <th hlmTh>{{ 'config.value' | transloco }}</th>
+                      </tr>
+                    </thead>
+                    <tbody hlmTBody>
+                      @for (p of parameterRows(d); track p.name) {
+                        <tr hlmTr [attr.data-testid]="'config-row-' + p.name">
+                          <td hlmTd class="font-mono text-xs">{{ p.name }}</td>
+                          <td hlmTd class="font-mono text-xs">{{ p.value }}</td>
+                        </tr>
+                      }
+                    </tbody>
+                  </table>
+                </div>
+              } @else {
+                <p class="text-muted-foreground mt-2 text-sm">
+                  {{ 'config.usingDefaults' | transloco }}
+                </p>
+              }
+            </section>
+            <section class="pg-panel">
+              <!-- Synchronous replication -->
+              <div class="pg-section-header">
+                <h3 class="font-semibold">{{ 'sync.title' | transloco }}</h3>
+                <button
+                  hlmBtn
+                  variant="outline"
+                  size="sm"
+                  data-testid="toggle-sync"
+                  [disabled]="busy() || d.hibernated"
+                  (click)="openSync(d)"
+                >
+                  <ng-icon name="lucideRefreshCw" size="14" />
+                  {{ (d.synchronous ? 'sync.disable' : 'sync.enable') | transloco }}
+                </button>
+              </div>
+
+              <p class="text-muted-foreground mt-2 text-sm" data-testid="sync-state">
+                {{
+                  d.synchronous
+                    ? ('sync.on' | transloco: { count: syncStandbys(d) ?? '?' })
+                    : ('sync.off' | transloco)
+                }}
+              </p>
+            </section>
+            <section class="pg-panel">
+              <!-- Placement and resources -->
+              <div class="pg-section-header">
+                <h3 class="font-semibold">{{ 'workload.title' | transloco }}</h3>
+                <button
+                  hlmBtn
+                  variant="outline"
+                  size="sm"
+                  data-testid="open-workload"
+                  [disabled]="busy() || d.hibernated"
+                  (click)="openWorkload(d)"
+                >
+                  <ng-icon name="lucideServer" size="14" />
+                  {{ 'workload.edit' | transloco }}
+                </button>
+              </div>
+              <dl
+                class="text-muted-foreground mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm"
+              >
+                <dt>{{ 'workload.antiAffinity' | transloco }}</dt>
+                <dd class="text-foreground" data-testid="workload-anti-affinity">
+                  {{
+                    'workload.antiAffinityModes.' + (d.workload.anti_affinity ?? 'preferred')
+                      | transloco
+                  }}
+                </dd>
+                <dt>{{ 'workload.resources' | transloco }}</dt>
+                <dd class="text-foreground font-mono text-xs" data-testid="workload-resources">
+                  {{ resourceSummary(d.workload) }}
+                </dd>
+                @if (labelSummary(d.workload); as l) {
+                  <dt>{{ 'workload.labels' | transloco }}</dt>
+                  <dd class="text-foreground font-mono text-xs">{{ l }}</dd>
+                }
+                @if (annotationSummary(d.workload); as a) {
+                  <dt>{{ 'workload.annotations' | transloco }}</dt>
+                  <dd class="text-foreground font-mono text-xs">{{ a }}</dd>
+                }
+              </dl>
+            </section>
+          </div>
+        }
+        @if (section() === 'access') {
+          <div class="space-y-5" data-testid="workspace-access">
+            <div>
+              <h2 class="text-xl font-semibold tracking-tight">
+                {{ 'ux.workspace.access' | transloco }}
+              </h2>
+              <p class="pg-page-description">{{ 'ux.workspace.accessDescription' | transloco }}</p>
+            </div>
+            <section class="pg-panel">
+              <!-- Client access rules -->
+              <div class="pg-section-header">
+                <h3 class="font-semibold">{{ 'hba.title' | transloco }}</h3>
+                <button
+                  hlmBtn
+                  variant="outline"
+                  size="sm"
+                  data-testid="open-hba"
+                  [disabled]="busy() || d.hibernated"
+                  (click)="openHba()"
+                >
+                  <ng-icon name="lucideShield" size="14" />
+                  {{ 'hba.edit' | transloco }}
+                </button>
+              </div>
+
+              @if (d.pg_hba.length) {
+                <div class="border-border mt-2 overflow-x-auto rounded-lg border">
+                  <table hlmTable class="w-full">
+                    <thead hlmTHead>
+                      <tr hlmTr>
+                        <th hlmTh>{{ 'hba.conn' | transloco }}</th>
+                        <th hlmTh>{{ 'hba.database' | transloco }}</th>
+                        <th hlmTh>{{ 'hba.user' | transloco }}</th>
+                        <th hlmTh>{{ 'hba.address' | transloco }}</th>
+                        <th hlmTh>{{ 'hba.method' | transloco }}</th>
+                      </tr>
+                    </thead>
+                    <tbody hlmTBody>
+                      @for (r of d.pg_hba; track $index; let i = $index) {
+                        <tr hlmTr [attr.data-testid]="'hba-view-row-' + i">
+                          <td hlmTd class="font-mono text-xs">{{ r.conn }}</td>
+                          <td hlmTd class="font-mono text-xs">{{ r.database }}</td>
+                          <td hlmTd class="font-mono text-xs">{{ r.user }}</td>
+                          <td hlmTd class="font-mono text-xs">{{ r.address }}</td>
+                          <td hlmTd class="font-mono text-xs">{{ r.method }}</td>
+                        </tr>
+                      }
+                    </tbody>
+                  </table>
+                </div>
+              } @else {
+                <p class="text-muted-foreground mt-2 text-sm">{{ 'hba.noneSet' | transloco }}</p>
+              }
+            </section>
+            <section class="pg-panel">
+              <!-- TLS -->
+              <div class="pg-section-header">
+                <h3 class="font-semibold">{{ 'tls.title' | transloco }}</h3>
+                <button
+                  hlmBtn
+                  variant="outline"
+                  size="sm"
+                  data-testid="open-tls"
+                  [disabled]="busy() || d.hibernated"
+                  (click)="openTls(d)"
+                >
+                  <ng-icon name="lucideLock" size="14" />
+                  {{ 'tls.edit' | transloco }}
+                </button>
+              </div>
+              <p class="text-muted-foreground mt-2 text-sm" data-testid="tls-state">
+                {{
+                  d.tls.server_secret
+                    ? ('tls.on' | transloco: { secret: d.tls.server_secret })
+                    : ('tls.off' | transloco)
+                }}
+              </p>
+            </section>
+            <section class="pg-panel">
+              <!-- Pooler -->
+              <div class="pg-section-header">
+                <h3 class="font-semibold">{{ 'pooler.title' | transloco }}</h3>
+                <button
+                  hlmBtn
+                  variant="outline"
+                  size="sm"
+                  data-testid="open-pooler"
+                  [disabled]="busy() || d.hibernated"
+                  (click)="openPooler(d)"
+                >
+                  <ng-icon name="lucideNetwork" size="14" />
+                  {{ 'pooler.edit' | transloco }}
+                </button>
+              </div>
+              @if (d.pooler.spec.enabled) {
+                <p class="text-muted-foreground mt-2 text-sm" data-testid="pooler-state">
+                  {{
+                    'pooler.on'
+                      | transloco
+                        : {
+                            ready: d.pooler.ready_replicas,
+                            total: d.pooler.spec.replicas,
+                            mode: d.pooler.spec.pool_mode,
+                          }
+                  }}
+                </p>
+                <p
+                  class="text-muted-foreground mt-1 font-mono text-xs"
+                  data-testid="pooler-connect"
+                >
+                  {{ 'pooler.connectVia' | transloco: { service: d.pooler.service } }}
+                </p>
+              } @else {
+                <p class="text-muted-foreground mt-2 text-sm" data-testid="pooler-state">
+                  {{ 'pooler.off' | transloco }}
+                </p>
+              }
+            </section>
+            <section class="pg-panel">
+              <!-- Roles & databases -->
+              <div class="pg-section-header">
+                <h3 class="font-semibold">{{ 'provision.title' | transloco }}</h3>
+                <button
+                  hlmBtn
+                  variant="outline"
+                  size="sm"
+                  data-testid="open-provision"
+                  [disabled]="busy() || d.hibernated"
+                  (click)="openProvision()"
+                >
+                  <ng-icon name="lucideUsers" size="14" />
+                  {{ 'provision.edit' | transloco }}
+                </button>
+              </div>
+              @if (d.roles.length || d.databases.length || d.extensions.length) {
+                <p class="text-muted-foreground mt-2 text-sm" data-testid="provision-state">
+                  {{
+                    'provision.summary'
+                      | transloco: { roles: d.roles.length, databases: d.databases.length }
+                  }}
+                </p>
+                <div class="mt-1 grid gap-1">
+                  @for (r of d.roles; track r.name) {
+                    <p class="text-muted-foreground font-mono text-xs">
+                      {{ r.name }}{{ r.login === false ? ' · nologin' : '' }}
+                      {{ r.in_roles?.length ? '→ ' + r.in_roles!.join(', ') : '' }}
+                    </p>
+                  }
+                  @for (db of d.databases; track db.name) {
+                    <p class="text-muted-foreground font-mono text-xs">
+                      {{ db.name }} ({{ db.owner }})
+                    </p>
+                  }
+                  @for (ext of d.extensions; track ext.name + '/' + ext.database) {
+                    <p
+                      class="text-muted-foreground font-mono text-xs"
+                      [attr.data-testid]="'ext-' + ext.name"
+                    >
+                      {{ ext.name }} @ {{ ext.database
+                      }}{{ ext.schema ? ' (' + ext.schema + ')' : '' }}
+                      @if (ext.preload) {
+                        <span class="bg-muted ml-1 rounded-full px-1.5 py-0.5 text-[10px]">
+                          {{ 'provision.extensionPreload' | transloco }}
+                        </span>
+                      }
+                    </p>
+                  }
+                </div>
+              } @else {
+                <p class="text-muted-foreground mt-2 text-sm" data-testid="provision-state">
+                  {{ 'provision.none' | transloco }}
+                </p>
+              }
+            </section>
+            <section class="pg-panel">
+              <!-- Secrets and initialisation -->
+              <div class="pg-section-header">
+                <h3 class="font-semibold">{{ 'secrets.title' | transloco }}</h3>
+                <div class="flex items-center gap-2">
+                  @if (!d.credentials_secret) {
+                    <button
+                      hlmBtn
+                      variant="outline"
+                      size="sm"
+                      data-testid="rotate-credentials"
+                      [disabled]="busy() || d.hibernated"
+                      (click)="openRotateCredentials()"
+                    >
+                      {{ 'secrets.rotate' | transloco }}
+                    </button>
+                  }
+                  <button
+                    hlmBtn
+                    variant="outline"
+                    size="sm"
+                    data-testid="open-env"
+                    [disabled]="busy() || d.hibernated"
+                    (click)="openEnv(d)"
+                  >
+                    {{ 'secrets.edit' | transloco }}
+                  </button>
+                </div>
+              </div>
+              @if (secrets(); as s) {
+                <div class="border-border mt-2 overflow-x-auto rounded-lg border">
+                  <table hlmTable class="w-full">
+                    <thead hlmTHead>
+                      <tr hlmTr>
+                        <th hlmTh>{{ 'secrets.object' | transloco }}</th>
+                        <th hlmTh>{{ 'secrets.purpose' | transloco }}</th>
+                        <th hlmTh>{{ 'secrets.keys' | transloco }}</th>
+                        <th hlmTh>{{ 'secrets.state' | transloco }}</th>
+                      </tr>
+                    </thead>
+                    <tbody hlmTBody>
+                      @for (r of s.resources; track r.name + r.kind) {
+                        <tr hlmTr [attr.data-testid]="'secret-' + r.name">
+                          <td hlmTd>
+                            <span class="font-mono text-xs">{{ r.name }}</span>
+                            <span class="text-muted-foreground ml-2 text-xs">{{ r.kind }}</span>
+                          </td>
+                          <td hlmTd class="text-sm">
+                            {{ 'secrets.purposes.' + r.purpose | transloco }}
+                          </td>
+                          <td hlmTd class="text-muted-foreground font-mono text-xs">
+                            {{ r.keys.length ? r.keys.join(', ') : '—' }}
+                          </td>
+                          <td hlmTd class="text-xs">
+                            @if (r.managed) {
+                              <span class="text-muted-foreground">
+                                {{ 'secrets.states.managed' | transloco }}
+                              </span>
+                            } @else if (!r.exists) {
+                              <span class="text-destructive font-medium">
+                                {{ 'secrets.states.missing' | transloco }}
+                              </span>
+                            } @else if (r.missing_keys.length) {
+                              <span class="text-destructive font-medium">
+                                {{ 'secrets.states.missingKeys' | transloco }}
+                                <span class="font-mono">{{ r.missing_keys.join(', ') }}</span>
+                              </span>
+                            } @else {
+                              <span class="text-muted-foreground">
+                                {{ 'secrets.states.present' | transloco }}
+                              </span>
+                            }
+                          </td>
+                        </tr>
+                      }
+                    </tbody>
+                  </table>
+                </div>
+              }
+            </section>
+          </div>
+        }
+        @if (section() === 'maintenance') {
+          <div class="space-y-5" data-testid="workspace-maintenance">
+            <div>
+              <h2 class="text-xl font-semibold tracking-tight">
+                {{ 'ux.workspace.maintenance' | transloco }}
+              </h2>
+              <p class="pg-page-description">
+                {{ 'ux.workspace.maintenanceDescription' | transloco }}
+              </p>
+            </div>
+            <section class="pg-panel">
+              <div class="pg-section-header">
+                <h3 class="font-semibold">{{ 'ux.workspace.lifecycle' | transloco }}</h3>
+                @if (!d.hibernated) {
+                  <button
+                    hlmBtn
+                    variant="outline"
+                    size="sm"
+                    data-testid="open-hibernate"
+                    [disabled]="busy()"
+                    (click)="openHibernate(d)"
+                  >
+                    <ng-icon name="lucideMoon" size="14" />
+                    {{ 'clusterDetail.hibernate' | transloco }}
+                  </button>
+                }
+              </div>
+              <p class="text-muted-foreground text-sm">
+                {{ 'ux.workspace.lifecycleDescription' | transloco }}
+              </p>
+            </section>
+            <section class="pg-panel">
+              <div class="pg-section-header">
+                <h3 class="font-semibold">{{ 'ux.workspace.image' | transloco }}</h3>
+                <button
+                  hlmBtn
+                  variant="outline"
+                  size="sm"
+                  data-testid="open-image"
+                  [disabled]="busy() || d.hibernated"
+                  [attr.aria-label]="'image.edit' | transloco"
+                  (click)="openImage(d)"
+                >
+                  <ng-icon name="lucidePencil" size="14" />
+                  {{ 'image.edit' | transloco }}
+                </button>
+              </div>
+              <p class="break-all font-mono text-xs">{{ d.image }}</p>
+              <p class="pg-page-description">{{ 'image.warning' | transloco }}</p>
+            </section>
+            <section class="pg-panel">
+              <!-- Major version upgrade -->
+              <div class="pg-section-header">
+                <h3 class="font-semibold">{{ 'upgrade.title' | transloco }}</h3>
+                @if (!d.upgrade) {
+                  <button
+                    hlmBtn
+                    variant="outline"
+                    size="sm"
+                    data-testid="open-upgrade"
+                    [disabled]="busy() || d.hibernated"
+                    (click)="openUpgrade(d)"
+                  >
+                    <ng-icon name="lucideArrowUp" size="14" />
+                    {{ 'upgrade.start' | transloco }}
+                  </button>
+                }
+              </div>
+
+              @if (d.upgrade; as u) {
+                <div
+                  class="border-border mt-2 rounded-lg border p-3 text-sm"
+                  data-testid="upgrade-card"
+                >
+                  <div class="flex flex-wrap items-center gap-2">
+                    <span class="font-medium">
+                      {{
+                        (u.mode === 'in_place'
+                          ? 'upgrade.upgrading'
+                          : u.phase === 'soaking'
+                            ? 'upgrade.soaking'
+                            : 'upgrade.migrating'
+                        ) | transloco
+                      }}
+                    </span>
+                    <span class="text-muted-foreground font-mono text-xs">{{
+                      u.target_image
+                    }}</span>
+                    @if (u.mode === 'blue_green' && u.phase === 'migrating') {
+                      <span class="text-muted-foreground text-xs" data-testid="upgrade-readiness">
+                        {{
+                          (u.ready_to_cutover ? 'upgrade.ready' : 'upgrade.notReady') | transloco
+                        }}
+                      </span>
+                    }
+                  </div>
+
+                  @if (u.error) {
+                    <p class="text-warning mt-2 text-xs" data-testid="upgrade-error">
+                      {{ u.error }}
+                    </p>
+                  }
+
+                  @for (db of u.databases; track db.name) {
+                    <p
+                      class="text-muted-foreground mt-1 text-xs"
+                      [attr.data-testid]="'upgrade-db-' + db.name"
+                    >
+                      <span class="font-mono">{{ db.name }}</span>
+                      —
+                      {{
+                        'upgrade.tables'
+                          | transloco: { ready: db.tables_ready, total: db.tables_total }
+                      }}
+                    </p>
+                  }
+                  @if (u.lag_bytes !== null && u.lag_bytes !== undefined) {
+                    <p class="text-muted-foreground mt-1 text-xs" data-testid="upgrade-lag">
+                      {{ 'upgrade.lag' | transloco }}: {{ u.lag_bytes }} B
+                    </p>
+                  }
+
+                  @if (u.mode === 'in_place') {
+                    <p
+                      class="text-muted-foreground mt-2 text-xs"
+                      data-testid="upgrade-inplace-note"
+                    >
+                      {{ 'upgrade.inPlaceRunning' | transloco }}
+                    </p>
+                  }
+
+                  <div class="mt-3 flex flex-wrap gap-2">
+                    @if (u.mode === 'in_place') {
+                      <button
+                        hlmBtn
+                        variant="ghost"
+                        size="sm"
+                        data-testid="upgrade-abort"
+                        [disabled]="busy()"
+                        (click)="confirmUpgrade('abort', true)"
+                      >
+                        {{ 'upgrade.abort' | transloco }}
+                      </button>
+                    } @else if (u.phase === 'migrating') {
+                      <button
+                        hlmBtn
+                        size="sm"
+                        data-testid="upgrade-cutover"
+                        [disabled]="busy() || !u.ready_to_cutover"
+                        (click)="confirmUpgrade('cutover')"
+                      >
+                        {{ 'upgrade.cutover' | transloco }}
+                      </button>
+                      <button
+                        hlmBtn
+                        variant="ghost"
+                        size="sm"
+                        data-testid="upgrade-abort"
+                        [disabled]="busy()"
+                        (click)="confirmUpgrade('abort')"
+                      >
+                        {{ 'upgrade.abort' | transloco }}
+                      </button>
+                    } @else {
+                      <button
+                        hlmBtn
+                        size="sm"
+                        data-testid="upgrade-finalize"
+                        [disabled]="busy()"
+                        (click)="confirmUpgrade('finalize')"
+                      >
+                        {{ 'upgrade.finalize' | transloco }}
+                      </button>
+                      <button
+                        hlmBtn
+                        variant="ghost"
+                        size="sm"
+                        data-testid="upgrade-rollback"
+                        [disabled]="busy()"
+                        (click)="confirmUpgrade('rollback')"
+                      >
+                        {{ 'upgrade.rollback' | transloco }}
+                      </button>
+                    }
+                  </div>
+                </div>
+              }
+            </section>
+          </div>
         }
       } @else if (!error()) {
-        <p class="text-muted-foreground text-sm">{{ 'common.loading' | transloco }}</p>
+        <p class="pg-panel text-muted-foreground text-sm" role="status">
+          {{ 'common.loading' | transloco }}
+        </p>
       }
     </div>
   `,
@@ -1238,6 +1511,21 @@ export class ClusterDetailComponent implements OnDestroy {
   private readonly api = inject(Api);
   private readonly dialog = inject(HlmDialogService);
   private readonly router = inject(Router);
+  private readonly route = inject(ActivatedRoute);
+  private readonly queryParams = toSignal(this.route.queryParamMap, {
+    initialValue: this.route.snapshot.queryParamMap,
+  });
+  protected readonly sections = [
+    'overview',
+    'backups',
+    'configuration',
+    'access',
+    'maintenance',
+  ] as const;
+  protected readonly section = computed(
+    () =>
+      this.sections.find((section) => section === this.queryParams().get('section')) ?? 'overview',
+  );
 
   readonly ns = input.required<string>();
   readonly name = input.required<string>();
@@ -1318,7 +1606,7 @@ export class ClusterDetailComponent implements OnDestroy {
       this.api.invoke(restoreCluster, { ns: this.ns(), name: this.name(), body: req }),
     );
     if (ok) {
-      await this.router.navigate(['/clusters', req.target_cluster]);
+      await this.router.navigate(['/namespaces', this.ns(), 'clusters', req.target_cluster]);
     }
   }
 
@@ -1340,11 +1628,15 @@ export class ClusterDetailComponent implements OnDestroy {
       return `${seconds}s`;
     }
     const minutes = Math.floor(seconds / 60);
-    return minutes < 60 ? `${minutes}m ${seconds % 60}s` : `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+    return minutes < 60
+      ? `${minutes}m ${seconds % 60}s`
+      : `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
   }
 
   async backupNow(kind: 'full' | 'diff' | 'incr'): Promise<void> {
-    await this.run(() => this.api.invoke(createBackup, { ns: this.ns(), name: this.name(), body: { kind } }));
+    await this.run(() =>
+      this.api.invoke(createBackup, { ns: this.ns(), name: this.name(), body: { kind } }),
+    );
   }
   /** Blocks concurrent operations so a double-click cannot fire twice. */
   protected readonly busy = signal(false);
@@ -1384,7 +1676,9 @@ export class ClusterDetailComponent implements OnDestroy {
     if (!workload) {
       return;
     }
-    await this.run(() => this.api.invoke(patchCluster, { ns: this.ns(), name: this.name(), body: { workload } }));
+    await this.run(() =>
+      this.api.invoke(patchCluster, { ns: this.ns(), name: this.name(), body: { workload } }),
+    );
   }
 
   openConfig(): void {
@@ -1422,13 +1716,7 @@ export class ClusterDetailComponent implements OnDestroy {
   }
 
   openProvision(): void {
-    void this.router.navigate([
-      '/namespaces',
-      this.ns(),
-      'clusters',
-      this.name(),
-      'provisioning',
-    ]);
+    void this.router.navigate(['/namespaces', this.ns(), 'clusters', this.name(), 'provisioning']);
   }
 
   openHba(): void {
@@ -1452,14 +1740,19 @@ export class ClusterDetailComponent implements OnDestroy {
       return;
     }
     await this.run(() =>
-      this.api.invoke(patchCluster, { ns: this.ns(), name: this.name(), body: { synchronous: enable } }),
+      this.api.invoke(patchCluster, {
+        ns: this.ns(),
+        name: this.name(),
+        body: { synchronous: enable },
+      }),
     );
   }
 
   async openRestart(): Promise<void> {
     const confirmed = await firstValueFrom(
-      this.dialog.open<boolean>(RestartDialogComponent, { context: { ns: this.ns(), name: this.name() } })
-        .closed$,
+      this.dialog.open<boolean>(RestartDialogComponent, {
+        context: { ns: this.ns(), name: this.name() },
+      }).closed$,
     );
     if (!confirmed) {
       return;
@@ -1489,7 +1782,9 @@ export class ClusterDetailComponent implements OnDestroy {
     if (!change) {
       return;
     }
-    await this.run(() => this.api.invoke(patchCluster, { ns: this.ns(), name: this.name(), body: change }));
+    await this.run(() =>
+      this.api.invoke(patchCluster, { ns: this.ns(), name: this.name(), body: change }),
+    );
   }
 
   async openUpgrade(d: ClusterDetail): Promise<void> {
@@ -1529,9 +1824,7 @@ export class ClusterDetailComponent implements OnDestroy {
       finalize: finalizeUpgrade,
       abort: abortUpgrade,
     }[kind];
-    await this.run(() =>
-      this.api.invoke(operation, { ns: this.ns(), name: this.name() }),
-    );
+    await this.run(() => this.api.invoke(operation, { ns: this.ns(), name: this.name() }));
   }
 
   async openImage(d: ClusterDetail): Promise<void> {
@@ -1587,7 +1880,9 @@ export class ClusterDetailComponent implements OnDestroy {
   }
 
   async unfence(pod: string): Promise<void> {
-    await this.run(() => this.api.invoke(unfenceInstance, { ns: this.ns(), name: this.name(), pod }));
+    await this.run(() =>
+      this.api.invoke(unfenceInstance, { ns: this.ns(), name: this.name(), pod }),
+    );
   }
 
   /** Returns whether the operation succeeded, so callers can act on it. */
@@ -1636,7 +1931,9 @@ export class ClusterDetailComponent implements OnDestroy {
     // Same reasoning: this reads other objects in the namespace, and a
     // permission gap there must not blank the whole page.
     try {
-      this.secrets.set(await this.api.invoke(listRequiredSecrets, { ns: this.ns(), name: this.name() }));
+      this.secrets.set(
+        await this.api.invoke(listRequiredSecrets, { ns: this.ns(), name: this.name() }),
+      );
     } catch {
       this.secrets.set(null);
     }

@@ -1,45 +1,41 @@
-/* Tailwind v4 CSS-first config. The explicit layer split is required so the
-   spartan preset lands in the right cascade layer. */
+/* Keep spartan primitives and Tailwind utilities in explicit cascade layers. */
 @layer theme, base, components, utilities;
 @import 'tailwindcss/theme.css' layer(theme);
 @import 'tailwindcss/preflight.css' layer(base);
 @import 'tailwindcss/utilities.css';
-
 @import '@spartan-ng/brain/hlm-tailwind-preset.css';
-
 @import '@fontsource-variable/inter';
 @import '@fontsource-variable/jetbrains-mono';
 
-/* pglord palette — derived from the PostgreSQL brand blue #336791.
-   Light mode sits on cool off-whites; dark mode on a deep Postgres navy. */
 :root {
   color-scheme: light;
-  --background: #fbfcfd;
-  --foreground: #10202e;
+  --background: #f4f6f8;
+  --foreground: #172635;
   --card: #ffffff;
-  --card-foreground: #10202e;
+  --card-foreground: #172635;
   --popover: #ffffff;
-  --popover-foreground: #10202e;
-  --primary: #336791; /* PostgreSQL brand blue */
+  --popover-foreground: #172635;
+  --primary: #245f92;
   --primary-foreground: #ffffff;
-  --secondary: #e7eef4;
-  --secondary-foreground: #244a68;
-  --muted: #eff3f7;
-  --muted-foreground: #587184;
-  --accent: #dcebf5;
-  --accent-foreground: #244a68;
-  --destructive: #c0392b;
+  --secondary: #e9eef3;
+  --secondary-foreground: #334b60;
+  --muted: #eef2f5;
+  --muted-foreground: #5a6b7b;
+  --accent: #e4eff8;
+  --accent-foreground: #194e7a;
+  --destructive: #bc3434;
   --destructive-foreground: #ffffff;
-  --border: #d8e1e9;
-  --input: #d8e1e9;
-  --ring: #336791;
-  --success: #2e7d4f;
-  --warning: #b7791f;
-  --radius: 0.5rem;
+  --border: #dce3e9;
+  --input: #a9b8c5;
+  --ring: #245f92;
+  --success: #247448;
+  --warning: #946015;
+  --radius: 0.65rem;
   --font-sans: 'Inter Variable', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono Variable', ui-monospace, monospace;
-  /* Logo: the cloak sits behind the body, the ears a shade darker so the
-     silhouette does not read as one blob at small sizes. */
+  --pg-nav: #142635;
+  --pg-nav-text: #c1cfdb;
+  --pg-nav-active: #28495f;
   --pg-logo-cloak: #1f4667;
   --pg-logo-ear: #2a5679;
   --pg-logo-eye: #0f2436;
@@ -47,27 +43,30 @@
 
 :root.dark {
   color-scheme: dark;
-  --background: #0d1620; /* deep Postgres navy */
-  --foreground: #dbe6ef;
-  --card: #131f2b;
-  --card-foreground: #dbe6ef;
-  --popover: #131f2b;
-  --popover-foreground: #dbe6ef;
-  --primary: #6ba5cd; /* lightened Postgres blue for dark surfaces */
-  --primary-foreground: #0d1620;
-  --secondary: #1c2c3a;
-  --secondary-foreground: #b9cbda;
-  --muted: #192634;
-  --muted-foreground: #8aa0b4;
-  --accent: #223f55;
-  --accent-foreground: #cfe2f0;
-  --destructive: #e5534b;
-  --destructive-foreground: #10202e;
-  --border: #243849;
-  --input: #243849;
-  --ring: #6ba5cd;
-  --success: #4caf7d;
-  --warning: #d29a3d;
+  --background: #10171f;
+  --foreground: #e4eaf0;
+  --card: #18222d;
+  --card-foreground: #e4eaf0;
+  --popover: #1b2733;
+  --popover-foreground: #e4eaf0;
+  --primary: #88bfe8;
+  --primary-foreground: #102231;
+  --secondary: #263341;
+  --secondary-foreground: #cbd8e4;
+  --muted: #202d39;
+  --muted-foreground: #a0b0bf;
+  --accent: #244359;
+  --accent-foreground: #d6eaff;
+  --destructive: #ff8989;
+  --destructive-foreground: #361515;
+  --border: #30404e;
+  --input: #5c7082;
+  --ring: #88bfe8;
+  --success: #79d6a0;
+  --warning: #efc078;
+  --pg-nav: #111e29;
+  --pg-nav-text: #b5c5d3;
+  --pg-nav-active: #28495f;
   --pg-logo-cloak: #2f5d86;
   --pg-logo-ear: #5e97bf;
   --pg-logo-eye: #0d1620;
@@ -80,17 +79,249 @@
 
 @layer base {
   * {
-    @apply border-border outline-ring/50;
+    @apply border-border;
+  }
+  html {
+    scroll-padding-block: 6rem;
   }
   body {
     @apply bg-background text-foreground font-sans;
+    margin: 0;
+  }
+  button:not(:disabled),
+  summary,
+  select {
+    cursor: pointer;
+  }
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 3px;
+  }
+  ::selection {
+    background: var(--accent);
+    color: var(--accent-foreground);
+  }
+  input,
+  select,
+  textarea {
+    max-width: 100%;
+  }
+  [id] {
+    scroll-margin-block: 6rem;
   }
 }
 
 @layer components {
-  /* Scrollable panels inside dialogs and cards. `scrollbar-gutter: stable`
-     reserves the track up front so content is never clipped or reflowed when
-     the scrollbar appears; the thumb is themed instead of the OS default. */
+  .pg-shell {
+    min-height: 100svh;
+  }
+  .pg-sidebar {
+    background: var(--pg-nav);
+    color: var(--pg-nav-text);
+    display: flex;
+    flex-direction: column;
+    gap: 2rem;
+    padding: 1.5rem 1rem;
+    position: fixed;
+    inset: 0 auto 0 0;
+    width: 15rem;
+    z-index: 30;
+    border-right: 1px solid #ffffff0d;
+  }
+  .pg-brand {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    padding-inline: 0.5rem;
+    color: #fff;
+  }
+  .pg-brand-name {
+    font-size: 1.3rem;
+    letter-spacing: -0.06em;
+    font-weight: 700;
+  }
+  .pg-nav-label {
+    padding: 0 0.75rem;
+    margin-bottom: 0.65rem;
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+  }
+  .pg-nav-link {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    border-radius: 0.5rem;
+    padding: 0.75rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    transition:
+      background-color 120ms,
+      color 120ms;
+  }
+  .pg-nav-link:hover {
+    background: #ffffff0a;
+    color: #fff;
+  }
+  .pg-nav-link.is-active {
+    background: var(--pg-nav-active);
+    color: #fff;
+    box-shadow: inset 3px 0 #88bfe8;
+  }
+  .pg-sidebar :focus-visible {
+    outline-color: #b8dcf8;
+  }
+  .pg-shell-body {
+    margin-left: 15rem;
+    min-width: 0;
+  }
+  .pg-topbar {
+    min-height: 4.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.75rem 2rem;
+    border-bottom: 1px solid var(--border);
+    background: var(--card);
+  }
+  .pg-main {
+    padding: 2rem;
+    min-width: 0;
+  }
+  .pg-skip-link {
+    position: fixed;
+    top: 0.75rem;
+    left: 1rem;
+    transform: translateY(-200%);
+    z-index: 100;
+    background: var(--card);
+    color: var(--foreground);
+    padding: 0.75rem 1rem;
+    border-radius: 0.5rem;
+  }
+  .pg-skip-link:focus {
+    transform: translateY(0);
+  }
+  .pg-page {
+    width: 100%;
+    max-width: 80rem;
+    margin-inline: auto;
+  }
+  .pg-page-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 1rem;
+    margin-bottom: 1.75rem;
+  }
+  .pg-page-title {
+    font-size: clamp(1.5rem, 2vw, 1.9rem);
+    font-weight: 650;
+    letter-spacing: -0.045em;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+  }
+  .pg-page-description {
+    color: var(--muted-foreground);
+    font-size: 0.875rem;
+    line-height: 1.7;
+    margin-top: 0.5rem;
+    max-width: 65ch;
+  }
+  .pg-panel {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 0.8rem;
+    padding: 1.5rem;
+    min-width: 0;
+  }
+  .pg-section-header {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 1.25rem;
+  }
+  .pg-section-header h2 {
+    font-size: 1rem;
+    font-weight: 600;
+    letter-spacing: -0.025em;
+  }
+  .pg-empty {
+    padding: 3rem 1.5rem;
+    text-align: center;
+    background: var(--card);
+    border: 1px dashed var(--border);
+    border-radius: 0.8rem;
+  }
+  .pg-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.75rem;
+    font-weight: 550;
+    border-radius: 999px;
+    padding: 0.25rem 0.6rem;
+    background: var(--muted);
+  }
+  .pg-alert {
+    padding: 1rem;
+    border: 1px solid currentColor;
+    border-radius: 0.65rem;
+    font-size: 0.875rem;
+    line-height: 1.6;
+    overflow-wrap: anywhere;
+  }
+  .pg-form-page {
+    max-width: 58rem;
+    margin-inline: auto;
+    padding-bottom: 2rem;
+  }
+  .pg-form-section {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 0.8rem;
+    padding: 1.5rem;
+    margin-block: 1.5rem;
+  }
+  .pg-form-section > h2 {
+    font-size: 1rem;
+    font-weight: 600;
+    letter-spacing: -0.025em;
+    margin-bottom: 0.5rem;
+  }
+  .pg-form-actions {
+    position: sticky;
+    bottom: 0;
+    z-index: 10;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 0.75rem;
+    margin-top: 1.5rem;
+    box-shadow: 0 -4px 24px #00000005;
+  }
+  .pg-form-actions > div {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 1rem 1.25rem;
+    margin-inline: auto;
+  }
+  .pg-form-actions button {
+    min-height: 2.5rem;
+  }
+  .pg-form-page input:not([type='checkbox']),
+  .pg-form-page select {
+    min-height: 2.75rem;
+  }
+  .pg-form-page label {
+    line-height: 1.5;
+  }
   .pg-scroll {
     scrollbar-gutter: stable;
     scrollbar-width: thin;
@@ -108,5 +339,62 @@
   }
   .pg-scroll:hover::-webkit-scrollbar-thumb {
     background: var(--muted-foreground);
+  }
+
+  @media (max-width: 1023px) {
+    .pg-sidebar {
+      position: static;
+      width: auto;
+      gap: 1rem;
+      padding: 1rem;
+    }
+    .pg-sidebar nav {
+      display: flex;
+      gap: 0.35rem;
+      flex-wrap: wrap;
+    }
+    .pg-nav-link {
+      padding: 0.65rem 0.8rem;
+    }
+    .pg-nav-link.is-active {
+      box-shadow: inset 0 -2px #88bfe8;
+    }
+    .pg-shell-body {
+      margin-left: 0;
+    }
+    .pg-topbar {
+      min-height: 3.5rem;
+      padding: 0.65rem 1.25rem;
+    }
+    .pg-main {
+      padding: 1.5rem 1.25rem;
+    }
+  }
+  @media (max-width: 479px) {
+    .pg-main {
+      padding: 1.25rem 0.875rem;
+    }
+    .pg-panel,
+    .pg-form-section {
+      padding: 1rem;
+    }
+    .pg-form-actions > div {
+      padding: 0.875rem;
+    }
+    .pg-nav-link {
+      gap: 0.4rem;
+      font-size: 0.8rem;
+    }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }
